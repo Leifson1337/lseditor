@@ -4,7 +4,7 @@ import Sidebar from './Sidebar';
 import StatusBar from './StatusBar';
 import AIToolbar from './AIToolbar';
 import AIChat from './AIChat';
-import FileExplorer from './FileExplorer';
+import { FileExplorer } from './FileExplorer';
 import { Terminal } from './Terminal';
 
 interface LayoutProps {
@@ -90,10 +90,11 @@ const Layout: React.FC<LayoutProps> = ({
         <Sidebar
           activeTab={activeTab}
           onTabChange={handleTabChange}
-        />
-        <div className="sidebar-content">
-          {renderSidebarContent()}
-        </div>
+        >
+          <div className="sidebar-content">
+            {renderSidebarContent()}
+          </div>
+        </Sidebar>
         <div className="editor-container">
           <div className="editor-area">
             <div className="editor-content">

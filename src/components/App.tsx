@@ -13,6 +13,7 @@ import { TerminalContainer } from './TerminalContainer';
 import { TerminalPanel } from './TerminalPanel';
 import { AIConfig } from '../types/AITypes';
 import { FileNode } from '../types/FileNode';
+import { Editor } from './Editor';
 
 // Update StoreSchema to include all required properties
 declare module '../store/store' {
@@ -204,7 +205,13 @@ const App: React.FC = () => {
           isTerminalOpen={isTerminalOpen}
           onTerminalOpen={handleTerminalOpen}
           onTerminalClose={handleTerminalClose}
-        />
+        >
+          <Editor
+            filePath={activeFile || 'Kein File geöffnet'}
+            content={editorContent || 'Willkommen! Öffne eine Datei, um sie zu bearbeiten.'}
+            isLoading={!isInitialized}
+          />
+        </Layout>
       )}
     </div>
   );

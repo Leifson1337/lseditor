@@ -1,8 +1,10 @@
 import { EventEmitter } from 'events';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as chokidar from 'chokidar';
-import { FileNode } from '../types/FileNode';
+
+// Sichere ipcRenderer-Initialisierung, funktioniert nur im Renderer
+let ipcRenderer: typeof import('electron').ipcRenderer | null = null;
+if (typeof window !== 'undefined' && window.require) {
+  ipcRenderer = window.require('electron').ipcRenderer;
+}
 
 export interface ProjectSettings {
   name: string;
@@ -23,9 +25,9 @@ interface ProjectFile {
 export class ProjectService extends EventEmitter {
   private currentProject: string | null = null;
   private settings: ProjectSettings;
-  private watcher: chokidar.FSWatcher | null = null;
+  private watcher: any | null = null;
   private isInitialized: boolean = false;
-  private fileWatchers: Map<string, chokidar.FSWatcher> = new Map();
+  private fileWatchers: Map<string, any> = new Map();
   private gitStatus: Map<string, string> = new Map();
   private gitDiffs: Map<string, string> = new Map();
   private workspacePath: string;
@@ -35,7 +37,7 @@ export class ProjectService extends EventEmitter {
   constructor(workspacePath: string) {
     super();
     this.workspacePath = workspacePath;
-    this.projectName = path.basename(workspacePath);
+    this.projectName = this.detectProjectType();
     this.projectType = this.detectProjectType();
     this.settings = {
       name: '',
@@ -58,9 +60,10 @@ export class ProjectService extends EventEmitter {
 
   private async loadSettings(): Promise<void> {
     try {
-      const settingsPath = path.join(this.settings.rootPath, '.project.json');
-      if (fs.existsSync(settingsPath)) {
-        const settingsContent = await fs.promises.readFile(settingsPath, 'utf-8');
+      const settingsPath = await this.getDirectoryEntries(this.settings.rootPath);
+      const settingsFile = settingsPath.find((entry: any) => entry.name === '.project.json');
+      if (settingsFile) {
+        const settingsContent = await this.getFileContent(joinPath(this.settings.rootPath, '.project.json'));
         this.settings = { ...this.settings, ...JSON.parse(settingsContent) };
       }
       this.emit('projectLoaded', this.settings);
@@ -70,33 +73,22 @@ export class ProjectService extends EventEmitter {
     }
   }
 
-  public async getFileContent(filePath: string): Promise<string> {
-    if (!this.isInitialized) {
-      throw new Error('Project not initialized');
-    }
+  public async getDirectoryEntries(dirPath: string) {
+    if (!ipcRenderer) throw new Error('ipcRenderer not available');
+    return ipcRenderer.invoke('fs:readDir', dirPath);
+  }
 
-    try {
-      const fullPath = path.join(this.settings.rootPath, filePath);
-      return await fs.promises.readFile(fullPath, 'utf-8');
-    } catch (error) {
-      this.emit('error', error);
-      throw error;
-    }
+  public async getFileContent(filePath: string): Promise<string> {
+    const ipc = ipcRenderer;
+    if (!ipc) throw new Error('ipcRenderer not available');
+    return ipc.invoke('fs:readFile', filePath);
   }
 
   public async saveFile(filePath: string, content: string): Promise<void> {
-    if (!this.isInitialized) {
-      throw new Error('Project not initialized');
-    }
-
-    try {
-      const fullPath = path.join(this.settings.rootPath, filePath);
-      await fs.promises.writeFile(fullPath, content, 'utf-8');
-      this.emit('fileSaved', filePath);
-    } catch (error) {
-      this.emit('error', error);
-      throw error;
-    }
+    const ipc = ipcRenderer;
+    if (!ipc) throw new Error('ipcRenderer not available');
+    await ipc.invoke('fs:writeFile', filePath, content);
+    this.emit('fileSaved', filePath);
   }
 
   public getSettings(): ProjectSettings {
@@ -105,8 +97,10 @@ export class ProjectService extends EventEmitter {
 
   public async updateSettings(settings: Partial<ProjectSettings>): Promise<void> {
     this.settings = { ...this.settings, ...settings };
-    const settingsPath = path.join(this.settings.rootPath, '.project.json');
-    await fs.promises.writeFile(settingsPath, JSON.stringify(this.settings, null, 2), 'utf-8');
+    const settingsPath = joinPath(this.settings.rootPath, '.project.json');
+    const ipc = ipcRenderer;
+    if (!ipc) throw new Error('ipcRenderer not available');
+    await ipc.invoke('fs:writeFile', settingsPath, JSON.stringify(this.settings, null, 2));
     this.emit('settingsUpdated', this.settings);
   }
 
@@ -117,31 +111,29 @@ export class ProjectService extends EventEmitter {
   }
 
   private buildFileTree(dirPath: string, tree: ProjectFile[]): void {
-    const items = fs.readdirSync(dirPath);
-    
-    for (const item of items) {
-      const fullPath = path.join(dirPath, item);
-      const relativePath = path.relative(this.settings.rootPath, fullPath);
-      
-      if (this.settings.excludePatterns.some((pattern: string) => 
-        new RegExp(pattern).test(relativePath))) {
-        continue;
+    this.getDirectoryEntries(dirPath).then(entries => {
+      for (const entry of entries) {
+        const relative = relativePath(this.settings.rootPath, entry.path);
+        
+        if (this.settings.excludePatterns.some((pattern: string) => 
+          new RegExp(pattern).test(relative))) {
+          continue;
+        }
+
+        const file: ProjectFile = {
+          path: relative,
+          name: entry.name,
+          type: entry.isDirectory ? 'directory' : 'file'
+        };
+
+        if (entry.isDirectory) {
+          file.children = [];
+          this.buildFileTree(entry.path, file.children);
+        }
+
+        tree.push(file);
       }
-
-      const stats = fs.statSync(fullPath);
-      const file: ProjectFile = {
-        path: relativePath,
-        name: item,
-        type: stats.isDirectory() ? 'directory' : 'file'
-      };
-
-      if (stats.isDirectory()) {
-        file.children = [];
-        this.buildFileTree(fullPath, file.children);
-      }
-
-      tree.push(file);
-    }
+    });
   }
 
   public async getGitStatus(): Promise<Map<string, string>> {
@@ -200,96 +192,56 @@ export class ProjectService extends EventEmitter {
   }
 
   private searchInDirectory(dirPath: string, query: string, results: ProjectFile[]): void {
-    const items = fs.readdirSync(dirPath);
-    
-    for (const item of items) {
-      const fullPath = path.join(dirPath, item);
-      const relativePath = path.relative(this.settings.rootPath, fullPath);
-      
-      if (this.settings.excludePatterns.some((pattern: string) => 
-        new RegExp(pattern).test(relativePath))) {
-        continue;
-      }
+    this.getDirectoryEntries(dirPath).then(entries => {
+      for (const entry of entries) {
+        const relative = relativePath(this.settings.rootPath, entry.path);
+        
+        if (this.settings.excludePatterns.some((pattern: string) => 
+          new RegExp(pattern).test(relative))) {
+          continue;
+        }
 
-      if (item.toLowerCase().includes(query.toLowerCase())) {
-        const stats = fs.statSync(fullPath);
-        results.push({
-          path: relativePath,
-          name: item,
-          type: stats.isDirectory() ? 'directory' : 'file'
-        });
-      }
+        if (entry.name.toLowerCase().includes(query.toLowerCase())) {
+          results.push({
+            path: relative,
+            name: entry.name,
+            type: entry.isDirectory ? 'directory' : 'file'
+          });
+        }
 
-      if (fs.statSync(fullPath).isDirectory()) {
-        this.searchInDirectory(fullPath, query, results);
+        if (entry.isDirectory) {
+          this.searchInDirectory(entry.path, query, results);
+        }
       }
-    }
+    });
   }
 
   public watchFile(filePath: string, callback: (event: string, filename: string) => void): void {
-    const fullPath = path.join(this.settings.rootPath, filePath);
-    const watcher = chokidar.watch(fullPath);
-    
-    watcher.on('change', (path) => callback('change', path));
-    watcher.on('add', (path) => callback('add', path));
-    watcher.on('unlink', (path) => callback('unlink', path));
-    
-    this.fileWatchers.set(filePath, watcher);
+    if (!ipcRenderer) throw new Error('ipcRenderer not available');
+    ipcRenderer.on('fs:changed', (_event, eventType: string, changedPath: string) => {
+      if (changedPath === filePath) {
+        callback(eventType, changedPath);
+      }
+    });
+    this.fileWatchers.set(filePath, true);
   }
 
   public unwatchFile(filePath: string): void {
-    const watcher = this.fileWatchers.get(filePath);
-    if (watcher) {
-      watcher.close();
-      this.fileWatchers.delete(filePath);
-    }
-  }
-
-  public dispose(): void {
-    this.fileWatchers.forEach(watcher => watcher.close());
-    this.fileWatchers.clear();
-    this.gitStatus.clear();
-    this.gitDiffs.clear();
-    this.removeAllListeners();
-  }
-
-  private startFileWatcher(projectPath: string): void {
-    if (this.watcher) {
-      this.watcher.close();
-    }
-
-    this.watcher = chokidar.watch(projectPath, {
-      ignored: this.settings.excludePatterns,
-      persistent: true
+    if (!ipcRenderer) return;
+    ipcRenderer.removeListener('fs:changed', (_event, eventType: string, changedPath: string) => {
+      if (changedPath === filePath) {
+        // callback(eventType, changedPath);
+      }
     });
-
-    this.watcher
-      .on('add', (filePath: string) => {
-        this.emit('fileAdded', filePath);
-      })
-      .on('change', (filePath: string) => {
-        this.emit('fileChanged', filePath);
-      })
-      .on('unlink', (filePath: string) => {
-        this.emit('fileDeleted', filePath);
-      });
-  }
-
-  private stopFileWatcher(): void {
-    if (this.watcher) {
-      this.watcher.close();
-      this.watcher = null;
-    }
+    this.fileWatchers.delete(filePath);
   }
 
   public setProject(projectPath: string): void {
     this.currentProject = projectPath;
-    this.startFileWatcher(projectPath);
     this.emit('projectChanged', projectPath);
   }
 
   public closeProject(): void {
-    this.stopFileWatcher();
     this.currentProject = null;
     this.emit('projectClosed');
   }
@@ -303,19 +255,19 @@ export class ProjectService extends EventEmitter {
     return 'unknown';
   }
 
-  public async getFileStructure(dirPath: string): Promise<FileNode[]> {
-    const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
-    const nodes: FileNode[] = [];
+  public async getFileStructure(dirPath: string): Promise<any[]> {
+    const entries = await this.getDirectoryEntries(dirPath);
+    const nodes: any[] = [];
 
     for (const entry of entries) {
-      const fullPath = path.join(dirPath, entry.name);
-      const node: FileNode = {
+      const fullPath = entry.path;
+      const node: any = {
         name: entry.name,
         path: fullPath,
-        type: entry.isDirectory() ? 'directory' : 'file'
+        type: entry.isDirectory ? 'directory' : 'file'
       };
 
-      if (entry.isDirectory()) {
+      if (entry.isDirectory) {
         node.children = await this.getFileStructure(fullPath);
       }
 
@@ -324,4 +276,18 @@ export class ProjectService extends EventEmitter {
 
     return nodes;
   }
-} 
+}
+
+// Hilfsfunktionen für Pfadoperationen im Renderer
+function joinPath(...parts: string[]): string {
+  return parts.join('/').replace(/\\/g, '/');
+}
+
+function relativePath(from: string, to: string): string {
+  if (to.startsWith(from)) {
+    let rel = to.slice(from.length);
+    if (rel.startsWith('/')) rel = rel.slice(1);
+    return rel;
+  }
+  return to;
+}

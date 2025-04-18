@@ -28,6 +28,7 @@ body {
   overflow: hidden;
   background-color: var(--background-color);
   color: var(--text-color);
+  border: 3px solid green; /* Debug: sichtbar machen */
 }
 
 .main-content {
@@ -58,11 +59,14 @@ body {
 }
 
 .editor-content {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #222;
+  border: 2px dashed red; /* Debug: sichtbar machen */
+  color: #fff;
+  z-index: 1;
+  overflow: auto;
 }
 
 .right-panel {

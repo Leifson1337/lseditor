@@ -10,6 +10,7 @@ import { AIConfig } from './types/AITypes';
 import Store from 'electron-store';
 import 'prismjs';
 import 'prismjs/themes/prism.css';
+import * as fs from 'fs';
 
 interface StoreSchema {
   theme: string;
@@ -137,10 +138,26 @@ function setupIpcHandlers() {
   });
 }
 
+function setupFsIpcHandlers() {
+  ipcMain.handle('fs:readDir', async (_event, dirPath: string) => {
+    return fs.promises.readdir(dirPath, { withFileTypes: true }).then(entries =>
+      entries.map(e => ({
+        name: e.name,
+        isDirectory: e.isDirectory()
+      }))
+    );
+  });
+
+  ipcMain.handle('fs:readFile', async (_event, filePath: string) => {
+    return fs.promises.readFile(filePath, 'utf-8');
+  });
+}
+
 app.whenReady().then(async () => {
   await initializeServices();
   await createWindow();
   setupIpcHandlers();
+  setupFsIpcHandlers();
 });
 
 app.on('window-all-closed', () => {
@@ -158,7 +175,6 @@ app.on('activate', () => {
 app.on('before-quit', () => {
   if (aiService) aiService.dispose();
   if (terminalService) terminalService.dispose();
-  if (projectService) projectService.dispose();
   if (uiService) uiService.dispose();
   if (terminalServer) terminalServer.dispose();
   if (terminalManager) terminalManager.dispose();

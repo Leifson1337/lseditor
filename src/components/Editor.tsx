@@ -13,9 +13,11 @@ export const Editor: React.FC<EditorProps> = ({ filePath, content, isLoading }) 
   const [language, setLanguage] = useState<string>('plaintext');
 
   useEffect(() => {
-    if (filePath) {
+    if (filePath && typeof filePath === 'string') {
       const extension = filePath.split('.').pop()?.toLowerCase();
       setLanguage(extension || 'plaintext');
+    } else {
+      setLanguage('plaintext');
     }
   }, [filePath]);
 
