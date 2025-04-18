@@ -36,6 +36,23 @@
   overflow: hidden;
 }
 
+.sidebar-container {
+  display: flex;
+  flex-direction: row;
+  min-width: 250px;
+  max-width: 350px;
+  width: 20vw;
+  border-right: 1px solid var(--border-color);
+  background-color: var(--background-color);
+}
+
+.sidebar-content-panel {
+  flex: 1;
+  overflow: auto;
+  height: 100%;
+  border-right: 1px solid var(--border-color);
+}
+
 .editor-container {
   flex: 1;
   position: relative;
@@ -48,4 +65,4 @@
   left: 0;
   right: 0;
   bottom: 0;
-} 
+}

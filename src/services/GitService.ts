@@ -57,6 +57,41 @@ export interface LocalGitBranch {
   behind: number;
 }
 
+// GitHub-spezifische Typen
+export interface GitHubRepo {
+  name: string;
+  fullName: string;
+  description: string;
+  url: string;
+  private: boolean;
+  owner: string;
+}
+
+export interface GitHubIssue {
+  id: number;
+  number: number;
+  title: string;
+  body: string;
+  state: 'open' | 'closed';
+  created_at: string;
+  updated_at: string;
+  user: string;
+  labels: string[];
+}
+
+export interface GitHubPullRequest {
+  id: number;
+  number: number;
+  title: string;
+  body: string;
+  state: 'open' | 'closed' | 'merged';
+  created_at: string;
+  updated_at: string;
+  user: string;
+  base: string;
+  head: string;
+}
+
 export class GitService extends EventEmitter {
   private static instance: GitService;
   private git: SimpleGit;
@@ -493,4 +528,271 @@ export class GitService extends EventEmitter {
   public dispose(): void {
     this.removeAllListeners();
   }
-} 
+
+  // GitHub-spezifische Methoden
+  
+  /**
+   * Überprüft, ob das aktuelle Repository mit GitHub verbunden ist
+   */
+  public async isGitHubRepo(): Promise<boolean> {
+    try {
+      const remotes = await this.getRemotes();
+      return remotes.some(remote => 
+        remote.url.includes('github.com') || 
+        remote.url.includes('github.io')
+      );
+    } catch (error) {
+      console.error('Error checking if repo is a GitHub repo:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Extrahiert den GitHub-Benutzernamen und Repository-Namen aus der Remote-URL
+   */
+  public async getGitHubRepoInfo(): Promise<{ owner: string; repo: string } | null> {
+    try {
+      const remotes = await this.getRemotes();
+      const githubRemote = remotes.find(remote => 
+        remote.url.includes('github.com') || 
+        remote.url.includes('github.io')
+      );
+
+      if (!githubRemote) return null;
+
+      // URL-Format: https://github.com/username/repo.git oder git@github.com:username/repo.git
+      let match;
+      if (githubRemote.url.startsWith('https')) {
+        match = githubRemote.url.match(/github\.com\/([^\/]+)\/([^\.]+)(?:\.git)?/);
+      } else {
+        match = githubRemote.url.match(/github\.com:([^\/]+)\/([^\.]+)(?:\.git)?/);
+      }
+
+      if (!match) return null;
+
+      return {
+        owner: match[1],
+        repo: match[2]
+      };
+    } catch (error) {
+      console.error('Error getting GitHub repo info:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Erstellt ein neues GitHub-Repository
+   */
+  public async createGitHubRepo(
+    name: string, 
+    description: string = '', 
+    isPrivate: boolean = false, 
+    token: string
+  ): Promise<GitHubRepo | null> {
+    try {
+      const command = `
+        curl -X POST \\
+        -H "Authorization: token ${token}" \\
+        -H "Accept: application/vnd.github.v3+json" \\
+        https://api.github.com/user/repos \\
+        -d '{"name":"${name}","description":"${description}","private":${isPrivate}}'
+      `;
+      
+      const result = await execAsync(command, { cwd: this.workspacePath });
+      const repo = JSON.parse(result.stdout);
+      
+      return {
+        name: repo.name,
+        fullName: repo.full_name,
+        description: repo.description,
+        url: repo.html_url,
+        private: repo.private,
+        owner: repo.owner.login
+      };
+    } catch (error) {
+      console.error('Error creating GitHub repo:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Verknüpft das lokale Repository mit einem GitHub-Repository
+   */
+  public async linkToGitHubRepo(repoUrl: string): Promise<boolean> {
+    try {
+      await this.git.addRemote('origin', repoUrl);
+      return true;
+    } catch (error) {
+      console.error('Error linking to GitHub repo:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Klont ein GitHub-Repository
+   */
+  public static async cloneGitHubRepo(repoUrl: string, targetPath: string): Promise<boolean> {
+    try {
+      const git = simpleGit();
+      await git.clone(repoUrl, targetPath);
+      return true;
+    } catch (error) {
+      console.error('Error cloning GitHub repo:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Ruft die Issues eines GitHub-Repositories ab
+   */
+  public async getGitHubIssues(token: string): Promise<GitHubIssue[]> {
+    try {
+      const repoInfo = await this.getGitHubRepoInfo();
+      if (!repoInfo) throw new Error('Not a GitHub repository');
+
+      const command = `
+        curl -X GET \\
+        -H "Authorization: token ${token}" \\
+        -H "Accept: application/vnd.github.v3+json" \\
+        https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}/issues
+      `;
+      
+      const result = await execAsync(command, { cwd: this.workspacePath });
+      const issues = JSON.parse(result.stdout);
+      
+      return issues.map((issue: any) => ({
+        id: issue.id,
+        number: issue.number,
+        title: issue.title,
+        body: issue.body,
+        state: issue.state,
+        created_at: issue.created_at,
+        updated_at: issue.updated_at,
+        user: issue.user.login,
+        labels: issue.labels.map((label: any) => label.name)
+      }));
+    } catch (error) {
+      console.error('Error getting GitHub issues:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Erstellt ein neues Issue im GitHub-Repository
+   */
+  public async createGitHubIssue(
+    title: string, 
+    body: string, 
+    token: string
+  ): Promise<GitHubIssue | null> {
+    try {
+      const repoInfo = await this.getGitHubRepoInfo();
+      if (!repoInfo) throw new Error('Not a GitHub repository');
+
+      const command = `
+        curl -X POST \\
+        -H "Authorization: token ${token}" \\
+        -H "Accept: application/vnd.github.v3+json" \\
+        https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}/issues \\
+        -d '{"title":"${title}","body":"${body}"}'
+      `;
+      
+      const result = await execAsync(command, { cwd: this.workspacePath });
+      const issue = JSON.parse(result.stdout);
+      
+      return {
+        id: issue.id,
+        number: issue.number,
+        title: issue.title,
+        body: issue.body,
+        state: issue.state,
+        created_at: issue.created_at,
+        updated_at: issue.updated_at,
+        user: issue.user.login,
+        labels: issue.labels.map((label: any) => label.name)
+      };
+    } catch (error) {
+      console.error('Error creating GitHub issue:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Ruft die Pull Requests eines GitHub-Repositories ab
+   */
+  public async getGitHubPullRequests(token: string): Promise<GitHubPullRequest[]> {
+    try {
+      const repoInfo = await this.getGitHubRepoInfo();
+      if (!repoInfo) throw new Error('Not a GitHub repository');
+
+      const command = `
+        curl -X GET \\
+        -H "Authorization: token ${token}" \\
+        -H "Accept: application/vnd.github.v3+json" \\
+        https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}/pulls
+      `;
+      
+      const result = await execAsync(command, { cwd: this.workspacePath });
+      const prs = JSON.parse(result.stdout);
+      
+      return prs.map((pr: any) => ({
+        id: pr.id,
+        number: pr.number,
+        title: pr.title,
+        body: pr.body,
+        state: pr.merged ? 'merged' : pr.state,
+        created_at: pr.created_at,
+        updated_at: pr.updated_at,
+        user: pr.user.login,
+        base: pr.base.ref,
+        head: pr.head.ref
+      }));
+    } catch (error) {
+      console.error('Error getting GitHub pull requests:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Erstellt einen neuen Pull Request im GitHub-Repository
+   */
+  public async createGitHubPullRequest(
+    title: string, 
+    body: string, 
+    head: string, 
+    base: string, 
+    token: string
+  ): Promise<GitHubPullRequest | null> {
+    try {
+      const repoInfo = await this.getGitHubRepoInfo();
+      if (!repoInfo) throw new Error('Not a GitHub repository');
+
+      const command = `
+        curl -X POST \\
+        -H "Authorization: token ${token}" \\
+        -H "Accept: application/vnd.github.v3+json" \\
+        https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}/pulls \\
+        -d '{"title":"${title}","body":"${body}","head":"${head}","base":"${base}"}'
+      `;
+      
+      const result = await execAsync(command, { cwd: this.workspacePath });
+      const pr = JSON.parse(result.stdout);
+      
+      return {
+        id: pr.id,
+        number: pr.number,
+        title: pr.title,
+        body: pr.body,
+        state: pr.merged ? 'merged' : pr.state,
+        created_at: pr.created_at,
+        updated_at: pr.updated_at,
+        user: pr.user.login,
+        base: pr.base.ref,
+        head: pr.head.ref
+      };
+    } catch (error) {
+      console.error('Error creating GitHub pull request:', error);
+      return null;
+    }
+  }
+}

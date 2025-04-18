@@ -82,6 +82,7 @@
     "bufferutil": "^4.0.9",
     "css-loader": "^6.7.3",
     "electron": "^22.3.27",
+    "electron-process-manager": "^1.2.0",
     "eslint": "^8.38.0",
     "eslint-config-prettier": "^8.8.0",
     "eslint-plugin-prettier": "^4.2.1",

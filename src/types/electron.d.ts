@@ -33,6 +33,8 @@ declare module 'electron' {
     restore(): void;
     focus(): void;
     webContents: any;
+    isMaximized(): boolean;
+    unmaximize(): void;
   }
 
   export const app: App;
@@ -52,3 +54,26 @@ declare module 'electron' {
     });
   }
 } 
+
+// Definiere die globale window-Schnittstelle mit Electron-Eigenschaften
+interface Window {
+  electron?: {
+    ipcRenderer: {
+      invoke: (channel: string, ...args: any[]) => Promise<any>;
+      send: (channel: string, ...args: any[]) => void;
+      on: (channel: string, listener: (event: any, ...args: any[]) => void) => void;
+      removeListener: (channel: string, listener: (...args: any[]) => void) => void;
+    };
+    windowControls: {
+      minimize: () => void;
+      maximize: () => void;
+      unmaximize: () => void;
+      close: () => void;
+      isMaximized: () => Promise<boolean>;
+      onMaximize: (callback: () => void) => void;
+      onUnmaximize: (callback: () => void) => void;
+      removeMaximizeListener: (callback: () => void) => void;
+      removeUnmaximizeListener: (callback: () => void) => void;
+    };
+  };
+}

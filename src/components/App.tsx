@@ -40,6 +40,31 @@ declare module '../store/store' {
   }
 }
 
+// Erweitern der Electron-Schnittstelle für den checkPathExists-Handler
+declare global {
+  interface Window {
+    electron?: {
+      ipcRenderer: {
+        invoke: (channel: string, ...args: any[]) => Promise<any>;
+        send: (channel: string, ...args: any[]) => void;
+        on: (channel: string, listener: (event: any, ...args: any[]) => void) => void;
+        removeListener: (channel: string, listener: (...args: any[]) => void) => void;
+      };
+      windowControls: {
+        minimize: () => void;
+        maximize: () => void;
+        unmaximize: () => void;
+        close: () => void;
+        isMaximized: () => Promise<boolean>;
+        onMaximize: (callback: () => void) => void;
+        onUnmaximize: (callback: () => void) => void;
+        removeMaximizeListener: (callback: () => void) => void;
+        removeUnmaximizeListener: (callback: () => void) => void;
+      };
+    };
+  }
+}
+
 const App: React.FC = () => {
   const [editorContent, setEditorContent] = useState<string>('');
   const [openFiles, setOpenFiles] = useState<string[]>([]);
@@ -51,6 +76,8 @@ const App: React.FC = () => {
   const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(false);
   const [terminalManager, setTerminalManager] = useState<TerminalManager | null>(null);
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
+  const [isValidPath, setIsValidPath] = useState<boolean>(false);
+  const [isBrowseDialogOpen, setIsBrowseDialogOpen] = useState<boolean>(false);
   const [recentProjects, setRecentProjects] = useState<string[]>(() => {
     return store.get('recentProjects') || [];
   });
@@ -91,6 +118,20 @@ const App: React.FC = () => {
 
   const openProject = async (path: string) => {
     if (!path) return;
+    
+    // Überprüfen, ob der Pfad gültig ist
+    try {
+      const isValid = await window.electron?.ipcRenderer.invoke('fs:checkPathExists', path);
+      if (!isValid) {
+        alert('Der angegebene Pfad existiert nicht oder ist kein Verzeichnis.');
+        return;
+      }
+    } catch (error) {
+      console.error('Fehler beim Überprüfen des Pfades:', error);
+      alert('Fehler beim Überprüfen des Pfades.');
+      return;
+    }
+    
     console.log('Opening project:', path);
     setProjectPath(path);
     setShowProjectDialog(false);
@@ -163,9 +204,102 @@ const App: React.FC = () => {
   };
 
   const openProjectDialog = async () => {
-    const dir = await window.electron?.ipcRenderer.invoke('dialog:openDirectory');
-    if (dir) openProject(dir);
+    // Verhindern, dass mehrere Dialoge geöffnet werden
+    if (isBrowseDialogOpen) return;
+    
+    setIsBrowseDialogOpen(true);
+    try {
+      const dir = await window.electron?.ipcRenderer.invoke('dialog:openDirectory');
+      if (dir) {
+        setProjectPath(dir);
+        setIsValidPath(true);
+      }
+    } finally {
+      setIsBrowseDialogOpen(false);
+    }
   };
+
+  // Funktion zum Erstellen eines neuen Projekts
+  const createNewProject = async () => {
+    // Verhindern, dass mehrere Dialoge geöffnet werden
+    if (isBrowseDialogOpen) return;
+    
+    setIsBrowseDialogOpen(true);
+    try {
+      // Dialog zum Auswählen des Verzeichnisses für das neue Projekt
+      const dir = await window.electron?.ipcRenderer.invoke('dialog:openDirectory', {
+        title: 'Verzeichnis für neues Projekt auswählen'
+      });
+      
+      if (!dir) return;
+      
+      // Dialog zum Eingeben des Projektnamens
+      const projectName = await window.electron?.ipcRenderer.invoke('dialog:inputBox', {
+        title: 'Neues Projekt',
+        prompt: 'Bitte geben Sie einen Namen für das neue Projekt ein:',
+        defaultValue: 'MeinProjekt'
+      });
+      
+      if (!projectName) return;
+      
+      // Pfad für das neue Projekt erstellen
+      const newProjectPath = `${dir}/${projectName}`;
+      
+      try {
+        // Überprüfen, ob das Verzeichnis bereits existiert
+        const exists = await window.electron?.ipcRenderer.invoke('fs:checkPathExists', newProjectPath);
+        
+        if (exists) {
+          const overwrite = await window.electron?.ipcRenderer.invoke('dialog:showMessageBox', {
+            type: 'question',
+            buttons: ['Abbrechen', 'Überschreiben'],
+            title: 'Verzeichnis existiert bereits',
+            message: `Das Verzeichnis "${newProjectPath}" existiert bereits. Möchten Sie es überschreiben?`
+          });
+          
+          if (!overwrite || overwrite.response !== 1) return;
+        }
+        
+        // Verzeichnis erstellen
+        await window.electron?.ipcRenderer.invoke('fs:createDirectory', newProjectPath);
+        
+        // Grundlegende Projektstruktur erstellen
+        await window.electron?.ipcRenderer.invoke('fs:createDirectory', `${newProjectPath}/src`);
+        await window.electron?.ipcRenderer.invoke('fs:createDirectory', `${newProjectPath}/assets`);
+        await window.electron?.ipcRenderer.invoke('fs:writeFile', `${newProjectPath}/README.md`, `# ${projectName}\n\nEin neues Projekt erstellt mit LSEditor.`);
+        
+        // Projekt öffnen
+        setProjectPath(newProjectPath);
+        setIsValidPath(true);
+        openProject(newProjectPath);
+      } catch (error) {
+        console.error('Fehler beim Erstellen des Projekts:', error);
+        alert(`Fehler beim Erstellen des Projekts: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    } finally {
+      setIsBrowseDialogOpen(false);
+    }
+  };
+
+  const checkPathValidity = async (path: string) => {
+    if (!path) {
+      setIsValidPath(false);
+      return;
+    }
+    
+    try {
+      const isValid = await window.electron?.ipcRenderer.invoke('fs:checkPathExists', path);
+      setIsValidPath(!!isValid);
+    } catch (error) {
+      console.error('Fehler beim Überprüfen des Pfades:', error);
+      setIsValidPath(false);
+    }
+  };
+
+  // Überprüfe Pfadgültigkeit, wenn sich der Pfad ändert
+  useEffect(() => {
+    checkPathValidity(projectPath);
+  }, [projectPath]);
 
   const handleFileOpen = (path: string) => {
     console.log('Opening file:', path);
@@ -209,20 +343,54 @@ const App: React.FC = () => {
               value={projectPath}
               onChange={(e) => setProjectPath(e.target.value)}
             />
-            <button onClick={() => openProject(projectPath)}>Open</button>
-            <button onClick={openProjectDialog}>Browse...</button>
+            <button 
+              onClick={() => openProject(projectPath)} 
+              disabled={!isValidPath}
+              title={!isValidPath ? "Bitte geben Sie einen gültigen Pfad an" : "Projekt öffnen"}
+            >
+              Open
+            </button>
+            <button 
+              onClick={openProjectDialog}
+              disabled={isBrowseDialogOpen}
+              title={isBrowseDialogOpen ? "Dialog ist bereits geöffnet" : "Verzeichnis durchsuchen"}
+            >
+              Browse...
+            </button>
+            <button 
+              onClick={createNewProject}
+              disabled={isBrowseDialogOpen}
+              title={isBrowseDialogOpen ? "Dialog ist bereits geöffnet" : "Neues Projekt erstellen"}
+            >
+              New Project
+            </button>
           </div>
           <div className="recent-projects">
             <h3>Recently opened projects</h3>
-            <ul>
-              {recentProjects.map((project) => (
-                <li key={project} style={{display:'flex',alignItems:'center',gap:8}}>
-                  <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis'}}>{project}</span>
-                  <button onClick={() => openProject(project)}>Open</button>
-                  <button title="Remove from list" onClick={() => removeRecentProject(project)} style={{color:'red'}}>×</button>
-                </li>
-              ))}
-            </ul>
+            {recentProjects.length > 0 ? (
+              <ul>
+                {recentProjects.map((project) => (
+                  <li key={project} style={{display:'flex',alignItems:'center',gap:8}}>
+                    <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis'}}>{project}</span>
+                    <button 
+                      onClick={() => openProject(project)}
+                      title="Projekt öffnen"
+                    >
+                      Open
+                    </button>
+                    <button 
+                      title="Remove from list" 
+                      onClick={() => removeRecentProject(project)} 
+                      style={{color:'red'}}
+                    >
+                      ×
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>Keine kürzlich geöffneten Projekte vorhanden.</p>
+            )}
           </div>
         </div>
       ) : (
@@ -234,6 +402,7 @@ const App: React.FC = () => {
           isTerminalOpen={isTerminalOpen}
           onTerminalOpen={handleTerminalOpen}
           onTerminalClose={handleTerminalClose}
+          recentProjects={recentProjects}
         >
           <Editor
             filePath={activeFile || 'Kein File geöffnet'}

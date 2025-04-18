@@ -85,13 +85,19 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
             
             <div className="editor-layout-main">
               {isSidebarOpen && (
-                <Sidebar>
-                  <FileExplorer
-                    fileStructure={fileStructure}
-                    onOpenFile={handleFileOpen}
-                    activeFile={activeFile}
+                <div className="sidebar-container">
+                  <Sidebar 
+                    activeTab="explorer"
+                    onTabChange={(tab) => console.log('Tab changed:', tab)}
                   />
-                </Sidebar>
+                  <div className="sidebar-content-panel">
+                    <FileExplorer
+                      fileStructure={fileStructure}
+                      onOpenFile={handleFileOpen}
+                      activeFile={activeFile}
+                    />
+                  </div>
+                </div>
               )}
               
               <div className="editor-container">
