@@ -8,6 +8,8 @@ import { TerminalServer } from './server/terminalServer';
 import { TerminalManager } from './services/TerminalManager';
 import { AIConfig } from './types';
 import Store from 'electron-store';
+import 'prismjs';
+import 'prismjs/themes/prism.css';
 
 interface StoreSchema {
   theme: string;
