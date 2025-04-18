@@ -1,177 +1,101 @@
 import React, { useState, useEffect } from 'react';
 import { FileExplorer } from './FileExplorer';
-import { AIChat } from './AIChat';
-import { CodeEditor } from './Editor';
-import StatusBar from './StatusBar';
+import { Editor } from './Editor';
+import { TerminalContainer } from './TerminalContainer';
+import { AIService } from '../services/AIService';
+import { ProjectService } from '../services/ProjectService';
+import { UIService } from '../services/UIService';
+import { store } from '../store/store';
+import { FileNode } from '../types/FileNode';
 import '../styles/Layout.css';
-import Sidebar from './Sidebar';
-import AIToolbar from './AIToolbar';
-import { Terminal } from './Terminal';
 
 interface LayoutProps {
-  children?: React.ReactNode;
-  initialContent?: string;
-  initialLanguage?: string;
-  fileStructure?: any[];
-  onOpenFile?: (filePath: string) => void;
-  activeFile?: string;
-  terminalPort?: number;
-  isTerminalOpen?: boolean;
-  onTerminalOpen?: () => void;
-  onTerminalClose?: () => void;
+  fileStructure: FileNode[];
+  onOpenFile: (path: string) => void;
+  activeFile: string;
+  terminalPort: number;
+  isTerminalOpen: boolean;
+  onTerminalOpen: () => void;
+  onTerminalClose: () => void;
 }
 
-const Layout: React.FC<LayoutProps> = ({ 
-  children, 
-  initialContent = '', 
-  initialLanguage = 'plaintext',
-  fileStructure = [],
-  onOpenFile = () => {},
-  activeFile = '',
-  terminalPort = 3001,
-  isTerminalOpen = false,
-  onTerminalOpen = () => {},
-  onTerminalClose = () => {}
+const Layout: React.FC<LayoutProps> = ({
+  fileStructure,
+  onOpenFile,
+  activeFile,
+  terminalPort,
+  isTerminalOpen,
+  onTerminalOpen,
+  onTerminalClose
 }) => {
-  const [activeTab, setActiveTab] = useState('explorer');
-  const [isAIChatOpen, setIsAIChatOpen] = useState(false);
-  const [messages, setMessages] = useState<any[]>([]);
-  const [isAIPanelOpen, setIsAIPanelOpen] = useState(true);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [currentFile, setCurrentFile] = useState<string | null>(null);
-  const [isInitialized, setIsInitialized] = useState(false);
+  const [currentFile, setCurrentFile] = useState<string | undefined>(undefined);
+  const [fileContent, setFileContent] = useState<string>('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     console.log('Layout component mounted');
-    // Initialisiere die Anwendung
-    setIsInitialized(true);
-    console.log('Layout initialization complete');
-  }, []);
+    console.log('File structure:', fileStructure);
+    console.log('Active file:', activeFile);
+    
+    // If there's an active file, load its content
+    if (activeFile) {
+      loadFileContent(activeFile);
+    } else {
+      setIsLoading(false);
+    }
+  }, [activeFile]);
 
-  const handleAIAction = (action: string) => {
-    setIsAIChatOpen(true);
-    console.log('AI Action:', action);
-  };
-
-  const handleSendMessage = (message: string) => {
-    console.log('Sending message:', message);
-  };
-
-  const handleInsertCode = (code: string) => {
-    console.log('Inserting code:', code);
-  };
-
-  const handleExplain = (code: string) => {
-    console.log('Explaining code:', code);
-  };
-
-  const handleTabChange = (tab: string) => {
-    setActiveTab(tab);
-    if (tab === 'terminal' && onTerminalOpen) {
-      onTerminalOpen();
+  const loadFileContent = async (filePath: string) => {
+    setIsLoading(true);
+    try {
+      // In a real implementation, you would load the file content from the file system
+      // For now, we'll just set a placeholder
+      setFileContent(`// Content of ${filePath}`);
+      setCurrentFile(filePath);
+      setIsLoading(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load file content');
+      setIsLoading(false);
     }
   };
 
-  const toggleAIPanel = () => setIsAIPanelOpen(!isAIPanelOpen);
-  const toggleSidebar = () => setIsSidebarOpen(!isSidebarOpen);
-
-  const handleFileSelect = (file: string) => {
-    setCurrentFile(file);
+  const handleFileOpen = (path: string) => {
+    console.log('Opening file in Layout:', path);
+    onOpenFile(path);
   };
 
-  const handleSave = (content: string) => {
-    // TODO: Implement file saving logic
-    console.log('Saving content:', content);
-  };
-
-  const renderSidebarContent = () => {
-    console.log('Rendering sidebar content, activeTab:', activeTab);
-    switch (activeTab) {
-      case 'explorer':
-        return (
-          <FileExplorer 
-            fileStructure={fileStructure} 
-            onOpenFile={onOpenFile}
-            activeFile={activeFile}
-            onFileSelect={handleFileSelect}
-          />
-        );
-      case 'terminal':
-        console.log('Rendering terminal tab');
-        return (
-          <div className="terminal-container">
-            <Terminal 
-              onData={(data: string) => {
-                console.log('Terminal data received:', data);
-              }}
-              onResize={(cols: number, rows: number) => {
-                console.log('Terminal resize:', cols, rows);
-              }}
-            />
-          </div>
-        );
-      default:
-        return <div className="empty-sidebar-content">Select an option</div>;
-    }
-  };
-
-  console.log('Layout rendering, isInitialized:', isInitialized);
-
-  if (!isInitialized) {
-    return <div className="app-container">Loading...</div>;
+  if (error) {
+    return (
+      <div className="error-container">
+        <h2>Error</h2>
+        <p>{error}</p>
+      </div>
+    );
   }
 
   return (
-    <div className="app-container">
+    <div className="layout">
+      <div className="sidebar">
+        <FileExplorer
+          fileStructure={fileStructure}
+          onOpenFile={handleFileOpen}
+          activeFile={currentFile}
+        />
+      </div>
       <div className="main-content">
-        {isSidebarOpen && (
-          <div className="sidebar">
-            <Sidebar
-              activeTab={activeTab}
-              onTabChange={handleTabChange}
-            >
-              {renderSidebarContent()}
-            </Sidebar>
-          </div>
-        )}
-        
-        <div className="editor-container">
-          <div className="editor-area">
-            <div className="editor-content">
-              <CodeEditor 
-                file={currentFile}
-                onSave={handleSave}
-                initialContent={initialContent}
-                initialLanguage={initialLanguage}
-              />
-            </div>
-          </div>
-        </div>
-
-        {isAIPanelOpen && (
-          <div className="right-panel">
-            <div className="ai-sidebar">
-              <AIToolbar onAction={handleAIAction} isVertical={true} />
-            </div>
-            <div className="ai-content">
-              <AIChat
-                isOpen={isAIChatOpen}
-                messages={messages}
-                onSendMessage={handleSendMessage}
-                onClose={() => setIsAIChatOpen(false)}
-                onInsertCode={handleInsertCode}
-                onExplain={handleExplain}
-              />
-            </div>
-          </div>
+        <Editor
+          filePath={currentFile}
+          content={fileContent}
+          isLoading={isLoading}
+        />
+        {isTerminalOpen && (
+          <TerminalContainer
+            activeFile={currentFile}
+            port={terminalPort}
+          />
         )}
       </div>
-      
-      <StatusBar
-        activeFile={activeFile}
-        terminalPort={terminalPort}
-        isTerminalConnected={isTerminalOpen}
-      />
     </div>
   );
 };

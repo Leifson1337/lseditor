@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { FolderIcon, FileIcon } from '../components/Icons';
+import React, { useState } from 'react';
+import { FolderIcon, FileIcon, ChevronRightIcon, ChevronDownIcon } from './Icons';
 import '../styles/FileExplorer.css';
 
 interface FileNode {
@@ -10,67 +10,77 @@ interface FileNode {
 }
 
 interface FileExplorerProps {
-  onOpenFile: (path: string) => void;
-  fileStructure?: FileNode[];
-  activeFile?: string;
-  onFileSelect?: (file: string) => void;
+  fileStructure: FileNode[];
+  onOpenFile: (filePath: string) => void;
+  activeFile?: string | null;
 }
 
-export const FileExplorer: React.FC<FileExplorerProps> = ({ 
-  onOpenFile, 
-  fileStructure = [], 
-  activeFile,
-  onFileSelect 
+export const FileExplorer: React.FC<FileExplorerProps> = ({
+  fileStructure,
+  onOpenFile,
+  activeFile
 }) => {
-  useEffect(() => {
-    console.log('FileExplorer component mounted');
-    console.log('FileExplorer fileStructure:', fileStructure);
-    console.log('FileExplorer activeFile:', activeFile);
-  }, [fileStructure, activeFile]);
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+
+  const toggleFolder = (path: string) => {
+    const newExpandedFolders = new Set(expandedFolders);
+    if (newExpandedFolders.has(path)) {
+      newExpandedFolders.delete(path);
+    } else {
+      newExpandedFolders.add(path);
+    }
+    setExpandedFolders(newExpandedFolders);
+  };
 
   const renderFileNode = (node: FileNode, level: number = 0) => {
-    const Icon = node.type === 'directory' ? FolderIcon : FileIcon;
-    const className = `file-node ${node.type} ${level > 0 ? 'file-tree-indent' : ''} ${node.path === activeFile ? 'active' : ''}`;
+    const isExpanded = expandedFolders.has(node.path);
+    const isActive = activeFile === node.path;
 
-    const handleClick = () => {
-      onOpenFile(node.path);
-      if (onFileSelect && node.type === 'file') {
-        onFileSelect(node.path);
-      }
-    };
+    if (node.type === 'directory') {
+      return (
+        <div key={node.path}>
+          <div
+            className={`file-node folder ${isExpanded ? 'expanded' : ''}`}
+            data-level={level}
+            onClick={() => toggleFolder(node.path)}
+          >
+            {isExpanded ? <ChevronDownIcon /> : <ChevronRightIcon />}
+            <FolderIcon />
+            <span className="file-name">{node.name}</span>
+          </div>
+          {isExpanded && node.children && (
+            <div className="file-children">
+              {node.children.map((child) => renderFileNode(child, level + 1))}
+            </div>
+          )}
+        </div>
+      );
+    }
 
     return (
-      <div key={node.path}>
-        <div className={className} onClick={handleClick}>
-          <Icon />
-          <span className="file-name">{node.name}</span>
-        </div>
-        {node.type === 'directory' && node.children && (
-          <div className="file-children">
-            {node.children.map(child => renderFileNode(child, level + 1))}
-          </div>
-        )}
+      <div
+        key={node.path}
+        className={`file-node file ${isActive ? 'active' : ''}`}
+        data-level={level}
+        onClick={() => onOpenFile(node.path)}
+      >
+        <FileIcon />
+        <span className="file-name">{node.name}</span>
       </div>
     );
   };
 
-  console.log('FileExplorer rendering');
+  if (!fileStructure || fileStructure.length === 0) {
+    return (
+      <div className="file-explorer empty">
+        <p>No files available</p>
+      </div>
+    );
+  }
 
   return (
     <div className="file-explorer">
-      <div className="file-explorer-header">
-        <h3>Explorer</h3>
-      </div>
-      <div className="file-tree">
-        {fileStructure.length > 0 ? (
-          fileStructure.map(node => renderFileNode(node))
-        ) : (
-          <div className="empty-file-explorer">
-            <p>No files available</p>
-            <p>Open a project to see files</p>
-          </div>
-        )}
-      </div>
+      {fileStructure.map((node) => renderFileNode(node))}
     </div>
   );
 }; 

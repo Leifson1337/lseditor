@@ -3,13 +3,9 @@ import { Terminal } from './Terminal';
 import StatusBar from './StatusBar';
 import { TerminalManager } from '../services/TerminalManager';
 import { TerminalService } from '../services/TerminalService';
-import { AIService } from '../services/AIService';
-import { ProjectService } from '../services/ProjectService';
-import { UIService } from '../services/UIService';
 import { store } from '../store/store';
 import { TerminalServer } from '../server/terminalServer';
 import '../styles/Terminal.css';
-import { AIConfig } from '../types/AITypes';
 
 interface TerminalContainerProps {
   activeFile?: string;
@@ -20,82 +16,94 @@ export const TerminalContainer: React.FC<TerminalContainerProps> = ({ activeFile
   console.log('TerminalContainer rendering with initial port:', port);
   const [isConnected, setIsConnected] = useState(false);
   const [currentPort, setCurrentPort] = useState(port);
-  const [terminalServer] = useState(() => {
-    console.log('Creating TerminalServer instance');
-    return new TerminalServer(port);
-  });
-  const [uiService] = useState(() => new UIService());
-  const [projectService] = useState(() => new ProjectService(process.cwd()));
-  const [aiService] = useState(() => AIService.getInstance({
-    useLocalModel: false,
-    model: 'gpt-3.5-turbo',
-    temperature: 0.7,
-    maxTokens: 2048,
-    contextWindow: 4096,
-    stopSequences: ['\n\n', '```'],
-    topP: 1,
-    openAIConfig: {
-      apiKey: process.env.OPENAI_API_KEY || '',
-      model: 'gpt-3.5-turbo',
-      temperature: 0.7,
-      maxTokens: 2048
-    }
-  }));
-  const [terminalService] = useState(() => new TerminalService(
-    null,
-    aiService,
-    projectService,
-    uiService,
-    terminalServer,
-    store
-  ));
-  const [terminalManager] = useState(() => new TerminalManager(
-    port,
-    terminalService,
-    aiService,
-    projectService,
-    uiService
-  ));
+  const [terminalManager, setTerminalManager] = useState<TerminalManager | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 
   useEffect(() => {
-    console.log('TerminalContainer mounted');
-    setCurrentPort(terminalManager.getPort());
+    console.log('TerminalContainer mounted, initializing services');
     
-    terminalManager.on('connected', () => {
-      console.log('Terminal connected');
-      setIsConnected(true);
-    });
+    // Use services from the store
+    const { projectService, uiService, aiService } = store;
     
-    terminalManager.on('disconnected', () => {
-      console.log('Terminal disconnected');
-      setIsConnected(false);
-    });
+    // Create terminal server
+    const terminalServer = new TerminalServer(port);
     
-    terminalManager.connect();
-
+    // Get terminal service instance
+    const terminalService = TerminalService.getInstance(
+      null,
+      aiService,
+      projectService,
+      uiService,
+      terminalServer,
+      store
+    );
+    
+    // Create terminal manager
+    const manager = new TerminalManager(
+      port,
+      terminalService,
+      aiService,
+      projectService,
+      uiService
+    );
+    
+    setTerminalManager(manager);
+    console.log('TerminalManager initialized');
+    
     return () => {
-      console.log('TerminalContainer unmounting');
-      terminalManager.disconnect();
+      console.log('TerminalContainer unmounting, cleaning up');
+      if (manager) {
+        manager.disconnect();
+      }
     };
+  }, [port]);
+
+  useEffect(() => {
+    if (terminalManager) {
+      console.log('Connecting to terminal');
+      terminalManager.connect();
+      setIsConnected(true);
+      
+      // Create a new session when connecting
+      terminalManager.createSession({
+        title: 'Default Terminal',
+        cwd: process.cwd()
+      }).then(session => {
+        setActiveSessionId(session.id);
+      });
+      
+      return () => {
+        console.log('Disconnecting from terminal');
+        terminalManager.disconnect();
+        setIsConnected(false);
+      };
+    }
   }, [terminalManager]);
 
   const handleTerminalData = (data: string) => {
-    console.log('Sending terminal data:', data);
-    terminalManager.send(data);
+    if (terminalManager && isConnected) {
+      terminalManager.send(data);
+    }
   };
 
   const handleTerminalResize = (cols: number, rows: number) => {
-    console.log('Terminal resized:', { cols, rows });
+    if (terminalManager && isConnected && activeSessionId) {
+      terminalManager.resizeSession(activeSessionId, cols, rows);
+    }
   };
 
   return (
-    <div className="terminal-wrapper">
-      <Terminal onData={handleTerminalData} onResize={handleTerminalResize} />
-      <StatusBar
-        activeFile={activeFile}
-        terminalPort={currentPort}
-        isTerminalConnected={isConnected}
-      />
+    <div className="terminal-container">
+      <div className="terminal-header">
+        <span>Terminal</span>
+        <StatusBar />
+      </div>
+      <div className="terminal-content">
+        <Terminal 
+          onData={handleTerminalData} 
+          onResize={handleTerminalResize} 
+        />
+      </div>
     </div>
   );
 }; 

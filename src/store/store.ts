@@ -1,28 +1,49 @@
 import ElectronStore from 'electron-store';
+import { ProjectService } from '../services/ProjectService';
+import { UIService } from '../services/UIService';
+import { AIService } from '../services/AIService';
+import { AIConfig } from '../types/AITypes';
 
 export interface StoreSchema {
+  lastProjectPath?: string;
   theme: string;
   fontSize: number;
   fontFamily: string;
   terminal: {
+    fontSize: number;
+    fontFamily: string;
     port: number;
     defaultProfile: string;
   };
   editor: {
+    fontSize: number;
+    fontFamily: string;
     wordWrap: boolean;
     minimap: boolean;
     lineNumbers: boolean;
     content?: string;
   };
-  lastProjectPath?: string;
 }
 
-class AppStore {
-  private store: ElectronStore<StoreSchema>;
+export interface AppServices {
+  projectService: ProjectService;
+  uiService: UIService;
+  aiService: AIService;
+}
+
+class AppStore implements AppServices {
+  private electronStore: ElectronStore<StoreSchema>;
+  projectService: ProjectService;
+  uiService: UIService;
+  aiService: AIService;
 
   constructor() {
-    this.store = new ElectronStore<StoreSchema>({
+    this.electronStore = new ElectronStore<StoreSchema>({
       schema: {
+        lastProjectPath: {
+          type: 'string',
+          default: ''
+        },
         theme: {
           type: 'string',
           default: 'dark'
@@ -33,14 +54,22 @@ class AppStore {
         },
         fontFamily: {
           type: 'string',
-          default: 'Consolas, monospace'
+          default: 'monospace'
         },
         terminal: {
           type: 'object',
           properties: {
+            fontSize: {
+              type: 'number',
+              default: 14
+            },
+            fontFamily: {
+              type: 'string',
+              default: 'monospace'
+            },
             port: {
               type: 'number',
-              default: 3001
+              default: 8080
             },
             defaultProfile: {
               type: 'string',
@@ -51,9 +80,17 @@ class AppStore {
         editor: {
           type: 'object',
           properties: {
+            fontSize: {
+              type: 'number',
+              default: 14
+            },
+            fontFamily: {
+              type: 'string',
+              default: 'monospace'
+            },
             wordWrap: {
               type: 'boolean',
-              default: true
+              default: false
             },
             minimap: {
               type: 'boolean',
@@ -68,34 +105,49 @@ class AppStore {
               default: ''
             }
           }
-        },
-        lastProjectPath: {
-          type: 'string',
-          default: ''
         }
       }
     });
+
+    // Initialize services with default workspace path
+    const defaultWorkspacePath = this.get('lastProjectPath') || process.cwd();
+    this.projectService = new ProjectService(defaultWorkspacePath);
+    this.uiService = new UIService();
+    
+    // Initialize AIService with default config
+    const defaultAIConfig: AIConfig = {
+      useLocalModel: false,
+      openAIConfig: {
+        apiKey: process.env.OPENAI_API_KEY || '',
+        model: 'gpt-3.5-turbo',
+        temperature: 0.7,
+        maxTokens: 1000
+      },
+      model: 'gpt-3.5-turbo',
+      temperature: 0.7,
+      maxTokens: 1000,
+      contextWindow: 2048,
+      stopSequences: [],
+      topP: 1
+    };
+    this.aiService = AIService.getInstance(defaultAIConfig);
   }
 
   get<T extends keyof StoreSchema>(key: T): StoreSchema[T] {
-    return this.store.get(key);
+    return this.electronStore.get(key);
   }
 
   set<T extends keyof StoreSchema>(key: T, value: StoreSchema[T]): void {
-    this.store.set(key, value);
+    this.electronStore.set(key, value);
   }
 
   delete<T extends keyof StoreSchema>(key: T): void {
-    this.store.delete(key);
+    this.electronStore.delete(key);
   }
 
   clear(): void {
-    this.store.clear();
+    this.electronStore.clear();
   }
 }
 
-// Create a singleton instance
-const store = new AppStore();
-
-// Export both the class and the singleton instance
-export { AppStore, store }; 
+export const store = new AppStore(); 

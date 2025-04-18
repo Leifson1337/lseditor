@@ -5,7 +5,7 @@ import { WebLinksAddon } from 'xterm-addon-web-links';
 import { SearchAddon } from 'xterm-addon-search';
 import { Unicode11Addon } from 'xterm-addon-unicode11';
 import { LigaturesAddon } from '@xterm/addon-ligatures';
-import '../styles/terminal.css';
+import '../styles/Terminal.css';
 
 interface TerminalProps {
   onResize?: (cols: number, rows: number) => void;

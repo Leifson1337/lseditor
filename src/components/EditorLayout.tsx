@@ -14,13 +14,17 @@ interface EditorLayoutProps {
   initialLanguage?: string;
   onSave?: (content: string) => void;
   onFileOpen?: (path: string) => void;
+  fileStructure: any[];
+  activeFile?: string;
 }
 
 export const EditorLayout: React.FC<EditorLayoutProps> = ({
   initialContent = '',
   initialLanguage = 'typescript',
   onSave,
-  onFileOpen
+  onFileOpen,
+  fileStructure,
+  activeFile
 }) => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
@@ -82,7 +86,11 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
             <div className="editor-layout-main">
               {isSidebarOpen && (
                 <Sidebar>
-                  <FileExplorer onOpenFile={handleFileOpen} />
+                  <FileExplorer
+                    fileStructure={fileStructure}
+                    onOpenFile={handleFileOpen}
+                    activeFile={activeFile}
+                  />
                 </Sidebar>
               )}
               
