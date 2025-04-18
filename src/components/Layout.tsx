@@ -6,6 +6,7 @@ import AIToolbar from './AIToolbar';
 import AIChat from './AIChat';
 import { FileExplorer } from './FileExplorer';
 import { Terminal } from './Terminal';
+import Titlebar from './Titlebar';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -86,6 +87,7 @@ const Layout: React.FC<LayoutProps> = ({
 
   return (
     <div className="app-container">
+      <Titlebar />
       <div className="main-content">
         <Sidebar
           activeTab={activeTab}

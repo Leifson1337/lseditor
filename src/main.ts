@@ -20,13 +20,16 @@ let terminalManager: TerminalManager | null = null;
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
-    fullscreen: true,
+    width: 1200,
+    height: 800,
+    frame: false, // Custom Titlebar
     webPreferences: {
       nodeIntegration: true,
-      contextIsolation: false
+      contextIsolation: false,
+      preload: path.join(__dirname, 'preload.js')
     }
   });
-
+  mainWindow.maximize();
   await mainWindow.loadFile(path.join(__dirname, 'index.html'));
 }
 
@@ -146,6 +149,20 @@ ipcMain.handle('dialog:openDirectory', async () => {
   const result = await dialog.showOpenDialog({ properties: ['openDirectory'] });
   if (result.canceled || !result.filePaths.length) return null;
   return result.filePaths[0];
+});
+
+// IPC-Events für Fenstersteuerung
+ipcMain.on('window:minimize', () => {
+  if (mainWindow) mainWindow.minimize();
+});
+ipcMain.on('window:maximize', () => {
+  if (mainWindow) mainWindow.maximize();
+});
+ipcMain.on('window:unmaximize', () => {
+  if (mainWindow) mainWindow.unmaximize();
+});
+ipcMain.on('window:close', () => {
+  if (mainWindow) mainWindow.close();
 });
 
 try {
