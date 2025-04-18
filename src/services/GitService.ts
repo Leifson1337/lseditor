@@ -250,7 +250,7 @@ export class GitService extends EventEmitter {
         .filter((line: string) => line.trim())
         .map((line: string) => {
           const isCurrent = line.startsWith('*');
-          const name = line.replace('*', '').trim();
+          const name = line.replace(/\*/g, '').trim();
           const commit = ''; // We'll need to get this from git log if needed
           const label = line.includes('[') ? line.split('[')[1].split(']')[0] : '';
           
