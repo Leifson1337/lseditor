@@ -141,5 +141,3 @@ npm install
 
 # 3. start local dev server
 npm run dev
-
-Translated with DeepL.com (free version)
