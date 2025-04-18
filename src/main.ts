@@ -152,10 +152,10 @@ try {
 }
 
 app.whenReady().then(async () => {
+  setupFsIpcHandlers(); // Stelle sicher, dass die FS-Handler VOR dem Renderer aktiv sind
   await initializeServices();
   await createWindow();
   setupIpcHandlers();
-  setupFsIpcHandlers();
 });
 
 app.on('window-all-closed', () => {

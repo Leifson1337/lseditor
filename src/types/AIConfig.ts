@@ -6,6 +6,8 @@ export interface AIConfig {
   apiKey: string;
   useLocalModel: boolean;
   localModelPath: string;
+  stopSequences: string[];
+  topP?: number;
   openAIConfig?: {
     apiKey: string;
     model: string;
@@ -31,4 +33,3 @@ export interface AIMessage {
   content: string;
   timestamp: number;
 }
- 
