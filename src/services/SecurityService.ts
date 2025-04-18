@@ -103,7 +103,7 @@ export class SecurityService extends EventEmitter {
     try {
       const hashedPassword = await bcrypt.hash(password, 10);
       const user: User = {
-        id: Math.random().toString(36).substr(2, 9),
+        id: crypto.randomBytes(6).toString('base64url').substr(0, 9),
         username,
         email: '',
         password: hashedPassword,
