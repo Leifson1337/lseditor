@@ -311,7 +311,8 @@ export class TerminalServer extends EventEmitter {
   }
 
   private generateSessionId(): string {
-    return Math.random().toString(36).substring(2, 15);
+    const crypto = require('crypto');
+    return crypto.randomBytes(16).toString('hex');
   }
 
   public async shutdown(): Promise<void> {
