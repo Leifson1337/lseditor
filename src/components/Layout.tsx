@@ -74,8 +74,8 @@ const Layout: React.FC<LayoutProps> = ({
         return (
           <div className="terminal-container">
             <Terminal 
-              onData={(data: string) => console.log('Terminal data:', data)}
-              onResize={(cols: number, rows: number) => console.log('Terminal resize:', cols, rows)}
+              onData={(data) => console.log('Terminal data:', data)}
+              onResize={(cols, rows) => console.log('Terminal resize:', cols, rows)}
             />
           </div>
         );

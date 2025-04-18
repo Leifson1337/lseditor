@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { FaCheck, FaTimes, FaCode, FaQuestion } from 'react-icons/fa';
+import { useAI } from '../contexts/AIContext';
+import '../styles/aichat.css';
 
 interface Message {
   id: string;
@@ -26,11 +28,12 @@ export const AIChat: React.FC<AIChatProps> = ({
   onExplain
 }) => {
   const [input, setInput] = useState('');
+  const { sendMessage } = useAI();
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (input.trim()) {
-      onSendMessage(input.trim());
+      sendMessage(input);
       setInput('');
     }
   };
@@ -41,7 +44,7 @@ export const AIChat: React.FC<AIChatProps> = ({
     <div className="ai-chat">
       <div className="chat-header">
         <h3>AI Assistant</h3>
-        <button onClick={onClose} className="close-button">
+        <button onClick={onClose} className="close-button" title="Close chat">
           <FaTimes />
         </button>
       </div>
@@ -66,7 +69,7 @@ export const AIChat: React.FC<AIChatProps> = ({
           placeholder="Type your message..."
           className="chat-input"
         />
-        <button type="submit" className="send-button">
+        <button type="submit" title="Send message" className="send-button">
           Send
         </button>
       </form>

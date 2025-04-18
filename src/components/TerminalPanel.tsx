@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { Terminal } from './Terminal';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
@@ -14,6 +15,7 @@ import { UIService } from '../services/UIService';
 import { TerminalServer } from '../server/terminalServer';
 import { Store } from '../store';
 import { TerminalSession } from '../types/terminal';
+import { AIConfig } from '../types/AITypes';
 import './TerminalPanel.css';
 
 interface TerminalPanelProps {

@@ -1,3 +1,55 @@
+:root {
+  --background-color: #1e1e1e;
+  --text-color: #d4d4d4;
+  --sidebar-bg: #252526;
+  --panel-bg: #252526;
+  --border-color: #3c3c3c;
+  --text-muted: #858585;
+  --status-bar-bg: #007acc;
+  --button-bg: #3c3c3c;
+  --button-hover-bg: #505050;
+  --button-text: #d4d4d4;
+  --editor-bg: #1e1e1e;
+  --gutter-bg: #252526;
+  --gutter-border: #3c3c3c;
+  --gutter-text: #858585;
+  --minimap-bg: rgba(0, 0, 0, 0.2);
+  --minimap-border: #3c3c3c;
+  --split-border: #3c3c3c;
+  --diff-added-bg: rgba(0, 255, 0, 0.1);
+  --diff-removed-bg: rgba(255, 0, 0, 0.1);
+  --lint-error: #ff4444;
+  --lint-warning: #ffbb33;
+  --tooltip-bg: #333;
+  --tooltip-text: #fff;
+  --autocomplete-hover: #444;
+  --selection-bg: #264f78;
+  --cursor-color: #fff;
+  --multiple-cursor-bg: rgba(255, 255, 255, 0.2);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  background-color: var(--background-color);
+  color: var(--text-color);
+  overflow: hidden;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background-color: var(--background-color);
+}
+
 .app-container {
   display: flex;
   flex-direction: column;

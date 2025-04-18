@@ -1,0 +1,109 @@
+.file-explorer {
+  height: 100%;
+  overflow-y: auto;
+  padding: 0.5rem 0;
+  color: #d4d4d4;
+  font-size: 0.9rem;
+}
+
+.file-explorer.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #858585;
+}
+
+.file-node {
+  display: flex;
+  align-items: center;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+  transition: background-color 0.2s;
+}
+
+.file-node:hover {
+  background-color: #2a2d2e;
+}
+
+.file-node.active {
+  background-color: #37373d;
+}
+
+.file-node.folder {
+  font-weight: 500;
+}
+
+.file-node .file-name {
+  margin-left: 0.5rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-children {
+  margin-left: 1rem;
+}
+
+/* Indentation levels */
+.file-node[data-level="0"] { padding-left: 0.5rem; }
+.file-node[data-level="1"] { padding-left: 1.5rem; }
+.file-node[data-level="2"] { padding-left: 2.5rem; }
+.file-node[data-level="3"] { padding-left: 3.5rem; }
+.file-node[data-level="4"] { padding-left: 4.5rem; }
+.file-node[data-level="5"] { padding-left: 5.5rem; }
+
+/* Icons */
+.file-node svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+/* Scrollbar Styling */
+.file-explorer::-webkit-scrollbar {
+  width: 14px;
+}
+
+.file-explorer::-webkit-scrollbar-track {
+  background: #1e1e1e;
+}
+
+.file-explorer::-webkit-scrollbar-thumb {
+  background: #424242;
+  border: 3px solid #1e1e1e;
+  border-radius: 7px;
+}
+
+.file-explorer::-webkit-scrollbar-thumb:hover {
+  background: #4f4f4f;
+}
+
+.file-explorer-header {
+  padding: 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.file-tree {
+  padding: 8px;
+}
+
+.file-tree-indent {
+  margin-left: 16px;
+}
+
+.empty-file-explorer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-secondary-color);
+  text-align: center;
+  padding: 16px;
+}
+
+.empty-file-explorer p {
+  margin: 4px 0;
+} 

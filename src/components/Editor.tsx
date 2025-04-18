@@ -1,67 +1,52 @@
-import React, { useEffect, useRef } from 'react';
-import MonacoEditor from '@monaco-editor/react';
-import { useEditorStore } from '../store/editorStore';
+import React, { useEffect, useState } from 'react';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import '../styles/Editor.css';
 
 interface EditorProps {
-  file: string | null;
-  onSave: (content: string) => void;
-  terminal?: any; // We'll type this properly later
+  filePath?: string;
+  content: string;
+  isLoading: boolean;
 }
 
-export const CodeEditor: React.FC<EditorProps> = ({ file, onSave, terminal }) => {
-  const { theme, fontSize, wordWrap, minimap, lineNumbers } = useEditorStore();
-  const editorRef = useRef<any>(null);
+export const Editor: React.FC<EditorProps> = ({ filePath, content, isLoading }) => {
+  const [language, setLanguage] = useState<string>('plaintext');
 
-  const handleEditorDidMount = (editor: any) => {
-    editorRef.current = editor;
-  };
-
-  const handleChange = (value: string | undefined) => {
-    if (onSave && value !== undefined) {
-      onSave(value);
+  useEffect(() => {
+    if (filePath) {
+      const extension = filePath.split('.').pop()?.toLowerCase();
+      setLanguage(extension || 'plaintext');
     }
-  };
+  }, [filePath]);
+
+  if (isLoading) {
+    return (
+      <div className="editor-container">
+        <div className="editor-loading">Loading...</div>
+      </div>
+    );
+  }
 
   return (
-    <div className="editor">
-      <MonacoEditor
-        height="100%"
-        defaultLanguage="plaintext"
-        defaultValue={file || ''}
-        theme={theme}
-        options={{
-          fontSize,
-          wordWrap: wordWrap ? 'on' : 'off',
-          minimap: {
-            enabled: minimap
-          },
-          lineNumbers: lineNumbers ? 'on' : 'off',
-          automaticLayout: true,
-          scrollBeyondLastLine: false,
-          renderWhitespace: 'selection',
-          tabSize: 2,
-          insertSpaces: true,
-          autoClosingBrackets: 'always',
-          autoClosingQuotes: 'always',
-          formatOnPaste: true,
-          formatOnType: true,
-          suggestOnTriggerCharacters: true,
-          acceptSuggestionOnEnter: 'on',
-          tabCompletion: 'on',
-          wordBasedSuggestions: 'on',
-          parameterHints: {
-            enabled: true
-          }
-        }}
-        onMount={handleEditorDidMount}
-        onChange={handleChange}
-      />
+    <div className="editor-container">
+      <div className="editor-header">
+        {filePath && <span className="file-name">{filePath}</span>}
+      </div>
       <div className="editor-content">
-        {file ? (
-          <div>Editing file: {file}</div>
-        ) : (
-          <div>No file selected</div>
-        )}
+        <SyntaxHighlighter
+          language={language}
+          style={vscDarkPlus}
+          customStyle={{
+            margin: 0,
+            padding: '1rem',
+            height: '100%',
+            fontSize: '14px',
+            lineHeight: '1.5',
+            fontFamily: 'Consolas, Monaco, "Andale Mono", "Ubuntu Mono", monospace'
+          }}
+        >
+          {content}
+        </SyntaxHighlighter>
       </div>
     </div>
   );

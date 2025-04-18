@@ -1,71 +1,40 @@
 import React from 'react';
-import './StatusBar.css';
+import '../styles/StatusBar.css';
 
 interface StatusBarProps {
-  activeFile?: string;
-  terminalPort: number;
-  isTerminalConnected: boolean;
-  language?: string;
-  branch?: string;
-  aiStatus?: 'connected' | 'waiting' | 'disconnected';
-  linterStatus?: 'ok' | 'warning' | 'error';
+  activeFile?: string | null;
+  terminalPort?: number;
+  isTerminalConnected?: boolean;
 }
 
 const StatusBar: React.FC<StatusBarProps> = ({
   activeFile,
   terminalPort,
-  isTerminalConnected,
-  language = 'Plain Text',
-  branch = 'main',
-  aiStatus = 'disconnected',
-  linterStatus = 'ok'
+  isTerminalConnected
 }) => {
-  const getAIStatusIcon = () => {
-    switch (aiStatus) {
-      case 'connected':
-        return '🧠';
-      case 'waiting':
-        return '⌛';
-      case 'disconnected':
-        return '❌';
-    }
-  };
-
-  const getLinterStatusIcon = () => {
-    switch (linterStatus) {
-      case 'ok':
-        return '✓';
-      case 'warning':
-        return '⚠️';
-      case 'error':
-        return '❌';
-    }
-  };
-
   return (
     <div className="status-bar">
-      <div className="status-item">
-        <span className="status-icon">🌿</span>
-        <span className="status-text">{branch}</span>
+      <div className="status-bar-left">
+        {activeFile && (
+          <div className="status-item">
+            <span className="status-label">File:</span>
+            <span className="status-value">{activeFile}</span>
+          </div>
+        )}
       </div>
-      <div className="status-item">
-        <span className="status-icon">📝</span>
-        <span className="status-text">{language}</span>
-      </div>
-      <div className="status-item">
-        <span className="status-icon">{getLinterStatusIcon()}</span>
-        <span className="status-text">Linter</span>
-      </div>
-      <div className="status-item">
-        <span className="status-icon">{getAIStatusIcon()}</span>
-        <span className="status-text">AI</span>
-      </div>
-      <div className="status-item">
-        {activeFile ? `File: ${activeFile}` : 'No file selected'}
-      </div>
-      <div className="status-item">
-        <span>Terminal: {isTerminalConnected ? 'Connected' : 'Disconnected'}</span>
-        <span className="port">(Port: {terminalPort})</span>
+      <div className="status-bar-right">
+        {terminalPort && (
+          <div className="status-item">
+            <span className="status-label">Terminal Port:</span>
+            <span className="status-value">{terminalPort}</span>
+          </div>
+        )}
+        <div className="status-item">
+          <span className="status-label">Terminal:</span>
+          <span className={`status-value ${isTerminalConnected ? 'connected' : 'disconnected'}`}>
+            {isTerminalConnected ? 'Connected' : 'Disconnected'}
+          </span>
+        </div>
       </div>
     </div>
   );

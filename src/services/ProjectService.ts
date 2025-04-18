@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as chokidar from 'chokidar';
+import { FileNode } from '../types/FileNode';
 
 export interface ProjectSettings {
   name: string;
@@ -300,5 +301,27 @@ export class ProjectService extends EventEmitter {
   private detectProjectType(): string {
     // Implement project type detection logic here
     return 'unknown';
+  }
+
+  public async getFileStructure(dirPath: string): Promise<FileNode[]> {
+    const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+    const nodes: FileNode[] = [];
+
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name);
+      const node: FileNode = {
+        name: entry.name,
+        path: fullPath,
+        type: entry.isDirectory() ? 'directory' : 'file'
+      };
+
+      if (entry.isDirectory()) {
+        node.children = await this.getFileStructure(fullPath);
+      }
+
+      nodes.push(node);
+    }
+
+    return nodes;
   }
 } 

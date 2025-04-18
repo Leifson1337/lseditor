@@ -1,12 +1,6 @@
 import React, { useState } from 'react';
-import { FaFolder, FaFolderOpen, FaFile, FaChevronRight, FaChevronDown } from 'react-icons/fa';
-import './FileExplorer.css';
-
-interface FileExplorerProps {
-  fileStructure: any[];
-  onOpenFile: (filePath: string) => void;
-  activeFile: string;
-}
+import { FolderIcon, FileIcon, ChevronRightIcon, ChevronDownIcon } from './Icons';
+import '../styles/FileExplorer.css';
 
 interface FileNode {
   name: string;
@@ -15,7 +9,17 @@ interface FileNode {
   children?: FileNode[];
 }
 
-const FileExplorer: React.FC<FileExplorerProps> = ({ fileStructure, onOpenFile, activeFile }) => {
+interface FileExplorerProps {
+  fileStructure: FileNode[];
+  onOpenFile: (filePath: string) => void;
+  activeFile?: string | null;
+}
+
+export const FileExplorer: React.FC<FileExplorerProps> = ({
+  fileStructure,
+  onOpenFile,
+  activeFile
+}) => {
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
 
   const toggleFolder = (path: string) => {
@@ -31,62 +35,52 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ fileStructure, onOpenFile, 
   const renderFileNode = (node: FileNode, level: number = 0) => {
     const isExpanded = expandedFolders.has(node.path);
     const isActive = activeFile === node.path;
-    const indent = level * 20;
 
     if (node.type === 'directory') {
       return (
         <div key={node.path}>
-          <div 
-            className={`file-explorer-item ${isActive ? 'active' : ''}`}
-            style={{ paddingLeft: `${indent}px` }}
+          <div
+            className={`file-node folder ${isExpanded ? 'expanded' : ''}`}
+            data-level={level}
             onClick={() => toggleFolder(node.path)}
           >
-            <span className="file-explorer-icon">
-              {isExpanded ? <FaChevronDown /> : <FaChevronRight />}
-            </span>
-            <span className="file-explorer-icon">
-              {isExpanded ? <FaFolderOpen /> : <FaFolder />}
-            </span>
-            <span className="file-explorer-name">{node.name}</span>
+            {isExpanded ? <ChevronDownIcon /> : <ChevronRightIcon />}
+            <FolderIcon />
+            <span className="file-name">{node.name}</span>
           </div>
           {isExpanded && node.children && (
-            <div className="file-explorer-children">
-              {node.children.map(child => renderFileNode(child, level + 1))}
+            <div className="file-children">
+              {node.children.map((child) => renderFileNode(child, level + 1))}
             </div>
           )}
         </div>
       );
-    } else {
-      return (
-        <div 
-          key={node.path}
-          className={`file-explorer-item ${isActive ? 'active' : ''}`}
-          style={{ paddingLeft: `${indent}px` }}
-          onClick={() => onOpenFile(node.path)}
-        >
-          <span className="file-explorer-icon">
-            <FaFile />
-          </span>
-          <span className="file-explorer-name">{node.name}</span>
-        </div>
-      );
     }
+
+    return (
+      <div
+        key={node.path}
+        className={`file-node file ${isActive ? 'active' : ''}`}
+        data-level={level}
+        onClick={() => onOpenFile(node.path)}
+      >
+        <FileIcon />
+        <span className="file-name">{node.name}</span>
+      </div>
+    );
   };
+
+  if (!fileStructure || fileStructure.length === 0) {
+    return (
+      <div className="file-explorer empty">
+        <p>No files available</p>
+      </div>
+    );
+  }
 
   return (
     <div className="file-explorer">
-      <div className="file-explorer-header">
-        <h3>Explorer</h3>
-      </div>
-      <div className="file-explorer-content">
-        {fileStructure.length > 0 ? (
-          fileStructure.map(node => renderFileNode(node))
-        ) : (
-          <div className="empty-explorer">Keine Dateien gefunden</div>
-        )}
-      </div>
+      {fileStructure.map((node) => renderFileNode(node))}
     </div>
   );
-};
-
-export default FileExplorer; 
+}; 

@@ -1,8 +1,24 @@
 .terminal-container {
-  position: relative;
   width: 100%;
   height: 100%;
-  background-color: var(--terminal-bg, #1e1e1e);
+  background-color: var(--background-color);
+  color: var(--text-color);
+  overflow: hidden;
+}
+
+.terminal {
+  width: 100%;
+  height: 100%;
+  padding: 8px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.terminal-wrapper {
+  width: 100%;
+  height: 100%;
+  position: relative;
 }
 
 .terminal-container.drag-over {
