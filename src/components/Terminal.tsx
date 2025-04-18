@@ -4,7 +4,7 @@ import { FitAddon } from 'xterm-addon-fit';
 import { WebLinksAddon } from 'xterm-addon-web-links';
 import { SearchAddon } from 'xterm-addon-search';
 import { Unicode11Addon } from 'xterm-addon-unicode11';
-import { LigaturesAddon } from '@xterm/addon-ligatures';
+// import { LigaturesAddon } from '@xterm/addon-ligatures';
 import '../styles/Terminal.css';
 
 interface TerminalProps {
@@ -40,7 +40,6 @@ export const Terminal: React.FC<TerminalProps> = ({ onResize, onData }) => {
     xterm.loadAddon(new WebLinksAddon());
     xterm.loadAddon(new SearchAddon());
     xterm.loadAddon(new Unicode11Addon());
-    xterm.loadAddon(new LigaturesAddon());
 
     console.log('Opening terminal in container');
     xterm.open(terminalRef.current);

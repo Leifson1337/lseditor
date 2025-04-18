@@ -1,4 +1,4 @@
-import { EventEmitter } from 'events';
+import { EventEmitter } from '../utils/EventEmitter';
 import { StatusBarItem } from './StatusBarService';
 
 export interface UITheme {

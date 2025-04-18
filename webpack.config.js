@@ -58,7 +58,7 @@ const mainConfig = {
 const rendererConfig = {
   ...commonConfig,
   target: 'electron-renderer',
-  entry: './src/index.tsx',
+  entry: ['./src/global-shim.js', './src/index.tsx'],
   output: {
     path: path.resolve(__dirname, 'dist'),
     filename: 'renderer.js'
@@ -66,13 +66,15 @@ const rendererConfig = {
   resolve: {
     ...commonConfig.resolve,
     fallback: {
-      path: require.resolve('path-browserify'),
+      buffer: require.resolve('buffer/'),
+      stream: require.resolve('stream-browserify'),
+      process: require.resolve('process/browser'),
       fs: false,
+      path: require.resolve('path-browserify'),
+      events: require.resolve('events/'),
       crypto: false,
       http: require.resolve('stream-http'),
       https: require.resolve('https-browserify'),
-      stream: require.resolve('stream-browserify'),
-      buffer: require.resolve('buffer/'),
       util: require.resolve('util/'),
       url: require.resolve('url/'),
       assert: require.resolve('assert/'),
@@ -80,16 +82,23 @@ const rendererConfig = {
     }
   },
   plugins: [
+    new webpack.BannerPlugin({
+      banner: 'window.global = window; self.global = self;',
+      raw: true,
+      entryOnly: true
+    }),
     new webpack.DefinePlugin({
       'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development')
     }),
     new webpack.ProvidePlugin({
       process: 'process/browser',
-      Buffer: ['buffer', 'Buffer']
+      Buffer: ['buffer', 'Buffer'],
+      global: require.resolve('global')
     }),
     new HtmlWebpackPlugin({
-      template: './src/index.html',
-      filename: 'index.html'
+      template: './public/index.html',
+      filename: 'index.html',
+      inject: 'body'
     }),
     new MonacoWebpackPlugin({
       languages: ['javascript', 'typescript', 'html', 'css', 'json', 'markdown']

@@ -1,241 +1,151 @@
-import { EventEmitter } from 'events';
+import { EventEmitter } from '../utils/EventEmitter';
 
-// Sichere ipcRenderer-Initialisierung, funktioniert nur im Renderer
-let ipcRenderer: typeof import('electron').ipcRenderer | null = null;
-if (typeof window !== 'undefined' && window.require) {
-  ipcRenderer = window.require('electron').ipcRenderer;
+// Sichere ipcRenderer-Initialisierung
+let ipcRenderer: any = null;
+// Prüfe, ob wir im Renderer-Prozess sind (window existiert)
+const isRenderer = typeof window !== 'undefined';
+try {
+  if (isRenderer && window && window.electron) {
+    ipcRenderer = window.electron.ipcRenderer;
+  }
+} catch (e) {
+  console.error('Failed to initialize ipcRenderer in ProjectService', e);
 }
 
-export interface ProjectSettings {
+// Hilfsfunktion für sichere IPC-Aufrufe
+async function safeIpcInvoke(channel: string, ...args: any[]): Promise<any> {
+  if (!ipcRenderer) {
+    console.error(`IPC channel ${channel} called but ipcRenderer is not available`);
+    return null;
+  }
+  return ipcRenderer.invoke(channel, ...args);
+}
+
+export interface DirectoryEntry {
   name: string;
-  rootPath: string;
-  gitEnabled: boolean;
-  excludePatterns: string[];
-  maxRecentFiles: number;
-  recentFiles: string[];
-}
-
-interface ProjectFile {
   path: string;
-  name: string;
-  type: 'file' | 'directory';
-  children?: ProjectFile[];
+  isDirectory: boolean;
+  children?: DirectoryEntry[];
+  size?: number;
+  modified?: Date;
 }
 
 export class ProjectService extends EventEmitter {
-  private currentProject: string | null = null;
-  private settings: ProjectSettings;
-  private watcher: any | null = null;
-  private isInitialized: boolean = false;
-  private fileWatchers: Map<string, any> = new Map();
-  private gitStatus: Map<string, string> = new Map();
-  private gitDiffs: Map<string, string> = new Map();
   private workspacePath: string;
-  private projectName: string;
-  private projectType: string;
-
+  private currentProject: string | null = null;
+  
   constructor(workspacePath: string) {
     super();
     this.workspacePath = workspacePath;
-    this.projectName = this.detectProjectType();
-    this.projectType = this.detectProjectType();
-    this.settings = {
-      name: '',
-      rootPath: '',
-      gitEnabled: false,
-      excludePatterns: [],
-      maxRecentFiles: 10,
-      recentFiles: []
-    };
-    this.initialize().catch(error => {
-      console.error('Failed to initialize project service:', error);
-      this.emit('error', error);
+    this.initialize().catch(err => {
+      console.error('Failed to initialize project service:', err);
     });
   }
-
-  private async initialize(): Promise<void> {
+  
+  private async initialize() {
+    // Lade Projekteinstellungen
     await this.loadSettings();
-    this.isInitialized = true;
   }
-
-  private async loadSettings(): Promise<void> {
+  
+  private async loadSettings() {
     try {
-      const settingsPath = await this.getDirectoryEntries(this.settings.rootPath);
-      const settingsFile = settingsPath.find((entry: any) => entry.name === '.project.json');
-      if (settingsFile) {
-        const settingsContent = await this.getFileContent(joinPath(this.settings.rootPath, '.project.json'));
-        this.settings = { ...this.settings, ...JSON.parse(settingsContent) };
-      }
-      this.emit('projectLoaded', this.settings);
+      // Lade Verzeichnisstruktur
+      const entries = await this.getDirectoryEntries(this.workspacePath);
+      this.emit('directoryLoaded', entries);
     } catch (error) {
-      this.emit('error', error);
-      throw error;
+      console.error('Error loading project settings:', error);
     }
   }
-
-  public async getDirectoryEntries(dirPath: string) {
-    if (!ipcRenderer) throw new Error('ipcRenderer not available');
-    return ipcRenderer.invoke('fs:readDir', dirPath);
+  
+  public async getDirectoryEntries(dirPath: string): Promise<DirectoryEntry[]> {
+    if (!ipcRenderer) {
+      throw new Error('ipcRenderer not available');
+    }
+    
+    try {
+      return await safeIpcInvoke('getDirectoryEntries', dirPath);
+    } catch (error) {
+      console.error('Error getting directory entries:', error);
+      return [];
+    }
   }
-
+  
   public async getFileContent(filePath: string): Promise<string> {
-    const ipc = ipcRenderer;
-    if (!ipc) throw new Error('ipcRenderer not available');
-    return ipc.invoke('fs:readFile', filePath);
+    try {
+      return await safeIpcInvoke('readFile', filePath);
+    } catch (error) {
+      console.error('Error reading file:', error);
+      return '';
+    }
   }
-
+  
   public async saveFile(filePath: string, content: string): Promise<void> {
-    const ipc = ipcRenderer;
-    if (!ipc) throw new Error('ipcRenderer not available');
-    await ipc.invoke('fs:writeFile', filePath, content);
-    this.emit('fileSaved', filePath);
-  }
-
-  public getSettings(): ProjectSettings {
-    return { ...this.settings };
-  }
-
-  public async updateSettings(settings: Partial<ProjectSettings>): Promise<void> {
-    this.settings = { ...this.settings, ...settings };
-    const settingsPath = joinPath(this.settings.rootPath, '.project.json');
-    const ipc = ipcRenderer;
-    if (!ipc) throw new Error('ipcRenderer not available');
-    await ipc.invoke('fs:writeFile', settingsPath, JSON.stringify(this.settings, null, 2));
-    this.emit('settingsUpdated', this.settings);
-  }
-
-  public getFileTree(): ProjectFile[] {
-    const tree: ProjectFile[] = [];
-    this.buildFileTree(this.settings.rootPath, tree);
-    return tree;
-  }
-
-  private buildFileTree(dirPath: string, tree: ProjectFile[]): void {
-    this.getDirectoryEntries(dirPath).then(entries => {
-      for (const entry of entries) {
-        const relative = relativePath(this.settings.rootPath, entry.path);
-        
-        if (this.settings.excludePatterns.some((pattern: string) => 
-          new RegExp(pattern).test(relative))) {
-          continue;
-        }
-
-        const file: ProjectFile = {
-          path: relative,
-          name: entry.name,
-          type: entry.isDirectory ? 'directory' : 'file'
-        };
-
-        if (entry.isDirectory) {
-          file.children = [];
-          this.buildFileTree(entry.path, file.children);
-        }
-
-        tree.push(file);
-      }
-    });
-  }
-
-  public async getGitStatus(): Promise<Map<string, string>> {
-    if (!this.settings.gitEnabled) {
-      return new Map();
-    }
-
     try {
-      // Implement Git status check
-      // This is a placeholder for actual Git integration
-      return this.gitStatus;
+      await safeIpcInvoke('writeFile', filePath, content);
+      this.emit('fileSaved', filePath);
     } catch (error) {
-      console.error('Error getting Git status:', error);
-      return new Map();
+      console.error('Error saving file:', error);
     }
   }
-
-  public async getGitDiff(filePath?: string): Promise<string> {
-    if (!this.settings.gitEnabled) {
-      return '';
-    }
-
+  
+  public async createFile(filePath: string, content: string = ''): Promise<void> {
     try {
-      // Implement Git diff
-      // This is a placeholder for actual Git integration
-      return this.gitDiffs.get(filePath || '') || '';
+      await safeIpcInvoke('writeFile', filePath, content);
+      this.emit('fileCreated', filePath);
     } catch (error) {
-      console.error('Error getting Git diff:', error);
-      return '';
+      console.error('Error creating file:', error);
     }
   }
-
-  public addRecentFile(filePath: string): void {
-    const index = this.settings.recentFiles.indexOf(filePath);
-    if (index !== -1) {
-      this.settings.recentFiles.splice(index, 1);
+  
+  public async createDirectory(dirPath: string): Promise<void> {
+    try {
+      await safeIpcInvoke('createDirectory', dirPath);
+      this.emit('directoryCreated', dirPath);
+    } catch (error) {
+      console.error('Error creating directory:', error);
     }
-    
-    this.settings.recentFiles.unshift(filePath);
-    
-    if (this.settings.recentFiles.length > this.settings.maxRecentFiles) {
-      this.settings.recentFiles.pop();
+  }
+  
+  public async deleteFile(filePath: string): Promise<void> {
+    try {
+      await safeIpcInvoke('deleteFile', filePath);
+      this.emit('fileDeleted', filePath);
+    } catch (error) {
+      console.error('Error deleting file:', error);
     }
-
-    this.emit('recentFilesUpdated', this.settings.recentFiles);
   }
-
-  public getRecentFiles(): string[] {
-    return this.settings.recentFiles;
+  
+  public async deleteDirectory(dirPath: string): Promise<void> {
+    try {
+      await safeIpcInvoke('deleteDirectory', dirPath);
+      this.emit('directoryDeleted', dirPath);
+    } catch (error) {
+      console.error('Error deleting directory:', error);
+    }
   }
-
-  public searchFiles(query: string): ProjectFile[] {
-    const results: ProjectFile[] = [];
-    this.searchInDirectory(this.settings.rootPath, query, results);
-    return results;
+  
+  public async renameFile(oldPath: string, newPath: string): Promise<void> {
+    try {
+      await safeIpcInvoke('renameFile', oldPath, newPath);
+      this.emit('fileRenamed', { oldPath, newPath });
+    } catch (error) {
+      console.error('Error renaming file:', error);
+    }
   }
-
-  private searchInDirectory(dirPath: string, query: string, results: ProjectFile[]): void {
-    this.getDirectoryEntries(dirPath).then(entries => {
-      for (const entry of entries) {
-        const relative = relativePath(this.settings.rootPath, entry.path);
-        
-        if (this.settings.excludePatterns.some((pattern: string) => 
-          new RegExp(pattern).test(relative))) {
-          continue;
-        }
-
-        if (entry.name.toLowerCase().includes(query.toLowerCase())) {
-          results.push({
-            path: relative,
-            name: entry.name,
-            type: entry.isDirectory ? 'directory' : 'file'
-          });
-        }
-
-        if (entry.isDirectory) {
-          this.searchInDirectory(entry.path, query, results);
-        }
-      }
+  
+  public getWorkspacePath(): string {
+    return this.workspacePath;
+  }
+  
+  public setWorkspacePath(path: string): void {
+    this.workspacePath = path;
+    this.emit('workspaceChanged', path);
+    this.loadSettings().catch(err => {
+      console.error('Error reloading settings after workspace change:', err);
     });
   }
 
-  public watchFile(filePath: string, callback: (event: string, filename: string) => void): void {
-    if (!ipcRenderer) throw new Error('ipcRenderer not available');
-    ipcRenderer.on('fs:changed', (_event, eventType: string, changedPath: string) => {
-      if (changedPath === filePath) {
-        callback(eventType, changedPath);
-      }
-    });
-    this.fileWatchers.set(filePath, true);
-  }
-
-  public unwatchFile(filePath: string): void {
-    if (!ipcRenderer) return;
-    ipcRenderer.removeListener('fs:changed', (_event, eventType: string, changedPath: string) => {
-      if (changedPath === filePath) {
-        // callback(eventType, changedPath);
-      }
-    });
-    this.fileWatchers.delete(filePath);
-  }
-
+  // Fehlende Methoden hinzufügen, die in app.ts und App.tsx verwendet werden
   public setProject(projectPath: string): void {
     this.currentProject = projectPath;
     this.emit('projectChanged', projectPath);
@@ -246,48 +156,30 @@ export class ProjectService extends EventEmitter {
     this.emit('projectClosed');
   }
 
-  public getWorkspacePath(): string {
-    return this.workspacePath;
-  }
-
-  private detectProjectType(): string {
-    // Implement project type detection logic here
-    return 'unknown';
-  }
-
   public async getFileStructure(dirPath: string): Promise<any[]> {
-    const entries = await this.getDirectoryEntries(dirPath);
-    const nodes: any[] = [];
-
-    for (const entry of entries) {
-      const fullPath = entry.path;
-      const node: any = {
-        name: entry.name,
-        path: fullPath,
-        type: entry.isDirectory ? 'directory' : 'file'
-      };
-
-      if (entry.isDirectory) {
-        node.children = await this.getFileStructure(fullPath);
+    try {
+      const entries = await this.getDirectoryEntries(dirPath);
+      const result: any[] = [];
+      
+      for (const entry of entries) {
+        const node = {
+          name: entry.name,
+          path: entry.path,
+          type: entry.isDirectory ? 'directory' : 'file',
+          children: undefined as any[] | undefined
+        };
+        
+        if (entry.isDirectory) {
+          node.children = await this.getFileStructure(entry.path);
+        }
+        
+        result.push(node);
       }
-
-      nodes.push(node);
+      
+      return result;
+    } catch (error) {
+      console.error('Error getting file structure:', error);
+      return [];
     }
-
-    return nodes;
   }
-}
-
-// Hilfsfunktionen für Pfadoperationen im Renderer
-function joinPath(...parts: string[]): string {
-  return parts.join('/').replace(/\\/g, '/');
-}
-
-function relativePath(from: string, to: string): string {
-  if (to.startsWith(from)) {
-    let rel = to.slice(from.length);
-    if (rel.startsWith('/')) rel = rel.slice(1);
-    return rel;
-  }
-  return to;
 }

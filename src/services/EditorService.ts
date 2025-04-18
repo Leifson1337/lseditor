@@ -1,4 +1,4 @@
-import { EventEmitter } from 'events';
+import { EventEmitter } from '../utils/EventEmitter';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
 import { GitService } from './GitService';
 import { PerformanceService } from './PerformanceService';

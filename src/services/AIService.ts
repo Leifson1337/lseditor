@@ -1,15 +1,38 @@
-import { EventEmitter } from 'events';
-import * as fs from 'fs';
-import * as path from 'path';
+import { EventEmitter } from '../utils/EventEmitter';
+// Entferne direkte Node.js-Imports
+// import * as fs from 'fs';
+// import * as path from 'path';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
 import OpenAI from 'openai';
 import axios, { AxiosError } from 'axios';
 import { AIConfig, AIResponse, AIConversation, AIMessage, CodeContext, CodeBlock, CodeSuggestion, AIPrompt, AITokenizer } from '../types/AITypes';
-import { exec } from 'child_process';
 import { promisify } from 'util';
 import { marked } from 'marked';
 
-const execAsync = promisify(exec);
+// Sichere ipcRenderer-Initialisierung, funktioniert nur im Renderer
+let ipcRenderer: any = null;
+// Prüfe, ob wir im Renderer-Prozess sind (window existiert)
+const isRenderer = typeof window !== 'undefined';
+try {
+  if (isRenderer && window && window.electron) {
+    ipcRenderer = window.electron.ipcRenderer;
+  }
+} catch (e) {
+  console.error('Failed to initialize ipcRenderer in AIService', e);
+}
+
+// Hilfsfunktion für sichere IPC-Aufrufe
+async function safeIpcInvoke(channel: string, ...args: any[]): Promise<any> {
+  if (!ipcRenderer) {
+    console.error(`IPC channel ${channel} called but ipcRenderer is not available`);
+    return null;
+  }
+  return ipcRenderer.invoke(channel, ...args);
+}
+
+const execAsync = async (command: string) => {
+  return safeIpcInvoke('exec', command);
+};
 
 export interface AIError {
   code: string;
@@ -224,13 +247,13 @@ export class AIService extends EventEmitter {
       }
 
       // Read the file content
-      const fileContent = await fs.promises.readFile(filePath, 'utf8');
+      const fileContent = await safeIpcInvoke('readFile', filePath);
       
       // Extract imports
       const imports = this.extractImports(fileContent);
       
       // Get the language from the file extension
-      const language = path.extname(filePath).substring(1);
+      const language = await safeIpcInvoke('getFileExtension', filePath).then(extension => extension.substring(1));
       
       // Create the context
       const context: CodeContext = {
@@ -238,7 +261,7 @@ export class AIService extends EventEmitter {
         code: fileContent,
         language,
         filePath,
-        projectRoot: path.dirname(filePath)
+        projectRoot: await safeIpcInvoke('getProjectRoot', filePath)
       };
       
       // If position is provided, get the current word and line
@@ -566,9 +589,9 @@ export class AIService extends EventEmitter {
   private async getDependencies(filePath: string): Promise<string[]> {
     try {
       // Read package.json if it exists
-      const packageJsonPath = path.join(path.dirname(filePath), 'package.json');
-      if (fs.existsSync(packageJsonPath)) {
-        const packageJson = JSON.parse(await fs.promises.readFile(packageJsonPath, 'utf8'));
+      const packageJsonPath = await safeIpcInvoke('getPackageJsonPath', filePath);
+      if (packageJsonPath) {
+        const packageJson = await safeIpcInvoke('readJsonFile', packageJsonPath);
         return Object.keys(packageJson.dependencies || {});
       }
       
@@ -582,13 +605,15 @@ export class AIService extends EventEmitter {
   private async getProjectStructure(filePath: string): Promise<string[]> {
     try {
       // Get the project root
-      const projectRoot = path.dirname(filePath);
+      const projectRoot = await safeIpcInvoke('getProjectRoot', filePath);
       
       // Get all files in the project
-      const files = await this.getAllFiles(projectRoot);
+      const files = await safeIpcInvoke('getAllFiles', projectRoot);
       
       // Return relative paths
-      return files.map(file => path.relative(projectRoot, file));
+      return Promise.all(files.map(async (file: string) => {
+        return safeIpcInvoke('getRelativePath', projectRoot, file);
+      }));
     } catch (error) {
       console.warn('Failed to get project structure:', error);
       return [];
@@ -598,12 +623,12 @@ export class AIService extends EventEmitter {
   private async getAllFiles(dir: string): Promise<string[]> {
     const files: string[] = [];
     
-    const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    const entries = await safeIpcInvoke('readDir', dir);
     
     for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
+      const fullPath = await safeIpcInvoke('joinPath', dir, entry.name);
       
-      if (entry.isDirectory()) {
+      if (entry.isDirectory) {
         // Skip node_modules and .git
         if (entry.name === 'node_modules' || entry.name === '.git') {
           continue;

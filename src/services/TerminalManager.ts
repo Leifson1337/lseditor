@@ -1,4 +1,26 @@
-import { EventEmitter } from 'events';
+import { EventEmitter } from '../utils/EventEmitter';
+
+// Sichere ipcRenderer-Initialisierung - mit Prozess-Check
+let ipcRenderer: any = null;
+// Prüfe, ob wir im Renderer-Prozess sind
+const isRenderer = typeof window !== 'undefined' && typeof process !== 'undefined' && process.type === 'renderer';
+try {
+  if (isRenderer && window && window.electron) {
+    ipcRenderer = window.electron.ipcRenderer;
+  }
+} catch (e) {
+  console.error('Failed to initialize ipcRenderer in TerminalManager', e);
+}
+
+// Hilfsfunktion für sichere IPC-Aufrufe
+async function safeIpcInvoke(channel: string, ...args: any[]): Promise<any> {
+  if (!ipcRenderer) {
+    console.error(`IPC channel ${channel} called but ipcRenderer is not available`);
+    return null;
+  }
+  return ipcRenderer.invoke(channel, ...args);
+}
+
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
@@ -6,7 +28,6 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { LigaturesAddon } from '@xterm/addon-ligatures';
 import { TerminalServer } from '../server/terminalServer';
-import { WebSocket } from 'ws';
 import { TerminalService } from '../services/TerminalService';
 import { v4 as uuidv4 } from 'uuid';
 import { TerminalConfig, TerminalSession, TerminalProfile, TerminalTheme, CustomTheme } from '../types/terminal';
@@ -35,10 +56,10 @@ export class TerminalManager extends EventEmitter {
   private activeSession: TerminalSession | null = null;
   private isInitialized: boolean = false;
   private container: HTMLElement | null = null;
-  private ws: WebSocket | null = null;
+  private ws: any | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
-  private reconnectTimeout: NodeJS.Timeout | null = null;
+  private reconnectTimeout: any | null = null;
   private terminalService: TerminalService;
   private aiService: AIService;
   private projectService?: ProjectService;
@@ -439,7 +460,7 @@ export class TerminalManager extends EventEmitter {
       this.emit('disconnected');
     });
 
-    this.terminalServer.on('error', (error) => {
+    this.terminalServer.on('error', (error: any) => {
       console.error('Terminal error:', error);
       this.emit('error', error);
     });
@@ -515,4 +536,4 @@ export class TerminalManager extends EventEmitter {
   public getPort(): number {
     return this.terminalServer.getPort();
   }
-} 
+}

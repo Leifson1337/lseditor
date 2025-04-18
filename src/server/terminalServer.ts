@@ -1,13 +1,29 @@
-import * as os from 'os';
-import * as WebSocket from 'ws';
-import * as http from 'http';
-import { EventEmitter } from 'events';
+import { EventEmitter } from '../utils/EventEmitter';
 import { TerminalService } from '../services/TerminalService';
 import { v4 as uuidv4 } from 'uuid';
-import * as net from 'net';
-import { WebSocketServer } from 'ws';
 import { AIService } from '../services/AIService';
 import { UIService } from '../services/UIService';
+
+// Sichere ipcRenderer-Initialisierung
+let ipcRenderer: any = null;
+// Prüfe, ob wir im Renderer-Prozess sind
+const isRenderer = typeof window !== 'undefined' && typeof process !== 'undefined' && process.type === 'renderer';
+try {
+  if (isRenderer && window && window.electron) {
+    ipcRenderer = window.electron.ipcRenderer;
+  }
+} catch (e) {
+  console.error('Failed to initialize ipcRenderer in terminalServer', e);
+}
+
+// Hilfsfunktion für sichere IPC-Aufrufe
+async function safeIpcInvoke(channel: string, ...args: any[]): Promise<any> {
+  if (!ipcRenderer) {
+    console.error(`IPC channel ${channel} called but ipcRenderer is not available`);
+    return null;
+  }
+  return ipcRenderer.invoke(channel, ...args);
+}
 
 // Mock PTY implementation
 class MockPty extends EventEmitter {
@@ -141,11 +157,12 @@ interface TerminalServerConfig {
 }
 
 export class TerminalServer extends EventEmitter {
-  private wss!: WebSocketServer;
+  private wss: any = null;
   private port: number;
   private terminalService!: TerminalService;
   private aiService: AIService;
   private uiService: UIService;
+  private sessions: Map<string, TerminalSession> = new Map();
 
   constructor(port: number) {
     super();
@@ -170,94 +187,63 @@ export class TerminalServer extends EventEmitter {
     this.initialize();
   }
 
-  private async findAvailablePort(startPort: number): Promise<number> {
-    const isPortAvailable = (port: number): Promise<boolean> => {
-      return new Promise((resolve) => {
-        const server = net.createServer();
-        server.once('error', () => resolve(false));
-        server.once('listening', () => {
-          server.close();
-          resolve(true);
-        });
-        server.listen(port);
-      });
-    };
-
-    let port = startPort;
-    while (!(await isPortAvailable(port))) {
-      port++;
+  public async findAvailablePort(startPort: number): Promise<number> {
+    // Im Renderer-Prozess: Delegiere an den Main-Prozess
+    if (isRenderer) {
+      return safeIpcInvoke('findAvailablePort', startPort);
     }
-    return port;
+    
+    // Fallback für Tests
+    return startPort;
   }
 
-  private async initialize() {
+  public async isPortAvailable(port: number): Promise<boolean> {
+    // Im Renderer-Prozess: Delegiere an den Main-Prozess
+    if (isRenderer) {
+      return safeIpcInvoke('isPortAvailable', port);
+    }
+    
+    // Fallback für Tests
+    return true;
+  }
+
+  public async initialize() {
     console.log('Initializing TerminalServer');
-    try {
-      this.port = await this.findAvailablePort(this.port);
-      console.log('Found available port:', this.port);
+    
+    // Im Renderer-Prozess: Delegiere an den Main-Prozess
+    if (isRenderer) {
+      // Initialisiere den WebSocket-Server im Main-Prozess
+      await safeIpcInvoke('initTerminalServer', this.port);
       
-      this.wss = new WebSocketServer({ port: this.port });
-      console.log('Terminal server listening on port', this.port);
-
-      this.wss.on('connection', (ws) => {
-        console.log('New terminal connection established');
-        this.emit('connection', ws);
-
-        ws.on('message', (data) => {
-          console.log('Received terminal data:', data.toString());
-          this.emit('data', data.toString());
+      // Registriere Event-Handler für WebSocket-Nachrichten
+      if (ipcRenderer) {
+        ipcRenderer.on('terminal:data', (event: any, sessionId: string, data: string) => {
+          // Handle terminal data from main process
+          this.emit('data', { sessionId, data });
         });
-
-        ws.on('close', () => {
-          console.log('Terminal connection closed');
-          this.emit('disconnection');
-        });
-
-        ws.on('error', (error) => {
-          console.error('Terminal connection error:', error);
-          this.emit('error', error);
-        });
-      });
-
-      this.wss.on('error', (error) => {
-        console.error('WebSocket server error:', error);
-        this.emit('error', error);
-      });
-
-      this.terminalService = TerminalService.getInstance(
-        null,
-        this.aiService,
-        undefined, // projectService explizit undefined
-        this.uiService,
-        this
-      );
-    } catch (error) {
-      console.error('Failed to initialize terminal server:', error);
-      this.emit('error', error);
+      }
     }
   }
 
   public send(data: string) {
-    console.log('Sending data to all clients:', data);
-    this.wss.clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(data);
-      }
-    });
+    // Im Renderer-Prozess: Delegiere an den Main-Prozess
+    if (isRenderer) {
+      safeIpcInvoke('terminalSend', data);
+    }
   }
 
   public close() {
-    console.log('Closing terminal server');
-    this.wss.close();
+    // Im Renderer-Prozess: Delegiere an den Main-Prozess
+    if (isRenderer) {
+      safeIpcInvoke('closeTerminalServer', this.port);
+    }
   }
 
   public dispose() {
-    console.log('Disposing terminal server');
     this.close();
-    this.removeAllListeners();
   }
 
   public getPort(): number {
     return this.port;
   }
-} 
+}

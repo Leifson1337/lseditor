@@ -1,5 +1,5 @@
 import { simpleGit, SimpleGit, StatusResult, DiffResult as GitDiffResult, GitError } from 'simple-git';
-import { EventEmitter } from 'events';
+import { EventEmitter } from '../utils/EventEmitter';
 import * as path from 'path';
 import * as monaco from 'monaco-editor';
 import { GitBranch, GitCommit, GitDiff } from '../types/GitTypes';

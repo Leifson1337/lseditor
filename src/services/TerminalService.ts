@@ -1,4 +1,4 @@
-import { EventEmitter } from 'events';
+import { EventEmitter } from '../utils/EventEmitter';
 import * as path from 'path';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
 import { v4 as uuidv4 } from 'uuid';

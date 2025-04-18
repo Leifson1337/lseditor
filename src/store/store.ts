@@ -1,4 +1,10 @@
-import ElectronStore from 'electron-store';
+// import ElectronStore from 'electron-store';
+// ElectronStore darf NICHT im Renderer (React) verwendet werden!
+// Wenn du persistente Daten im Renderer brauchst, nutze stattdessen localStorage oder IPC zu main.ts.
+
+// Dummy-Export, damit der Import nicht mehr crasht
+export default {};
+
 import { ProjectService } from '../services/ProjectService';
 import { UIService } from '../services/UIService';
 import { AIService } from '../services/AIService';
@@ -32,85 +38,85 @@ export interface AppServices {
 }
 
 class AppStore implements AppServices {
-  private electronStore: ElectronStore<StoreSchema>;
+  private electronStore: any;
   projectService: ProjectService;
   uiService: UIService;
   aiService: AIService;
 
   constructor() {
-    this.electronStore = new ElectronStore<StoreSchema>({
-      schema: {
-        lastProjectPath: {
-          type: 'string',
-          default: ''
-        },
-        theme: {
-          type: 'string',
-          default: 'dark'
-        },
-        fontSize: {
-          type: 'number',
-          default: 14
-        },
-        fontFamily: {
-          type: 'string',
-          default: 'monospace'
-        },
-        terminal: {
-          type: 'object',
-          properties: {
-            fontSize: {
-              type: 'number',
-              default: 14
-            },
-            fontFamily: {
-              type: 'string',
-              default: 'monospace'
-            },
-            port: {
-              type: 'number',
-              default: 8080
-            },
-            defaultProfile: {
-              type: 'string',
-              default: 'default'
-            }
-          }
-        },
-        editor: {
-          type: 'object',
-          properties: {
-            fontSize: {
-              type: 'number',
-              default: 14
-            },
-            fontFamily: {
-              type: 'string',
-              default: 'monospace'
-            },
-            wordWrap: {
-              type: 'boolean',
-              default: false
-            },
-            minimap: {
-              type: 'boolean',
-              default: true
-            },
-            lineNumbers: {
-              type: 'boolean',
-              default: true
-            },
-            content: {
-              type: 'string',
-              default: ''
-            }
-          }
-        }
-      }
-    });
+    // this.electronStore = new ElectronStore<StoreSchema>({
+    //   schema: {
+    //     lastProjectPath: {
+    //       type: 'string',
+    //       default: ''
+    //     },
+    //     theme: {
+    //       type: 'string',
+    //       default: 'dark'
+    //     },
+    //     fontSize: {
+    //       type: 'number',
+    //       default: 14
+    //     },
+    //     fontFamily: {
+    //       type: 'string',
+    //       default: 'monospace'
+    //     },
+    //     terminal: {
+    //       type: 'object',
+    //       properties: {
+    //         fontSize: {
+    //           type: 'number',
+    //           default: 14
+    //         },
+    //         fontFamily: {
+    //           type: 'string',
+    //           default: 'monospace'
+    //         },
+    //         port: {
+    //           type: 'number',
+    //           default: 8080
+    //         },
+    //         defaultProfile: {
+    //           type: 'string',
+    //           default: 'default'
+    //         }
+    //       }
+    //     },
+    //     editor: {
+    //       type: 'object',
+    //       properties: {
+    //         fontSize: {
+    //           type: 'number',
+    //           default: 14
+    //         },
+    //         fontFamily: {
+    //           type: 'string',
+    //           default: 'monospace'
+    //         },
+    //         wordWrap: {
+    //           type: 'boolean',
+    //           default: false
+    //         },
+    //         minimap: {
+    //           type: 'boolean',
+    //           default: true
+    //         },
+    //         lineNumbers: {
+    //           type: 'boolean',
+    //           default: true
+    //         },
+    //         content: {
+    //           type: 'string',
+    //           default: ''
+    //         }
+    //       }
+    //     }
+    //   }
+    // });
 
     // Initialize services with default workspace path
-    const defaultWorkspacePath = this.get('lastProjectPath') || process.cwd();
+    const defaultWorkspacePath = process.cwd();
     this.projectService = new ProjectService(defaultWorkspacePath);
     this.uiService = new UIService();
     
@@ -134,19 +140,23 @@ class AppStore implements AppServices {
   }
 
   get<T extends keyof StoreSchema>(key: T): StoreSchema[T] {
-    return this.electronStore.get(key);
+    // return this.electronStore.get(key);
+    return undefined as any;
   }
 
   set<T extends keyof StoreSchema>(key: T, value: StoreSchema[T]): void {
-    this.electronStore.set(key, value);
+    // this.electronStore.set(key, value);
+    return;
   }
 
   delete<T extends keyof StoreSchema>(key: T): void {
-    this.electronStore.delete(key);
+    // this.electronStore.delete(key);
+    return;
   }
 
   clear(): void {
-    this.electronStore.clear();
+    // this.electronStore.clear();
+    return;
   }
 }
 
