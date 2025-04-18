@@ -9,6 +9,7 @@ import { UIService } from '../services/UIService';
 import { store } from '../store/store';
 import { TerminalServer } from '../server/terminalServer';
 import '../styles/Terminal.css';
+import { AIConfig } from '../types/AITypes';
 
 interface TerminalContainerProps {
   activeFile?: string;
@@ -16,8 +17,13 @@ interface TerminalContainerProps {
 }
 
 export const TerminalContainer: React.FC<TerminalContainerProps> = ({ activeFile, port }) => {
+  console.log('TerminalContainer rendering with initial port:', port);
   const [isConnected, setIsConnected] = useState(false);
-  const [terminalServer] = useState(() => new TerminalServer(port));
+  const [currentPort, setCurrentPort] = useState(port);
+  const [terminalServer] = useState(() => {
+    console.log('Creating TerminalServer instance');
+    return new TerminalServer(port);
+  });
   const [uiService] = useState(() => new UIService());
   const [projectService] = useState(() => new ProjectService(process.cwd()));
   const [aiService] = useState(() => AIService.getInstance({
@@ -52,21 +58,33 @@ export const TerminalContainer: React.FC<TerminalContainerProps> = ({ activeFile
   ));
 
   useEffect(() => {
-    terminalManager.on('connected', () => setIsConnected(true));
-    terminalManager.on('disconnected', () => setIsConnected(false));
+    console.log('TerminalContainer mounted');
+    setCurrentPort(terminalManager.getPort());
+    
+    terminalManager.on('connected', () => {
+      console.log('Terminal connected');
+      setIsConnected(true);
+    });
+    
+    terminalManager.on('disconnected', () => {
+      console.log('Terminal disconnected');
+      setIsConnected(false);
+    });
+    
     terminalManager.connect();
 
     return () => {
+      console.log('TerminalContainer unmounting');
       terminalManager.disconnect();
     };
   }, [terminalManager]);
 
   const handleTerminalData = (data: string) => {
+    console.log('Sending terminal data:', data);
     terminalManager.send(data);
   };
 
   const handleTerminalResize = (cols: number, rows: number) => {
-    // TODO: Implement terminal resize handling
     console.log('Terminal resized:', { cols, rows });
   };
 
@@ -75,7 +93,7 @@ export const TerminalContainer: React.FC<TerminalContainerProps> = ({ activeFile
       <Terminal onData={handleTerminalData} onResize={handleTerminalResize} />
       <StatusBar
         activeFile={activeFile}
-        terminalPort={port}
+        terminalPort={currentPort}
         isTerminalConnected={isConnected}
       />
     </div>

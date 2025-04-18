@@ -1,46 +1,47 @@
 import React from 'react';
-import './TabBar.css';
+import { CloseIcon } from './Icons';
+import '../styles/TabBar.css';
 
-export interface TabBarProps {
-  openFiles: string[];
-  activeFile: string | null;
-  onTabClick: (filePath: string) => void;
-  onTabClose: (filePath: string) => void;
+interface Tab {
+  id: string;
+  title: string;
+  path: string;
 }
 
-const TabBar: React.FC<TabBarProps> = ({ 
-  openFiles, 
-  activeFile, 
-  onTabClick, 
-  onTabClose 
-}) => {
-  const getFileName = (filePath: string): string => {
-    const parts = filePath.split('/');
-    return parts[parts.length - 1];
-  };
+interface TabBarProps {
+  tabs: Tab[];
+  activeTab: string | null;
+  onTabClose: (tabId: string) => void;
+  onTabSelect: (tabId: string) => void;
+}
 
+export const TabBar: React.FC<TabBarProps> = ({
+  tabs,
+  activeTab,
+  onTabClose,
+  onTabSelect
+}) => {
   return (
     <div className="tab-bar">
-      {openFiles.map(filePath => (
-        <div 
-          key={filePath}
-          className={`tab ${activeFile === filePath ? 'active' : ''}`}
-          onClick={() => onTabClick(filePath)}
+      {tabs.map(tab => (
+        <div
+          key={tab.id}
+          className={`tab ${tab.id === activeTab ? 'active' : ''}`}
+          onClick={() => onTabSelect(tab.id)}
         >
-          <span className="tab-title">{getFileName(filePath)}</span>
-          <button 
-            className="tab-close-button"
+          <span className="tab-title">{tab.title}</span>
+          <button
+            className="tab-close"
             onClick={(e) => {
               e.stopPropagation();
-              onTabClose(filePath);
+              onTabClose(tab.id);
             }}
+            title={`Close ${tab.title}`}
           >
-            ×
+            <CloseIcon />
           </button>
         </div>
       ))}
     </div>
   );
-};
-
-export default TabBar; 
+}; 

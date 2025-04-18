@@ -5,8 +5,69 @@ import { EventEmitter } from 'events';
 import { TerminalService } from '../services/TerminalService';
 import { v4 as uuidv4 } from 'uuid';
 import * as net from 'net';
+import { WebSocketServer } from 'ws';
+import { AIService } from '../services/AIService';
+import { ProjectService } from '../services/ProjectService';
+import { UIService } from '../services/UIService';
+import { store } from '../store/store';
 
-// Define the pty interface to match what we expect from node-pty-prebuilt-multiarch
+// Mock PTY implementation
+class MockPty extends EventEmitter {
+  private shell: string;
+  private args: string[];
+  private options: any;
+
+  constructor(shell: string, args: string[], options: any) {
+    super();
+    this.shell = shell;
+    this.args = args;
+    this.options = options;
+    
+    // Send initial message
+    setTimeout(() => {
+      this.emit('data', `Mock terminal initialized (${shell} ${args.join(' ')})\n`);
+      this.emit('data', `Current directory: ${options.cwd}\n`);
+      this.emit('data', `$ `);
+    }, 100);
+  }
+
+  write(data: string): void {
+    // Echo the input
+    this.emit('data', data);
+    
+    // Simulate command execution
+    if (data.trim().endsWith('\r')) {
+      const command = data.trim();
+      if (command === 'clear') {
+        this.emit('data', '\x1b[2J\x1b[H');
+      } else if (command === 'exit') {
+        this.emit('exit', { exitCode: 0, signal: 0 });
+      } else {
+        this.emit('data', `\nCommand not implemented in mock terminal: ${command}\n`);
+      }
+      this.emit('data', `$ `);
+    }
+  }
+
+  resize(cols: number, rows: number): void {
+    this.options.cols = cols;
+    this.options.rows = rows;
+  }
+
+  kill(): void {
+    this.emit('exit', { exitCode: 0, signal: 0 });
+  }
+
+  onData(callback: (data: string) => void): void {
+    this.on('data', callback);
+  }
+
+  onExit(callback: (exitData: { exitCode: number, signal: number }) => void): void {
+    this.on('exit', callback);
+  }
+}
+
+// Define the pty interface
 interface IPty {
   write(data: string): void;
   resize(cols: number, rows: number): void;
@@ -20,34 +81,12 @@ interface PtyModule {
   spawn(file: string, args: string[], options: any): IPty;
 }
 
-let pty: PtyModule;
-try {
-  pty = require('node-pty-prebuilt-multiarch');
-} catch (error) {
-  console.warn('Failed to load node-pty-prebuilt-multiarch:', error);
-  // Provide a mock implementation for development
-  pty = {
-    spawn: (file: string, args: string[], options: any) => {
-      const mockPty = new EventEmitter() as any;
-      mockPty.write = (data: string) => {
-        mockPty.emit('data', `Mock terminal: ${data}`);
-      };
-      mockPty.resize = () => {};
-      mockPty.kill = () => {};
-      mockPty.onData = (callback: (data: string) => void) => {
-        mockPty.on('data', callback);
-      };
-      mockPty.onExit = (callback: (exitData: { exitCode: number, signal: number }) => void) => {
-        mockPty.on('exit', callback);
-      };
-      // Send initial message
-      setTimeout(() => {
-        mockPty.emit('data', 'Mock terminal initialized. Native terminal functionality is not available.\n');
-      }, 100);
-      return mockPty;
-    }
-  } as PtyModule;
-}
+// Create mock pty module
+const pty: PtyModule = {
+  spawn: (file: string, args: string[], options: any) => {
+    return new MockPty(file, args, options);
+  }
+};
 
 interface TerminalSession {
   id: string;
@@ -103,303 +142,127 @@ interface TerminalServerConfig {
   rows: number;
 }
 
-const isPortAvailable = (port: number): Promise<boolean> => {
-  return new Promise((resolve) => {
-    const server = net.createServer();
-    server.once('error', () => {
-      resolve(false);
-    });
-    server.once('listening', () => {
-      server.close();
-      resolve(true);
-    });
-    server.listen(port);
-  });
-};
-
-const findAvailablePort = async (startPort: number, maxAttempts: number = 10): Promise<number> => {
-  for (let i = 0; i < maxAttempts; i++) {
-    const port = startPort + i;
-    if (await isPortAvailable(port)) {
-      return port;
-    }
-  }
-  throw new Error(`Could not find an available port after ${maxAttempts} attempts`);
-};
-
 export class TerminalServer extends EventEmitter {
-  public port: number = 3003;
-  private server: http.Server;
-  private wss: WebSocket.Server;
-  private sessions: Map<string, TerminalSession> = new Map();
-  private isShuttingDown: boolean = false;
-  private terminalService: TerminalService;
-  private terminals: Map<string, IPty> = new Map();
+  private wss!: WebSocketServer;
+  private port: number;
+  private terminalService!: TerminalService;
+  private aiService: AIService;
+  private projectService: ProjectService;
+  private uiService: UIService;
 
-  constructor(config: number | TerminalServerConfig) {
+  constructor(port: number) {
     super();
-    this.server = http.createServer();
-    this.wss = new WebSocket.Server({ server: this.server });
-    
-    if (typeof config === 'object') {
-      this.setupTerminal(config);
-    } else {
-      this.setupTerminal({
-        shell: process.platform === 'win32' ? 'powershell.exe' : 'bash',
-        args: [],
-        cwd: process.cwd(),
-        cols: 80,
-        rows: 30
-      });
-    }
-    
-    this.terminalService = TerminalService.getInstance(
-      null,
-      null as any,
-      null as any,
-      null as any,
-      this,
-      null as any
-    );
-
-    // Initialize the server
-    this.setupServer().catch(error => {
-      console.error('Failed to initialize terminal server:', error);
-      this.emit('error', error);
+    this.port = port;
+    this.aiService = AIService.getInstance({
+      useLocalModel: false,
+      model: 'gpt-3.5-turbo',
+      temperature: 0.7,
+      maxTokens: 2048,
+      contextWindow: 4096,
+      stopSequences: ['\n\n', '```'],
+      topP: 1,
+      openAIConfig: {
+        apiKey: process.env.OPENAI_API_KEY || '',
+        model: 'gpt-3.5-turbo',
+        temperature: 0.7,
+        maxTokens: 2048
+      }
     });
-
-    // Handle process termination
-    process.on('SIGTERM', this.shutdown.bind(this));
-    process.on('SIGINT', this.shutdown.bind(this));
+    this.projectService = new ProjectService(process.cwd());
+    this.uiService = new UIService();
+    console.log('TerminalServer constructor called with port:', port);
+    this.initialize();
   }
 
-  private async setupServer(): Promise<void> {
-    try {
-      this.port = await findAvailablePort(3003);
-      this.wss.on('connection', this.handleConnection.bind(this));
+  private async findAvailablePort(startPort: number): Promise<number> {
+    const isPortAvailable = (port: number): Promise<boolean> => {
+      return new Promise((resolve) => {
+        const server = net.createServer();
+        server.once('error', () => resolve(false));
+        server.once('listening', () => {
+          server.close();
+          resolve(true);
+        });
+        server.listen(port);
+      });
+    };
 
-      this.server.on('error', (error) => {
-        console.error('Terminal server error:', error);
+    let port = startPort;
+    while (!(await isPortAvailable(port))) {
+      port++;
+    }
+    return port;
+  }
+
+  private async initialize() {
+    console.log('Initializing TerminalServer');
+    try {
+      this.port = await this.findAvailablePort(this.port);
+      console.log('Found available port:', this.port);
+      
+      this.wss = new WebSocketServer({ port: this.port });
+      console.log('Terminal server listening on port', this.port);
+
+      this.wss.on('connection', (ws) => {
+        console.log('New terminal connection established');
+        this.emit('connection', ws);
+
+        ws.on('message', (data) => {
+          console.log('Received terminal data:', data.toString());
+          this.emit('data', data.toString());
+        });
+
+        ws.on('close', () => {
+          console.log('Terminal connection closed');
+          this.emit('disconnection');
+        });
+
+        ws.on('error', (error) => {
+          console.error('Terminal connection error:', error);
+          this.emit('error', error);
+        });
+      });
+
+      this.wss.on('error', (error) => {
+        console.error('WebSocket server error:', error);
         this.emit('error', error);
       });
 
-      await new Promise<void>((resolve, reject) => {
-        this.server.listen(this.port, () => {
-          console.log(`Terminal server listening on port ${this.port}`);
-          resolve();
-        });
-        this.server.on('error', reject);
-      });
+      this.terminalService = TerminalService.getInstance(
+        null,
+        this.aiService,
+        this.projectService,
+        this.uiService,
+        this,
+        store
+      );
     } catch (error) {
-      console.error('Failed to start terminal server:', error);
-      throw error;
+      console.error('Failed to initialize terminal server:', error);
+      this.emit('error', error);
     }
   }
 
-  private handleConnection(ws: WebSocket, req: http.IncomingMessage): void {
-    try {
-      const sessionId = this.generateSessionId();
-      const shell = os.platform() === 'win32' ? 'powershell.exe' : 'bash';
-      
-      const options: TerminalOptions = {
-        shell,
-        args: [],
-        env: Object.fromEntries(
-          Object.entries(process.env)
-            .filter(([_, value]) => value !== undefined)
-            .map(([key, value]) => [key, value as string])
-        ),
-        cwd: process.env.HOME || process.cwd(),
-        cols: 80,
-        rows: 24
-      };
-
-      const ptyProcess = pty.spawn(options.shell!, options.args || [], {
-        name: 'xterm-color',
-        cols: options.cols!,
-        rows: options.rows!,
-        cwd: options.cwd!,
-        env: options.env
-      });
-
-      const session: TerminalSession = {
-        id: sessionId,
-        pty: ptyProcess,
-        ws
-      };
-
-      this.sessions.set(sessionId, session);
-
-      ws.on('message', (rawMessage: WebSocket.RawData) => {
-        try {
-          const message = JSON.parse(rawMessage.toString()) as TerminalMessage;
-          
-          switch (message.type) {
-            case 'input':
-              ptyProcess.write(message.data);
-              break;
-            case 'resize':
-              ptyProcess.resize(message.cols, message.rows);
-              break;
-          }
-        } catch (error) {
-          console.error('Error handling message:', error);
-          this.sendError(ws, 'Failed to process message');
-        }
-      });
-
-      ptyProcess.onData((data: string) => {
-        if (ws.readyState === WebSocket.OPEN) {
-          try {
-            const message: DataTerminalMessage = {
-              type: 'output',
-              data
-            };
-            ws.send(JSON.stringify(message));
-          } catch (error) {
-            console.error('Error sending output:', error);
-          }
-        }
-      });
-
-      ptyProcess.onExit(({ exitCode, signal }) => {
-        this.emit('exit', { sessionId, exitCode, signal });
-        this.cleanupSession(sessionId);
-      });
-
-      ws.on('close', () => {
-        this.cleanupSession(sessionId);
-      });
-
-      ws.on('error', (error) => {
-        console.error('WebSocket error:', error);
-        this.cleanupSession(sessionId);
-      });
-
-      const initMessage: SessionTerminalMessage = {
-        type: 'session',
-        sessionId
-      };
-      ws.send(JSON.stringify(initMessage));
-    } catch (error) {
-      console.error('Error creating terminal session:', error);
-      this.sendError(ws, 'Failed to create terminal session');
-    }
-  }
-
-  private cleanupSession(sessionId: string): void {
-    const session = this.sessions.get(sessionId);
-    if (session) {
-      try {
-        session.pty.kill();
-        session.ws.close();
-      } catch (error: unknown) {
-        console.error('Error cleaning up session:', error);
-      }
-      this.sessions.delete(sessionId);
-    }
-  }
-
-  private sendError(ws: WebSocket, message: string): void {
-    if (ws.readyState === WebSocket.OPEN) {
-      const errorMessage: ErrorTerminalMessage = {
-        type: 'error',
-        error: message
-      };
-      ws.send(JSON.stringify(errorMessage));
-    }
-  }
-
-  private generateSessionId(): string {
-    return Math.random().toString(36).substring(2, 15);
-  }
-
-  public async shutdown(): Promise<void> {
-    if (this.isShuttingDown) return;
-    this.isShuttingDown = true;
-
-    console.log('Shutting down terminal server...');
-
-    // Close all WebSocket connections
+  public send(data: string) {
+    console.log('Sending data to all clients:', data);
     this.wss.clients.forEach((client) => {
       if (client.readyState === WebSocket.OPEN) {
-        client.close();
+        client.send(data);
       }
     });
-
-    // Kill all PTY processes
-    for (const [sessionId, session] of this.sessions) {
-      this.cleanupSession(sessionId);
-    }
-
-    // Close the WebSocket server
-    await new Promise<void>((resolve) => {
-      this.wss.close(() => resolve());
-    });
-
-    // Close the HTTP server
-    await new Promise<void>((resolve) => {
-      this.server.close(() => resolve());
-    });
-
-    console.log('Terminal server shutdown complete');
   }
 
-  public dispose(): void {
-    this.shutdown().catch(error => {
-      console.error('Error during terminal server disposal:', error);
-    });
+  public close() {
+    console.log('Closing terminal server');
+    this.wss.close();
   }
 
-  public onExit(callback: (data: { sessionId: string; exitCode: number; signal: number }) => void): void {
-    this.on('exit', callback);
+  public dispose() {
+    console.log('Disposing terminal server');
+    this.close();
+    this.removeAllListeners();
   }
 
-  public write(sessionId: string, data: string): void {
-    const terminal = this.sessions.get(sessionId)?.pty;
-    if (terminal) {
-      terminal.write(data);
-    }
-  }
-
-  public resize(sessionId: string, cols: number, rows: number): void {
-    const terminal = this.sessions.get(sessionId)?.pty;
-    if (terminal) {
-      terminal.resize(cols, rows);
-    }
-  }
-
-  public kill(sessionId: string): void {
-    const terminal = this.sessions.get(sessionId)?.pty;
-    if (terminal) {
-      terminal.kill();
-      this.sessions.delete(sessionId);
-    }
-  }
-
-  private setupTerminal(config: TerminalServerConfig): void {
-    const sessionId = uuidv4();
-    const terminal = pty.spawn(config.shell, config.args, {
-      name: 'xterm-color',
-      cols: config.cols,
-      rows: config.rows,
-      cwd: config.cwd,
-      env: config.env
-    });
-
-    this.terminals.set(sessionId, terminal);
-
-    terminal.onData((data: string) => {
-      this.emit('data', { sessionId, data });
-    });
-
-    terminal.onExit(({ exitCode, signal }) => {
-      this.emit('exit', { sessionId, exitCode, signal });
-      this.terminals.delete(sessionId);
-    });
-  }
-
-  public onData(callback: (data: { sessionId: string; data: string }) => void): void {
-    this.on('data', callback);
+  public getPort(): number {
+    return this.port;
   }
 } 

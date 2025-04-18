@@ -6,7 +6,7 @@ import { ProjectService } from './services/ProjectService';
 import { UIService } from './services/UIService';
 import { TerminalServer } from './server/terminalServer';
 import { TerminalManager } from './services/TerminalManager';
-import { AIConfig } from './types';
+import { AIConfig } from './types/AITypes';
 import Store from 'electron-store';
 import 'prismjs';
 import 'prismjs/themes/prism.css';

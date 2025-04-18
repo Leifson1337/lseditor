@@ -8,6 +8,10 @@ import { AIService } from '../services/AIService';
 import { UIService } from '../services/UIService';
 import { TerminalServer } from '../server/terminalServer';
 import '../styles/App.css';
+import { Terminal } from './Terminal';
+import { TerminalContainer } from './TerminalContainer';
+import { TerminalPanel } from './TerminalPanel';
+import { AIConfig } from '../types/AITypes';
 
 // Erweitere die StoreSchema um lastProjectPath
 declare module '../store/store' {
@@ -34,32 +38,28 @@ export const App: React.FC = () => {
   const [openFiles, setOpenFiles] = useState<string[]>([]);
   const [activeFile, setActiveFile] = useState<string>('');
   const [projectPath, setProjectPath] = useState<string>('');
-  const [showProjectDialog, setShowProjectDialog] = useState<boolean>(true);
+  const [showProjectDialog, setShowProjectDialog] = useState<boolean>(false);
   const [fileStructure, setFileStructure] = useState<any[]>([]);
   const [terminalPort, setTerminalPort] = useState<number>(3001);
   const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(false);
   const [terminalManager, setTerminalManager] = useState<TerminalManager | null>(null);
+  const [isInitialized, setIsInitialized] = useState<boolean>(false);
 
   useEffect(() => {
+    console.log('App component mounted');
     // Load initial settings from store
-    const theme = store.get('theme');
-    const fontSize = store.get('fontSize');
-    const fontFamily = store.get('fontFamily');
+    const theme = store.get('theme') || 'dark';
+    const fontSize = store.get('fontSize') || 14;
+    const fontFamily = store.get('fontFamily') || 'Consolas, monospace';
     const savedProjectPath = store.get('lastProjectPath');
-    const editor = store.get('editor');
+    const editor = store.get('editor') || { wordWrap: true, minimap: true, lineNumbers: true };
 
     // Apply theme
-    if (theme) {
-      document.documentElement.setAttribute('data-theme', theme);
-    }
+    document.documentElement.setAttribute('data-theme', theme);
     
     // Apply font settings
-    if (fontSize) {
-      document.documentElement.style.fontSize = `${fontSize}px`;
-    }
-    if (fontFamily) {
-      document.documentElement.style.fontFamily = fontFamily;
-    }
+    document.documentElement.style.fontSize = `${fontSize}px`;
+    document.documentElement.style.fontFamily = fontFamily;
 
     // Load initial editor content from editor store
     if (editor?.content) {
@@ -70,6 +70,10 @@ export const App: React.FC = () => {
     if (savedProjectPath) {
       openProject(savedProjectPath);
     }
+
+    // Setze isInitialized auf true, wenn die Initialisierung abgeschlossen ist
+    setIsInitialized(true);
+    console.log('App initialization complete');
   }, []);
 
   const openProject = async (path: string) => {
@@ -187,12 +191,13 @@ export const App: React.FC = () => {
     }
   };
 
+  console.log('App rendering, showProjectDialog:', showProjectDialog);
+  
   return (
     <div className="app">
       {showProjectDialog ? (
         <div className="project-dialog">
           <h2>Projekt öffnen</h2>
-          <p>Bitte wählen Sie ein Projekt aus, das Sie öffnen möchten:</p>
           <div className="project-input">
             <input 
               type="text" 
@@ -223,11 +228,7 @@ export const App: React.FC = () => {
           isTerminalOpen={isTerminalOpen}
           onTerminalOpen={handleTerminalOpen}
           onTerminalClose={handleTerminalClose}
-        >
-          <div className="editor-content">
-            {editorContent}
-          </div>
-        </Layout>
+        />
       )}
     </div>
   );

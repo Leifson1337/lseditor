@@ -11,7 +11,7 @@ import { DocumentationService } from './services/DocumentationService';
 import { PerformanceService } from './services/PerformanceService';
 import { NotificationService, Notification } from './services/NotificationService';
 import { StatusBarItem } from './services/StatusBarService';
-import { AIConfig } from './types/AIConfig';
+import { AIConfig } from './types/AITypes';
 import { EditorConfig } from './services/EditorService';
 import { TerminalConfig } from './types/terminal';
 import * as path from 'path';
@@ -75,9 +75,14 @@ export class App extends EventEmitter {
           temperature: 0.7,
           maxTokens: 1000,
           contextWindow: 4096,
-          apiKey: '',
           useLocalModel: false,
-          localModelPath: ''
+          localModelPath: '',
+          openAIConfig: {
+            apiKey: '',
+            model: 'gpt-3.5-turbo',
+            temperature: 0.7,
+            maxTokens: 1000
+          }
         }
       }
     });
@@ -327,13 +332,18 @@ export class App extends EventEmitter {
       
       // Configure AI service
       const aiConfig: AIConfig = {
-        apiKey: process.env.OPENAI_API_KEY || '',
+        useLocalModel: false,
         model: 'gpt-4',
         temperature: 0.7,
         maxTokens: 2048,
         contextWindow: 4000,
-        useLocalModel: false,
-        localModelPath: ''
+        localModelPath: '',
+        openAIConfig: {
+          apiKey: process.env.OPENAI_API_KEY || '',
+          model: 'gpt-4',
+          temperature: 0.7,
+          maxTokens: 2048
+        }
       };
       
       // Start resource monitoring

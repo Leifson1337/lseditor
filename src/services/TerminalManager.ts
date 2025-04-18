@@ -1,10 +1,10 @@
 import { EventEmitter } from 'events';
-import { Terminal } from 'xterm';
-import { FitAddon } from 'xterm-addon-fit';
-import { SearchAddon } from 'xterm-addon-search';
-import { WebLinksAddon } from 'xterm-addon-web-links';
-import { WebglAddon } from 'xterm-addon-webgl';
-import { LigaturesAddon } from 'xterm-addon-ligatures';
+import { Terminal as XTerm } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import { SearchAddon } from '@xterm/addon-search';
+import { WebLinksAddon } from '@xterm/addon-web-links';
+import { WebglAddon } from '@xterm/addon-webgl';
+import { LigaturesAddon } from '@xterm/addon-ligatures';
 import { TerminalServer } from '../server/terminalServer';
 import { WebSocket } from 'ws';
 import { TerminalService } from '../services/TerminalService';
@@ -23,14 +23,14 @@ export interface SplitViewConfig {
 }
 
 export class TerminalManager extends EventEmitter {
-  private terminals: Map<string, Terminal> = new Map();
+  private terminals: Map<string, XTerm> = new Map();
   private profiles: Map<string, TerminalProfile> = new Map();
   private themes: Map<string, TerminalTheme> = new Map();
   private customThemes: Map<string, CustomTheme> = new Map();
   private splitViews: Map<string, SplitViewConfig> = new Map();
   private history: string[] = [];
   private maxHistorySize: number = 1000;
-  private server: TerminalServer;
+  private terminalServer: TerminalServer;
   private sessions: Map<string, TerminalSession> = new Map();
   private activeSession: TerminalSession | null = null;
   private isInitialized: boolean = false;
@@ -39,16 +39,25 @@ export class TerminalManager extends EventEmitter {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private reconnectTimeout: NodeJS.Timeout | null = null;
+  private terminalService: TerminalService;
+  private aiService: AIService;
+  private projectService: ProjectService;
+  private uiService: UIService;
+  private isConnected: boolean = false;
 
   constructor(
-    private port: number,
-    private terminalService: TerminalService,
-    private aiService: AIService,
-    private projectService: ProjectService,
-    private uiService: UIService
+    private initialPort: number,
+    terminalService: TerminalService,
+    aiService: AIService,
+    projectService: ProjectService,
+    uiService: UIService
   ) {
     super();
-    this.server = new TerminalServer(this.port);
+    this.terminalService = terminalService;
+    this.aiService = aiService;
+    this.projectService = projectService;
+    this.uiService = uiService;
+    this.terminalServer = new TerminalServer(initialPort);
     this.initializeDefaultProfiles();
     this.initializeDefaultThemes();
     this.setupEventListeners();
@@ -413,15 +422,26 @@ export class TerminalManager extends EventEmitter {
     this.activeSession = null;
     this.isInitialized = false;
     this.emit('disposed');
+    this.disconnect();
+    this.terminalServer.dispose();
   }
 
   private setupEventListeners(): void {
-    this.server.on('data', ({ sessionId, data }) => {
-      this.emit('data', { sessionId, data });
+    this.terminalServer.on('connection', () => {
+      console.log('Terminal connected');
+      this.isConnected = true;
+      this.emit('connected');
     });
 
-    this.server.on('exit', ({ sessionId, exitCode, signal }) => {
-      this.emit('exit', { sessionId, exitCode, signal });
+    this.terminalServer.on('disconnection', () => {
+      console.log('Terminal disconnected');
+      this.isConnected = false;
+      this.emit('disconnected');
+    });
+
+    this.terminalServer.on('error', (error) => {
+      console.error('Terminal error:', error);
+      this.emit('error', error);
     });
   }
 
@@ -472,64 +492,27 @@ export class TerminalManager extends EventEmitter {
     return Array.from(this.customThemes.values());
   }
 
-  connect() {
-    if (this.ws) {
-      this.ws.close();
-    }
-
-    this.ws = new WebSocket(`ws://localhost:${this.port}`);
-
-    this.ws.onopen = () => {
-      this.reconnectAttempts = 0;
-      this.emit('connected');
-    };
-
-    this.ws.onmessage = (event) => {
-      this.emit('data', event.data);
-    };
-
-    this.ws.onclose = () => {
-      this.emit('disconnected');
-      this.attemptReconnect();
-    };
-
-    this.ws.onerror = (error) => {
-      this.emit('error', error);
-    };
+  public connect() {
+    console.log('Connecting to terminal server on port:', this.terminalServer.getPort());
+    this.emit('connecting');
   }
 
-  private attemptReconnect() {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      this.emit('error', new Error('Max reconnection attempts reached'));
-      return;
-    }
-
-    this.reconnectAttempts++;
-    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
-
-    if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout);
-    }
-
-    this.reconnectTimeout = setTimeout(() => {
-      this.connect();
-    }, delay);
+  public disconnect() {
+    console.log('Disconnecting from terminal server');
+    this.terminalServer.close();
+    this.isConnected = false;
+    this.emit('disconnected');
   }
 
-  send(data: string) {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(data);
+  public send(data: string) {
+    if (this.isConnected) {
+      this.terminalServer.send(data);
+    } else {
+      console.warn('Cannot send data: terminal not connected');
     }
   }
 
-  disconnect() {
-    if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout);
-    }
-
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
-    }
+  public getPort(): number {
+    return this.terminalServer.getPort();
   }
 } 

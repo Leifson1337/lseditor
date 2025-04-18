@@ -1,14 +1,23 @@
 import React, { useEffect, useRef } from 'react';
 import MonacoEditor from '@monaco-editor/react';
 import { useEditorStore } from '../store/editorStore';
+import '../styles/editor.css';
 
 interface EditorProps {
   file: string | null;
   onSave: (content: string) => void;
   terminal?: any; // We'll type this properly later
+  initialContent?: string;
+  initialLanguage?: string;
 }
 
-export const CodeEditor: React.FC<EditorProps> = ({ file, onSave, terminal }) => {
+export const CodeEditor: React.FC<EditorProps> = ({ 
+  file, 
+  onSave, 
+  terminal,
+  initialContent = '',
+  initialLanguage = 'plaintext'
+}) => {
   const { theme, fontSize, wordWrap, minimap, lineNumbers } = useEditorStore();
   const editorRef = useRef<any>(null);
 
@@ -26,8 +35,8 @@ export const CodeEditor: React.FC<EditorProps> = ({ file, onSave, terminal }) =>
     <div className="editor">
       <MonacoEditor
         height="100%"
-        defaultLanguage="plaintext"
-        defaultValue={file || ''}
+        defaultLanguage={initialLanguage}
+        defaultValue={file || initialContent}
         theme={theme}
         options={{
           fontSize,
