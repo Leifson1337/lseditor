@@ -79,7 +79,7 @@ export interface AIConfig {
   temperature: number;
   maxTokens: number;
   contextWindow: number;
-  stopSequences?: string[];
+  stopSequences: string[];
   topP?: number;
   defaultModel?: string;
   defaultTemperature?: number;
@@ -126,4 +126,4 @@ export interface AITokenizer {
   encode: (text: string) => number[];
   decode: (tokens: number[]) => string;
   countTokens: (text: string) => number;
-} 
+}

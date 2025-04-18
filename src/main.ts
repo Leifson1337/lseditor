@@ -2,30 +2,20 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
 import { AIService } from './services/AIService';
 import { TerminalService } from './services/TerminalService';
-import { ProjectService } from './services/ProjectService';
 import { UIService } from './services/UIService';
 import { TerminalServer } from './server/terminalServer';
 import { TerminalManager } from './services/TerminalManager';
 import { AIConfig } from './types/AITypes';
-import Store from 'electron-store';
 import 'prismjs';
 import 'prismjs/themes/prism.css';
 import * as fs from 'fs';
 
-interface StoreSchema {
-  theme: string;
-  fontSize: number;
-  fontFamily: string;
-}
-
 let mainWindow: BrowserWindow | null = null;
 let aiService: AIService | null = null;
 let terminalService: TerminalService | null = null;
-let projectService: ProjectService | null = null;
 let uiService: UIService | null = null;
 let terminalServer: TerminalServer | null = null;
 let terminalManager: TerminalManager | null = null;
-let store: Store<StoreSchema> | null = null;
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
@@ -49,7 +39,7 @@ async function initializeServices() {
       temperature: 0.7,
       maxTokens: 2048,
       contextWindow: 4096,
-      stopSequences: ['\n\n', '```'],
+      stopSequences: ['\n\n', '```'], // immer ein Array!
       topP: 1,
       openAIConfig: {
         apiKey: process.env.OPENAI_API_KEY || '',
@@ -59,24 +49,7 @@ async function initializeServices() {
       }
     };
 
-    store = new Store<StoreSchema>({
-      schema: {
-        theme: {
-          type: 'string',
-          default: 'dark'
-        },
-        fontSize: {
-          type: 'number',
-          default: 14
-        },
-        fontFamily: {
-          type: 'string',
-          default: 'Consolas, monospace'
-        }
-      }
-    });
     aiService = AIService.getInstance(aiConfig);
-    projectService = new ProjectService(process.cwd());
     uiService = new UIService();
     terminalServer = new TerminalServer(3001);
     
@@ -86,12 +59,12 @@ async function initializeServices() {
 
     // Initialize TerminalService first with a temporary TerminalManager
     terminalService = new TerminalService(
-      undefined as any, // Will be set after TerminalManager is created
+      null, // TerminalManager
       aiService,
-      projectService,
+      undefined, // ProjectService (optional)
       uiService,
       terminalServer,
-      store
+      undefined // store (optional)
     );
 
     // Create TerminalManager with the port number
@@ -99,7 +72,7 @@ async function initializeServices() {
       3001,
       terminalService,
       aiService,
-      projectService,
+      undefined, // ProjectService (optional)
       uiService
     );
 
@@ -139,18 +112,43 @@ function setupIpcHandlers() {
 }
 
 function setupFsIpcHandlers() {
-  ipcMain.handle('fs:readDir', async (_event, dirPath: string) => {
-    return fs.promises.readdir(dirPath, { withFileTypes: true }).then(entries =>
-      entries.map(e => ({
+  ipcMain.handle('fs:readDir', async (event, dirPath) => {
+    try {
+      const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+      return entries.map(e => ({
         name: e.name,
         isDirectory: e.isDirectory()
-      }))
-    );
+      }));
+    } catch (err) {
+      return [];
+    }
   });
 
-  ipcMain.handle('fs:readFile', async (_event, filePath: string) => {
-    return fs.promises.readFile(filePath, 'utf-8');
+  ipcMain.handle('fs:readFile', async (event, filePath) => {
+    try {
+      return await fs.promises.readFile(filePath, 'utf-8');
+    } catch (err) {
+      return '';
+    }
   });
+
+  ipcMain.handle('fs:writeFile', async (event, filePath, content) => {
+    try {
+      await fs.promises.writeFile(filePath, content, 'utf-8');
+      return true;
+    } catch (err) {
+      return false;
+    }
+  });
+}
+
+try {
+  const Store = require('electron-store');
+  if (Store && Store.initRenderer) {
+    Store.initRenderer();
+  }
+} catch (e) {
+  // electron-store nicht im Main-Prozess verwendet
 }
 
 app.whenReady().then(async () => {
@@ -178,16 +176,13 @@ app.on('before-quit', () => {
   if (uiService) uiService.dispose();
   if (terminalServer) terminalServer.dispose();
   if (terminalManager) terminalManager.dispose();
-  if (store) store.clear();
 });
 
 // Export services for use in other parts of the application
 export {
-  store,
   terminalManager,
   terminalService,
   aiService,
-  projectService,
   uiService,
   terminalServer
 };

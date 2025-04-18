@@ -7,9 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 import * as net from 'net';
 import { WebSocketServer } from 'ws';
 import { AIService } from '../services/AIService';
-import { ProjectService } from '../services/ProjectService';
 import { UIService } from '../services/UIService';
-import { store } from '../store/store';
 
 // Mock PTY implementation
 class MockPty extends EventEmitter {
@@ -147,7 +145,6 @@ export class TerminalServer extends EventEmitter {
   private port: number;
   private terminalService!: TerminalService;
   private aiService: AIService;
-  private projectService: ProjectService;
   private uiService: UIService;
 
   constructor(port: number) {
@@ -168,7 +165,6 @@ export class TerminalServer extends EventEmitter {
         maxTokens: 2048
       }
     });
-    this.projectService = new ProjectService(process.cwd());
     this.uiService = new UIService();
     console.log('TerminalServer constructor called with port:', port);
     this.initialize();
@@ -231,10 +227,9 @@ export class TerminalServer extends EventEmitter {
       this.terminalService = TerminalService.getInstance(
         null,
         this.aiService,
-        this.projectService,
+        undefined, // projectService explizit undefined
         this.uiService,
-        this,
-        store
+        this
       );
     } catch (error) {
       console.error('Failed to initialize terminal server:', error);

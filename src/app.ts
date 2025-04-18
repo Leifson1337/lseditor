@@ -77,6 +77,7 @@ export class App extends EventEmitter {
           contextWindow: 4096,
           useLocalModel: false,
           localModelPath: '',
+          stopSequences: [],
           openAIConfig: {
             apiKey: '',
             model: 'gpt-3.5-turbo',
@@ -338,6 +339,7 @@ export class App extends EventEmitter {
         maxTokens: 2048,
         contextWindow: 4000,
         localModelPath: '',
+        stopSequences: [],
         openAIConfig: {
           apiKey: process.env.OPENAI_API_KEY || '',
           model: 'gpt-4',

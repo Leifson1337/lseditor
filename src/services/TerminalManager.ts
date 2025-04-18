@@ -41,16 +41,16 @@ export class TerminalManager extends EventEmitter {
   private reconnectTimeout: NodeJS.Timeout | null = null;
   private terminalService: TerminalService;
   private aiService: AIService;
-  private projectService: ProjectService;
-  private uiService: UIService;
+  private projectService?: ProjectService;
+  private uiService?: UIService;
   private isConnected: boolean = false;
 
   constructor(
     private initialPort: number,
     terminalService: TerminalService,
     aiService: AIService,
-    projectService: ProjectService,
-    uiService: UIService
+    projectService?: ProjectService,
+    uiService?: UIService
   ) {
     super();
     this.terminalService = terminalService;

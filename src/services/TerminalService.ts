@@ -15,10 +15,10 @@ export class TerminalService extends EventEmitter {
   private static instance: TerminalService;
   private terminalManager: TerminalManager | null;
   private aiService: AIService;
-  private projectService: ProjectService;
-  private uiService: UIService;
-  private terminalServer: TerminalServer;
-  private store: ReturnType<typeof useEditorStore>;
+  private projectService: ProjectService | undefined;
+  private uiService: UIService | undefined;
+  private terminalServer: TerminalServer | undefined;
+  private store: ReturnType<typeof useEditorStore> | undefined;
   private sessions: Map<string, TerminalSession> = new Map();
   private activeSession: TerminalSession | null = null;
   private isInitialized: boolean = false;
@@ -27,10 +27,10 @@ export class TerminalService extends EventEmitter {
   constructor(
     terminalManager: TerminalManager | null,
     aiService: AIService,
-    projectService: ProjectService,
-    uiService: UIService,
-    terminalServer: TerminalServer,
-    store: ReturnType<typeof useEditorStore>
+    projectService?: ProjectService,
+    uiService?: UIService,
+    terminalServer?: TerminalServer,
+    store?: ReturnType<typeof useEditorStore>
   ) {
     super();
     this.terminalManager = terminalManager || null;
@@ -48,10 +48,10 @@ export class TerminalService extends EventEmitter {
   public static getInstance(
     terminalManager: TerminalManager | null,
     aiService: AIService,
-    projectService: ProjectService,
-    uiService: UIService,
-    terminalServer: TerminalServer,
-    store: ReturnType<typeof useEditorStore>
+    projectService?: ProjectService,
+    uiService?: UIService,
+    terminalServer?: TerminalServer,
+    store?: ReturnType<typeof useEditorStore>
   ): TerminalService {
     if (!TerminalService.instance) {
       TerminalService.instance = new TerminalService(
