@@ -36,6 +36,7 @@ declare module '../store/store' {
       content?: string;
     };
     lastProjectPath?: string;
+    recentProjects?: string[];
   }
 }
 
@@ -50,6 +51,9 @@ const App: React.FC = () => {
   const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(false);
   const [terminalManager, setTerminalManager] = useState<TerminalManager | null>(null);
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
+  const [recentProjects, setRecentProjects] = useState<string[]>(() => {
+    return store.get('recentProjects') || [];
+  });
 
   useEffect(() => {
     console.log('App component mounted');
@@ -86,12 +90,17 @@ const App: React.FC = () => {
   }, []);
 
   const openProject = async (path: string) => {
+    if (!path) return;
     console.log('Opening project:', path);
     setProjectPath(path);
     setShowProjectDialog(false);
-    
-    // Update store with new project path
     store.set('lastProjectPath', path);
+
+    // Recent Projects aktualisieren
+    let updated = [path, ...recentProjects.filter(p => p !== path)];
+    if (updated.length > 8) updated = updated.slice(0, 8);
+    setRecentProjects(updated);
+    store.set('recentProjects', updated);
 
     try {
       // Initialize services
@@ -153,6 +162,11 @@ const App: React.FC = () => {
     }
   };
 
+  const openProjectDialog = async () => {
+    const dir = await window.electron?.ipcRenderer.invoke('dialog:openDirectory');
+    if (dir) openProject(dir);
+  };
+
   const handleFileOpen = (path: string) => {
     console.log('Opening file:', path);
     setActiveFile(path);
@@ -175,6 +189,12 @@ const App: React.FC = () => {
     }
   };
 
+  const removeRecentProject = (path: string) => {
+    const updated = recentProjects.filter(p => p !== path);
+    setRecentProjects(updated);
+    store.set('recentProjects', updated);
+  };
+
   console.log('App rendering, showProjectDialog:', showProjectDialog);
   
   return (
@@ -190,10 +210,19 @@ const App: React.FC = () => {
               onChange={(e) => setProjectPath(e.target.value)}
             />
             <button onClick={() => openProject(projectPath)}>Open</button>
+            <button onClick={openProjectDialog}>Browse...</button>
           </div>
           <div className="recent-projects">
             <h3>Recently opened projects</h3>
-            {/* Here you could display recently opened projects */}
+            <ul>
+              {recentProjects.map((project) => (
+                <li key={project} style={{display:'flex',alignItems:'center',gap:8}}>
+                  <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis'}}>{project}</span>
+                  <button onClick={() => openProject(project)}>Open</button>
+                  <button title="Remove from list" onClick={() => removeRecentProject(project)} style={{color:'red'}}>×</button>
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
       ) : (

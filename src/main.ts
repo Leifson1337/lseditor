@@ -9,6 +9,7 @@ import { AIConfig } from './types/AITypes';
 import 'prismjs';
 import 'prismjs/themes/prism.css';
 import * as fs from 'fs';
+import { dialog } from 'electron';
 
 let mainWindow: BrowserWindow | null = null;
 let aiService: AIService | null = null;
@@ -19,8 +20,7 @@ let terminalManager: TerminalManager | null = null;
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    fullscreen: true,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false
@@ -141,6 +141,12 @@ function setupFsIpcHandlers() {
     }
   });
 }
+
+ipcMain.handle('dialog:openDirectory', async () => {
+  const result = await dialog.showOpenDialog({ properties: ['openDirectory'] });
+  if (result.canceled || !result.filePaths.length) return null;
+  return result.filePaths[0];
+});
 
 try {
   const Store = require('electron-store');
