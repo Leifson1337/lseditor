@@ -1,22 +1,80 @@
 import * as os from 'os';
-import * as pty from 'node-pty-prebuilt-multiarch';
+import { EventEmitter } from 'events';
 import { ipcMain } from 'electron';
 
 interface TerminalOptions {
-  shell: string;
-  args: string[];
-  env: { [key: string]: string };
-  cwd: string;
+  shell?: string;
+  args?: string[];
+  env?: { [key: string]: string };
+  cwd?: string;
+  cols?: number;
+  rows?: number;
+}
+
+// Mock PTY implementation
+class MockPty extends EventEmitter {
+  private shell: string;
+  private args: string[];
+  private options: any;
+
+  constructor(shell: string, args: string[], options: any) {
+    super();
+    this.shell = shell;
+    this.args = args;
+    this.options = options;
+    
+    // Send initial message
+    setTimeout(() => {
+      this.emit('data', `Mock terminal initialized (${shell} ${args.join(' ')})\n`);
+      this.emit('data', `Current directory: ${options.cwd}\n`);
+      this.emit('data', `$ `);
+    }, 100);
+  }
+
+  write(data: string): void {
+    // Echo the input
+    this.emit('data', data);
+    
+    // Simulate command execution
+    if (data.trim().endsWith('\r')) {
+      const command = data.trim();
+      if (command === 'clear') {
+        this.emit('data', '\x1b[2J\x1b[H');
+      } else if (command === 'exit') {
+        this.emit('exit', { exitCode: 0, signal: 0 });
+      } else {
+        this.emit('data', `\nCommand not implemented in mock terminal: ${command}\n`);
+      }
+      this.emit('data', `$ `);
+    }
+  }
+
+  resize(cols: number, rows: number): void {
+    this.options.cols = cols;
+    this.options.rows = rows;
+  }
+
+  kill(): void {
+    this.emit('exit', { exitCode: 0, signal: 0 });
+  }
+
+  onData(callback: (data: string) => void): void {
+    this.on('data', callback);
+  }
+
+  onExit(callback: (exitData: { exitCode: number, signal: number }) => void): void {
+    this.on('exit', callback);
+  }
 }
 
 export class Terminal {
-  private ptyProcess: pty.IPty;
+  private ptyProcess: MockPty;
 
   constructor(options: TerminalOptions) {
-    this.ptyProcess = pty.spawn(options.shell, options.args, {
+    this.ptyProcess = new MockPty(options.shell || '', options.args || [], {
       name: 'xterm-color',
-      cols: 80,
-      rows: 30,
+      cols: options.cols || 80,
+      rows: options.rows || 30,
       cwd: options.cwd,
       env: options.env
     });

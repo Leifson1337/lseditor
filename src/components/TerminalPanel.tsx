@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Terminal } from 'xterm';
-import { FitAddon } from 'xterm-addon-fit';
-import { WebLinksAddon } from 'xterm-addon-web-links';
-import { SearchAddon } from 'xterm-addon-search';
-import { WebglAddon } from 'xterm-addon-webgl';
-import { Unicode11Addon } from 'xterm-addon-unicode11';
+import { Terminal as XTerm } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import { WebLinksAddon } from '@xterm/addon-web-links';
+import { SearchAddon } from '@xterm/addon-search';
+import { WebglAddon } from '@xterm/addon-webgl';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
+import '@xterm/xterm/css/xterm.css';
 import { TerminalService } from '../services/TerminalService';
 import { TerminalManager } from '../services/TerminalManager';
 import { AIService } from '../services/AIService';

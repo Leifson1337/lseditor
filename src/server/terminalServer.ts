@@ -6,7 +6,63 @@ import { TerminalService } from '../services/TerminalService';
 import { v4 as uuidv4 } from 'uuid';
 import * as net from 'net';
 
-// Define the pty interface to match what we expect from node-pty-prebuilt-multiarch
+// Mock PTY implementation
+class MockPty extends EventEmitter {
+  private shell: string;
+  private args: string[];
+  private options: any;
+
+  constructor(shell: string, args: string[], options: any) {
+    super();
+    this.shell = shell;
+    this.args = args;
+    this.options = options;
+    
+    // Send initial message
+    setTimeout(() => {
+      this.emit('data', `Mock terminal initialized (${shell} ${args.join(' ')})\n`);
+      this.emit('data', `Current directory: ${options.cwd}\n`);
+      this.emit('data', `$ `);
+    }, 100);
+  }
+
+  write(data: string): void {
+    // Echo the input
+    this.emit('data', data);
+    
+    // Simulate command execution
+    if (data.trim().endsWith('\r')) {
+      const command = data.trim();
+      if (command === 'clear') {
+        this.emit('data', '\x1b[2J\x1b[H');
+      } else if (command === 'exit') {
+        this.emit('exit', { exitCode: 0, signal: 0 });
+      } else {
+        this.emit('data', `\nCommand not implemented in mock terminal: ${command}\n`);
+      }
+      this.emit('data', `$ `);
+    }
+  }
+
+  resize(cols: number, rows: number): void {
+    this.options.cols = cols;
+    this.options.rows = rows;
+  }
+
+  kill(): void {
+    this.emit('exit', { exitCode: 0, signal: 0 });
+  }
+
+  onData(callback: (data: string) => void): void {
+    this.on('data', callback);
+  }
+
+  onExit(callback: (exitData: { exitCode: number, signal: number }) => void): void {
+    this.on('exit', callback);
+  }
+}
+
+// Define the pty interface
 interface IPty {
   write(data: string): void;
   resize(cols: number, rows: number): void;
@@ -20,34 +76,12 @@ interface PtyModule {
   spawn(file: string, args: string[], options: any): IPty;
 }
 
-let pty: PtyModule;
-try {
-  pty = require('node-pty-prebuilt-multiarch');
-} catch (error) {
-  console.warn('Failed to load node-pty-prebuilt-multiarch:', error);
-  // Provide a mock implementation for development
-  pty = {
-    spawn: (file: string, args: string[], options: any) => {
-      const mockPty = new EventEmitter() as any;
-      mockPty.write = (data: string) => {
-        mockPty.emit('data', `Mock terminal: ${data}`);
-      };
-      mockPty.resize = () => {};
-      mockPty.kill = () => {};
-      mockPty.onData = (callback: (data: string) => void) => {
-        mockPty.on('data', callback);
-      };
-      mockPty.onExit = (callback: (exitData: { exitCode: number, signal: number }) => void) => {
-        mockPty.on('exit', callback);
-      };
-      // Send initial message
-      setTimeout(() => {
-        mockPty.emit('data', 'Mock terminal initialized. Native terminal functionality is not available.\n');
-      }, 100);
-      return mockPty;
-    }
-  } as PtyModule;
-}
+// Create mock pty module
+const pty: PtyModule = {
+  spawn: (file: string, args: string[], options: any) => {
+    return new MockPty(file, args, options);
+  }
+};
 
 interface TerminalSession {
   id: string;

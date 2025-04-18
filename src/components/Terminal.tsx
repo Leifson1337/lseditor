@@ -1,11 +1,11 @@
 import React, { useEffect, useRef } from 'react';
-import { Terminal as XTerm } from 'xterm';
-import { FitAddon } from 'xterm-addon-fit';
-import 'xterm/css/xterm.css';
+import { Terminal as XTerm } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import '@xterm/xterm/css/xterm.css';
 
 interface TerminalProps {
-  onData: (data: string) => void;
-  onResize: (cols: number, rows: number) => void;
+  onData?: (data: string) => void;
+  onResize?: (cols: number, rows: number) => void;
 }
 
 export const Terminal: React.FC<TerminalProps> = ({ onData, onResize }) => {
@@ -14,42 +14,36 @@ export const Terminal: React.FC<TerminalProps> = ({ onData, onResize }) => {
   const fitAddonRef = useRef<FitAddon | null>(null);
 
   useEffect(() => {
-    if (!terminalRef.current) return;
-
-    // Initialize xterm.js
-    const xterm = new XTerm({
-      cursorBlink: true,
-      fontSize: 14,
-      fontFamily: 'Consolas, monospace',
-      theme: {
-        background: '#1e1e1e',
-        foreground: '#ffffff',
-      },
-    });
-
-    const fitAddon = new FitAddon();
-    xterm.loadAddon(fitAddon);
-
-    xterm.open(terminalRef.current);
-    fitAddon.fit();
-
-    xterm.onData(onData);
-    xterm.onResize(({ cols, rows }) => onResize(cols, rows));
-
-    xtermRef.current = xterm;
-    fitAddonRef.current = fitAddon;
-
-    // Handle window resize
-    const handleResize = () => {
+    if (terminalRef.current) {
+      const xterm = new XTerm();
+      const fitAddon = new FitAddon();
+      
+      xterm.loadAddon(fitAddon);
+      xterm.open(terminalRef.current);
       fitAddon.fit();
-    };
-    window.addEventListener('resize', handleResize);
 
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      xterm.dispose();
-    };
+      xtermRef.current = xterm;
+      fitAddonRef.current = fitAddon;
+
+      if (onData) {
+        xterm.onData(onData);
+      }
+
+      const handleResize = () => {
+        fitAddon.fit();
+        if (onResize) {
+          onResize(xterm.cols, xterm.rows);
+        }
+      };
+
+      window.addEventListener('resize', handleResize);
+
+      return () => {
+        window.removeEventListener('resize', handleResize);
+        xterm.dispose();
+      };
+    }
   }, [onData, onResize]);
 
-  return <div ref={terminalRef} className="terminal-container" />;
+  return <div ref={terminalRef} style={{ width: '100%', height: '100%' }} />;
 }; 

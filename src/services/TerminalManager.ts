@@ -1,10 +1,10 @@
 import { EventEmitter } from 'events';
-import { Terminal } from 'xterm';
-import { FitAddon } from 'xterm-addon-fit';
-import { SearchAddon } from 'xterm-addon-search';
-import { WebLinksAddon } from 'xterm-addon-web-links';
-import { WebglAddon } from 'xterm-addon-webgl';
-import { LigaturesAddon } from 'xterm-addon-ligatures';
+import { Terminal as XTerm } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import { SearchAddon } from '@xterm/addon-search';
+import { WebLinksAddon } from '@xterm/addon-web-links';
+import { WebglAddon } from '@xterm/addon-webgl';
+import { LigaturesAddon } from '@xterm/addon-ligatures';
 import { TerminalServer } from '../server/terminalServer';
 import { WebSocket } from 'ws';
 import { TerminalService } from '../services/TerminalService';
@@ -23,7 +23,7 @@ export interface SplitViewConfig {
 }
 
 export class TerminalManager extends EventEmitter {
-  private terminals: Map<string, Terminal> = new Map();
+  private terminals: Map<string, XTerm> = new Map();
   private profiles: Map<string, TerminalProfile> = new Map();
   private themes: Map<string, TerminalTheme> = new Map();
   private customThemes: Map<string, CustomTheme> = new Map();
