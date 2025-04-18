@@ -1,5 +1,3 @@
-German:
-
 # 🧠 lseditor – Die freie Alternative zu Cursor AI
 
 > **Cursor AI ist großartig – aber auch teuer, cloudbasiert und begrenzt.**  
