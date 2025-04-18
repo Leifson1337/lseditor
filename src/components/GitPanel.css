@@ -1,0 +1,144 @@
+.git-panel {
+  padding: 1rem;
+  background-color: #252526;
+  color: #ffffff;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.git-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #333;
+}
+
+.git-header svg {
+  font-size: 1.2rem;
+}
+
+.git-header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.git-status, .git-branches, .git-actions {
+  background-color: #2d2d2d;
+  border-radius: 4px;
+  padding: 0.8rem;
+}
+
+.git-status h4, .git-branches h4 {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.9rem;
+  color: #cccccc;
+}
+
+.status-details {
+  font-size: 0.9rem;
+  color: #cccccc;
+}
+
+.branch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.5rem;
+}
+
+.branch-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem;
+  cursor: pointer;
+  border-radius: 3px;
+  font-size: 0.9rem;
+}
+
+.branch-item:hover {
+  background-color: #3d3d3d;
+}
+
+.branch-item.active {
+  background-color: #0e639c;
+}
+
+.branch-item svg {
+  font-size: 0.9rem;
+}
+
+.new-branch {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.new-branch input {
+  flex: 1;
+  background-color: #1e1e1e;
+  border: 1px solid #333;
+  color: #ffffff;
+  padding: 0.3rem;
+  border-radius: 3px;
+  font-size: 0.9rem;
+}
+
+.new-branch button {
+  background-color: #0e639c;
+  border: none;
+  color: white;
+  padding: 0.3rem 0.5rem;
+  border-radius: 3px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.git-actions {
+  margin-top: auto;
+}
+
+.commit-section {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.commit-section input {
+  flex: 1;
+  background-color: #1e1e1e;
+  border: 1px solid #333;
+  color: #ffffff;
+  padding: 0.3rem;
+  border-radius: 3px;
+  font-size: 0.9rem;
+}
+
+.push-pull {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.push-pull button {
+  flex: 1;
+  background-color: #0e639c;
+  border: none;
+  color: white;
+  padding: 0.3rem;
+  border-radius: 3px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+}
+
+button:hover {
+  opacity: 0.9;
+} 

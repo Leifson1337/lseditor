@@ -1,0 +1,23 @@
+.menu-bar {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  background-color: var(--background-color);
+  border-bottom: 1px solid var(--border-color);
+  padding: 0 8px;
+}
+
+.menu-item {
+  background: none;
+  border: none;
+  color: var(--text-color);
+  padding: 4px 8px;
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: 4px;
+  margin-right: 2px;
+}
+
+.menu-item:hover {
+  background-color: var(--hover-color);
+} 

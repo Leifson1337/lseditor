@@ -1,0 +1,142 @@
+.app-container {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background-color: #1e1e1e;
+  color: #ffffff;
+}
+
+.sidebar {
+  width: 250px;
+  background-color: #252526;
+  color: #ffffff;
+  padding: 1rem;
+  border-right: 1px solid #333;
+  overflow-y: auto;
+}
+
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background-color: #1e1e1e;
+}
+
+.tab-bar {
+  display: flex;
+  background-color: #252526;
+  border-bottom: 1px solid #333;
+  height: 40px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  padding: 0 1rem;
+  height: 100%;
+  background-color: #2d2d2d;
+  border-right: 1px solid #333;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tab.active {
+  background-color: #1e1e1e;
+}
+
+.tab-title {
+  margin-right: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.tab-close {
+  background: none;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  padding: 0.2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tab-close:hover {
+  color: #fff;
+}
+
+.file-explorer {
+  margin-bottom: 1rem;
+}
+
+.file-tree {
+  margin-top: 1rem;
+}
+
+.tree-node {
+  display: flex;
+  align-items: center;
+  padding: 0.3rem 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tree-node:hover {
+  background-color: #2d2d2d;
+}
+
+.tree-node svg {
+  margin-right: 0.5rem;
+  width: 16px;
+  height: 16px;
+}
+
+/* Split Pane Styles */
+.split-pane {
+  background-color: #1e1e1e;
+}
+
+.split-pane-divider {
+  background-color: #333;
+  width: 1px;
+}
+
+/* Monaco Editor Customization */
+.monaco-editor {
+  padding-top: 0.5rem;
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1e1e1e;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #424242;
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #4f4f4f;
+}
+
+.ai-panel {
+  width: 300px;
+  background-color: #1e1e1e;
+  color: #ffffff;
+  padding: 1rem;
+  border-left: 1px solid #333;
+}
+
+h3 {
+  margin: 0 0 1rem 0;
+  font-size: 1rem;
+  font-weight: 500;
+} 
