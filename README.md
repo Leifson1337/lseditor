@@ -1,13 +1,13 @@
 German:
 
-# 🧠 OpenCursor – Die freie Alternative zu Cursor AI
+# 🧠 lseditor – Die freie Alternative zu Cursor AI
 
 > **Cursor AI ist großartig – aber auch teuer, cloudbasiert und begrenzt.**  
-> OpenCursor ist die **Open-Source-, lokale und kostenlose Alternative**, die du auf deinem eigenen System mit deinen eigenen KI-Modellen betreiben kannst – ohne API-Limits, ohne Datenschutzprobleme, ohne laufende Kosten.
+> lseditor ist die **Open-Source-, lokale und kostenlose Alternative**, die du auf deinem eigenen System mit deinen eigenen KI-Modellen betreiben kannst – ohne API-Limits, ohne Datenschutzprobleme, ohne laufende Kosten.
 
 ---
 
-## ✨ Warum OpenCursor?
+## ✨ Warum lseditor?
 
 - **Kostenlos und Open Source**
 - **Offline-fähig** – läuft komplett lokal, auch ohne Internetverbindung
@@ -72,14 +72,14 @@ npm run dev
 ````
 English:
 
-# 🧠 OpenCursor - The free alternative to Cursor AI
+# 🧠 lseditor - The free alternative to Cursor AI
 
 > **Cursor AI is great - but also expensive, cloud-based and limited.** 
-> OpenCursor is the **open-source, local and free alternative** that you can run on your own system with your own AI models - no API limits, no privacy issues, no ongoing costs.
+> lseditor is the **open-source, local and free alternative** that you can run on your own system with your own AI models - no API limits, no privacy issues, no ongoing costs.
 
 ---
 
-## ✨ Why OpenCursor?
+## ✨ Why lseditor?
 
 - **Free and open source**
 - **Offline-capable** - runs completely locally, even without an internet connection
