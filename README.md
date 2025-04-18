@@ -69,7 +69,7 @@ npm install
 
 # 3. Lokalen Dev-Server starten
 npm run dev
-
+````
 English:
 
 # 🧠 OpenCursor - The free alternative to Cursor AI
