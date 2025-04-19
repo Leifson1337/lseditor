@@ -537,10 +537,15 @@ export class GitService extends EventEmitter {
   public async isGitHubRepo(): Promise<boolean> {
     try {
       const remotes = await this.getRemotes();
-      return remotes.some(remote => 
-        remote.url.includes('github.com') || 
-        remote.url.includes('github.io')
-      );
+      const allowedHosts = ['github.com', 'github.io'];
+      return remotes.some(remote => {
+        try {
+          const urlHost = new URL(remote.url).host;
+          return allowedHosts.includes(urlHost);
+        } catch {
+          return false; // Invalid URL
+        }
+      });
     } catch (error) {
       console.error('Error checking if repo is a GitHub repo:', error);
       return false;
@@ -553,10 +558,15 @@ export class GitService extends EventEmitter {
   public async getGitHubRepoInfo(): Promise<{ owner: string; repo: string } | null> {
     try {
       const remotes = await this.getRemotes();
-      const githubRemote = remotes.find(remote => 
-        remote.url.includes('github.com') || 
-        remote.url.includes('github.io')
-      );
+      const allowedHosts = ['github.com', 'github.io'];
+      const githubRemote = remotes.find(remote => {
+        try {
+          const urlHost = new URL(remote.url).host;
+          return allowedHosts.includes(urlHost);
+        } catch {
+          return false; // Invalid URL
+        }
+      });
 
       if (!githubRemote) return null;
 
