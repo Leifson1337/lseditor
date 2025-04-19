@@ -40,6 +40,12 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     }
   };
 
+  const handleFileClick = (filePath: string) => {
+    if (onOpenFile) {
+      onOpenFile(filePath);
+    }
+  };
+
   const renderFileNode = (node: FileNode, level: number = 0) => {
     const isExpanded = expandedFolders.has(node.path);
     const isActive = activeFile === node.path;
@@ -72,7 +78,10 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
         className={`file-node file ${isActive ? 'active' : ''} ${isSelected ? 'selected' : ''}`}
         data-level={level}
         tabIndex={0}
-        onClick={() => setSelectedFile(node.path)}
+        onClick={() => {
+          setSelectedFile(node.path);
+          handleFileClick(node.path);
+        }}
         onDoubleClick={() => onOpenFile(node.path)}
         onKeyDown={(e) => handleKeyDown(e, node)}
       >

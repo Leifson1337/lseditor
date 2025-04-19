@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import './Sidebar.css';
-import { FaFolder, FaCode, FaBrain, FaGitAlt, FaSearch, FaTerminal, FaPuzzlePiece, FaGithub, FaPlus, FaExclamationCircle, FaCodeBranch, FaArrowRight } from 'react-icons/fa';
+import { FaFolder, FaCode, FaBrain, FaGitAlt, FaTerminal, FaPuzzlePiece, FaGithub, FaPlus, FaExclamationCircle, FaCodeBranch, FaArrowRight } from 'react-icons/fa';
 
 interface SidebarProps {
   onTabChange?: (tab: string) => void;
@@ -32,7 +32,6 @@ const Sidebar: React.FC<SidebarProps> = ({ onTabChange, activeTab }) => {
     { id: 'explorer', icon: <FaFolder />, label: 'Explorer', action: () => onTabChange?.('explorer') },
     { id: 'git', icon: <FaGitAlt />, label: 'Git', action: () => onTabChange?.('git') },
     { id: 'github', icon: <FaGithub />, label: 'GitHub', action: () => setShowGithubDropdown(!showGithubDropdown) },
-    { id: 'search', icon: <FaSearch />, label: 'Search', action: () => onTabChange?.('search') },
     { id: 'ai', icon: <FaBrain />, label: 'AI', action: () => onTabChange?.('ai') },
     { id: 'terminal', icon: <FaTerminal />, label: 'Terminal', action: () => onTabChange?.('terminal') },
     { id: 'extensions', icon: <FaPuzzlePiece />, label: 'Extensions', action: () => onTabChange?.('extensions') },

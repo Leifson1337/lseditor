@@ -373,7 +373,12 @@ const Layout: React.FC<LayoutProps> = ({
         case 'exit':
           await window.electron.ipcRenderer.invoke('file:exit');
           break;
+        default:
+          // Zeige einen Hinweis, dass die Funktion noch nicht implementiert ist
+          alert(`Aktion: "${action}" wurde ausgelöst.`);
       }
+    } else {
+      alert(`Aktion: "${action}" wurde ausgelöst.`);
     }
   };
 

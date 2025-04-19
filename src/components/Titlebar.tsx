@@ -63,13 +63,23 @@ const Titlebar: React.FC = () => {
         <button className="titlebar-btn" title="Minimize" onClick={handleMinimize}>
           <span>&#x2013;</span>
         </button>
-        <button 
-          className="titlebar-btn" 
-          title={isMaximized ? "Restore" : "Maximize"} 
-          onClick={handleMaximizeToggle}
-        >
-          <span>{isMaximized ? '⧉' : '□'}</span>
-        </button>
+        {isMaximized ? (
+          <button 
+            className="titlebar-btn" 
+            title="Restore" 
+            onClick={handleMaximizeToggle}
+          >
+            <span>⧉</span>
+          </button>
+        ) : (
+          <button 
+            className="titlebar-btn" 
+            title="Maximize" 
+            onClick={handleMaximizeToggle}
+          >
+            <span>□</span>
+          </button>
+        )}
         <button className="titlebar-btn close" title="Close" onClick={handleClose}>
           <span>&#x2715;</span>
         </button>

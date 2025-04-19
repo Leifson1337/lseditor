@@ -50,7 +50,7 @@ export class ProjectService extends EventEmitter {
   private async loadSettings() {
     try {
       // Lade Verzeichnisstruktur
-      const entries = await this.getDirectoryEntries(this.workspacePath);
+      const entries = await this.safeGetDirectoryEntries(this.workspacePath);
       this.emit('directoryLoaded', entries);
     } catch (error) {
       console.error('Error loading project settings:', error);
@@ -70,6 +70,19 @@ export class ProjectService extends EventEmitter {
     }
   }
   
+  private async safeGetDirectoryEntries(dirPath: string): Promise<DirectoryEntry[]> {
+    try {
+      return await this.getDirectoryEntries(dirPath);
+    } catch (error: any) {
+      if (error && (error.code === 'EBUSY' || error.code === 'EPERM' || error.code === 'EACCES')) {
+        // Systemdatei oder Zugriff verweigert: einfach ignorieren
+        return [];
+      }
+      console.error('Error getting directory entries:', error);
+      return [];
+    }
+  }
+
   public async getFileContent(filePath: string): Promise<string> {
     try {
       return await safeIpcInvoke('readFile', filePath);
@@ -158,7 +171,7 @@ export class ProjectService extends EventEmitter {
 
   public async getFileStructure(dirPath: string): Promise<any[]> {
     try {
-      const entries = await this.getDirectoryEntries(dirPath);
+      const entries = await this.safeGetDirectoryEntries(dirPath);
       const result: any[] = [];
       
       for (const entry of entries) {
@@ -177,7 +190,11 @@ export class ProjectService extends EventEmitter {
       }
       
       return result;
-    } catch (error) {
+    } catch (error: any) {
+      if (error && (error.code === 'EBUSY' || error.code === 'EPERM' || error.code === 'EACCES')) {
+        // Systemdatei oder Zugriff verweigert: einfach ignorieren
+        return [];
+      }
       console.error('Error getting file structure:', error);
       return [];
     }

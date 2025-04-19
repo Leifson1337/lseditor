@@ -14,6 +14,8 @@ import { TerminalPanel } from './TerminalPanel';
 import { AIConfig } from '../types/AITypes';
 import { FileNode } from '../types/FileNode';
 import { Editor } from './Editor';
+import SettingsIcon from './SettingsIcon';
+import { ThemeProvider } from '../contexts/ThemeContext';
 
 // Update StoreSchema to include all required properties
 declare module '../store/store' {
@@ -81,6 +83,7 @@ const App: React.FC = () => {
   const [recentProjects, setRecentProjects] = useState<string[]>(() => {
     return store.get('recentProjects') || [];
   });
+  const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     console.log('App component mounted');
@@ -301,11 +304,54 @@ const App: React.FC = () => {
     checkPathValidity(projectPath);
   }, [projectPath]);
 
+  const loadFileContent = async (filePath: string) => {
+    if (!filePath) return;
+    try {
+      // Versuche zuerst neuen Handler
+      let content;
+      if (window.electron?.ipcRenderer.invoke) {
+        // Erst mit neuem Namensraum versuchen
+        content = await window.electron.ipcRenderer.invoke('fs:readFile', filePath);
+        if (!content) {
+          // Fallback auf alten Handler
+          content = await window.electron.ipcRenderer.invoke('readFile', filePath);
+        }
+      }
+      setEditorContent(content ?? '');
+    } catch (error) {
+      setEditorContent('Fehler beim Laden der Datei.');
+    }
+  };
+
+  const saveFileContent = async (filePath: string, content: string) => {
+    if (!filePath) return;
+    try {
+      let ok = false;
+      if (window.electron?.ipcRenderer.invoke) {
+        ok = await window.electron.ipcRenderer.invoke('fs:writeFile', filePath, content);
+        if (!ok) {
+          // Fallback auf alten Handler
+          ok = await window.electron.ipcRenderer.invoke('saveFile', filePath, content);
+        }
+      }
+    } catch (error) {
+      alert('Fehler beim Speichern der Datei!');
+    }
+  };
+
   const handleFileOpen = (path: string) => {
     console.log('Opening file:', path);
     setActiveFile(path);
     if (!openFiles.includes(path)) {
       setOpenFiles([...openFiles, path]);
+    }
+    loadFileContent(path);
+  };
+
+  const handleEditorChange = (value: string) => {
+    setEditorContent(value);
+    if (activeFile) {
+      saveFileContent(activeFile, value);
     }
   };
 
@@ -332,86 +378,90 @@ const App: React.FC = () => {
   console.log('App rendering, showProjectDialog:', showProjectDialog);
   
   return (
-    <div className="app">
-      {showProjectDialog ? (
-        <div className="project-dialog">
-          <h2>Open Project</h2>
-          <div className="project-input">
-            <input 
-              type="text" 
-              placeholder="Enter project path..." 
-              value={projectPath}
-              onChange={(e) => setProjectPath(e.target.value)}
+    <ThemeProvider>
+      <div className="app">
+        {/* SettingsIcon wird jetzt im MenuBar platziert, kein separates Popup mehr */}
+        {showProjectDialog ? (
+          <div className="project-dialog">
+            <h2>Open Project</h2>
+            <div className="project-input">
+              <input 
+                type="text" 
+                placeholder="Enter project path..." 
+                value={projectPath}
+                onChange={(e) => setProjectPath(e.target.value)}
+              />
+              <button 
+                onClick={() => openProject(projectPath)} 
+                disabled={!isValidPath}
+                title={!isValidPath ? "Bitte geben Sie einen gültigen Pfad an" : "Projekt öffnen"}
+              >
+                Open
+              </button>
+              <button 
+                onClick={openProjectDialog}
+                disabled={isBrowseDialogOpen}
+                title={isBrowseDialogOpen ? "Dialog ist bereits geöffnet" : "Verzeichnis durchsuchen"}
+              >
+                Browse...
+              </button>
+              <button 
+                onClick={createNewProject}
+                disabled={isBrowseDialogOpen}
+                title={isBrowseDialogOpen ? "Dialog ist bereits geöffnet" : "Neues Projekt erstellen"}
+              >
+                New Project
+              </button>
+            </div>
+            <div className="recent-projects">
+              <h3>Recently opened projects</h3>
+              {recentProjects.length > 0 ? (
+                <ul>
+                  {recentProjects.map((project) => (
+                    <li key={project} style={{display:'flex',alignItems:'center',gap:8}}>
+                      <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis'}}>{project}</span>
+                      <button 
+                        onClick={() => openProject(project)}
+                        title="Projekt öffnen"
+                      >
+                        Open
+                      </button>
+                      <button 
+                        title="Remove from list" 
+                        onClick={() => removeRecentProject(project)} 
+                        style={{color:'red'}}
+                      >
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p>Keine kürzlich geöffneten Projekte vorhanden.</p>
+              )}
+            </div>
+          </div>
+        ) : (
+          <Layout
+            fileStructure={fileStructure}
+            onOpenFile={handleFileOpen}
+            activeFile={activeFile}
+            terminalPort={terminalPort}
+            isTerminalOpen={isTerminalOpen}
+            onTerminalOpen={handleTerminalOpen}
+            onTerminalClose={handleTerminalClose}
+            recentProjects={recentProjects}
+          >
+            <Editor
+              filePath={activeFile || 'Kein File geöffnet'}
+              content={editorContent || 'Willkommen! Öffne eine Datei, um sie zu bearbeiten.'}
+              isLoading={!isInitialized}
+              onChange={handleEditorChange}
             />
-            <button 
-              onClick={() => openProject(projectPath)} 
-              disabled={!isValidPath}
-              title={!isValidPath ? "Bitte geben Sie einen gültigen Pfad an" : "Projekt öffnen"}
-            >
-              Open
-            </button>
-            <button 
-              onClick={openProjectDialog}
-              disabled={isBrowseDialogOpen}
-              title={isBrowseDialogOpen ? "Dialog ist bereits geöffnet" : "Verzeichnis durchsuchen"}
-            >
-              Browse...
-            </button>
-            <button 
-              onClick={createNewProject}
-              disabled={isBrowseDialogOpen}
-              title={isBrowseDialogOpen ? "Dialog ist bereits geöffnet" : "Neues Projekt erstellen"}
-            >
-              New Project
-            </button>
-          </div>
-          <div className="recent-projects">
-            <h3>Recently opened projects</h3>
-            {recentProjects.length > 0 ? (
-              <ul>
-                {recentProjects.map((project) => (
-                  <li key={project} style={{display:'flex',alignItems:'center',gap:8}}>
-                    <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis'}}>{project}</span>
-                    <button 
-                      onClick={() => openProject(project)}
-                      title="Projekt öffnen"
-                    >
-                      Open
-                    </button>
-                    <button 
-                      title="Remove from list" 
-                      onClick={() => removeRecentProject(project)} 
-                      style={{color:'red'}}
-                    >
-                      ×
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p>Keine kürzlich geöffneten Projekte vorhanden.</p>
-            )}
-          </div>
-        </div>
-      ) : (
-        <Layout
-          fileStructure={fileStructure}
-          onOpenFile={handleFileOpen}
-          activeFile={activeFile}
-          terminalPort={terminalPort}
-          isTerminalOpen={isTerminalOpen}
-          onTerminalOpen={handleTerminalOpen}
-          onTerminalClose={handleTerminalClose}
-          recentProjects={recentProjects}
-        >
-          <Editor
-            filePath={activeFile || 'Kein File geöffnet'}
-            content={editorContent || 'Willkommen! Öffne eine Datei, um sie zu bearbeiten.'}
-            isLoading={!isInitialized}
-          />
-        </Layout>
-      )}
-    </div>
+          </Layout>
+        )}
+      </div>
+    </ThemeProvider>
   );
 };
 

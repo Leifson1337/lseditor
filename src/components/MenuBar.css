@@ -1,10 +1,106 @@
 .menu-bar {
   display: flex;
   align-items: center;
-  height: 30px;
-  background-color: var(--background-color);
-  border-bottom: 1px solid var(--border-color);
-  padding: 0 8px;
+  height: 40px;
+  background: var(--bg-primary, #1e1e1e);
+  color: var(--text-primary, #fff);
+  border-bottom: 1px solid var(--border-color, #22223b);
+  position: relative;
+  justify-content: flex-start;
+}
+
+.menu-bar-center {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  height: 100%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  z-index: 1;
+}
+
+.menu-bar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding-right: 18px;
+}
+
+.menu-searchbar-wrapper {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  gap: 8px;
+}
+
+.menu-searchbar {
+  width: 320px;
+  max-width: 36vw;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1.5px solid var(--border-color, #22223b);
+  background: var(--bg-tertiary, #23243a);
+  color: var(--text-primary, #fff);
+  font-size: 1rem;
+  outline: none;
+  transition: border 0.15s, background 0.15s;
+  box-shadow: 0 2px 8px rgba(30,34,43,0.04);
+}
+
+.menu-searchbar:focus {
+  border: 1.5px solid #007acc;
+  background: #23243a;
+}
+
+.menu-searchbar-wrapper .settings-icon {
+  margin-left: 2px;
+  font-size: 1.25em;
+  color: var(--text-secondary,#aaa);
+  background: transparent;
+  border-radius: 50%;
+  transition: background 0.15s;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.menu-searchbar-wrapper .settings-icon:hover {
+  background: #23243a;
+  color: #007acc;
+}
+
+.menu-bar-menus {
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+.menu-item-container {
+  display: flex;
+  align-items: center;
+  position: relative;
+  height: 100%;
+}
+
+.menu-item-label {
+  padding: 0 16px;
+  font-size: 15px;
+  color: var(--text-primary, #fff);
+  cursor: pointer;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  user-select: none;
+}
+
+.menu-item-container.active .menu-item-label,
+.menu-item-label:hover {
+  background: #23243a;
+  color: #79aaff;
 }
 
 .menu-item {
@@ -20,14 +116,6 @@
 
 .menu-item:hover {
   background-color: var(--hover-color);
-}
-
-.menu-item-container {
-  position: relative;
-}
-
-.menu-item.active {
-  background-color: #2d2d2d;
 }
 
 .menu-dropdown {
@@ -140,4 +228,11 @@
 
 .dropdown-item.disabled:hover {
   background-color: transparent;
+}
+
+@media (max-width: 700px) {
+  .menu-searchbar {
+    width: 160px;
+    font-size: 0.98rem;
+  }
 }
