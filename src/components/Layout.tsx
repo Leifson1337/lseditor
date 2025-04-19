@@ -29,6 +29,14 @@ interface LayoutProps {
   recentProjects?: string[];
 }
 
+interface FindInFilesResult {
+  file: string;
+  line: number;
+  content: string;
+  matchStart?: number;
+  matchEnd?: number;
+}
+
 const Layout: React.FC<LayoutProps> = ({ 
   children, 
   initialContent = '', 
@@ -58,9 +66,54 @@ const Layout: React.FC<LayoutProps> = ({
   const [showFindInFilesDialog, setShowFindInFilesDialog] = useState(false);
   const [showReplaceInFilesDialog, setShowReplaceInFilesDialog] = useState(false);
 
+  // --- Suchfunktion für "In Dateien suchen" ---
+  const [findInFilesQuery, setFindInFilesQuery] = useState('');
+  const [findInFilesResults, setFindInFilesResults] = useState<any[]>([]);
+  const searchInputRef = React.createRef<HTMLInputElement>();
+
+  useEffect(() => {
+    if (showFindInFilesDialog && searchInputRef.current) {
+      searchInputRef.current.focus();
+    }
+    // Listener für Suchergebnisse vom Main-Prozess
+    let didRegister = false;
+    const handler = (_event: any, results: any[]) => setFindInFilesResults(results);
+    if (typeof window !== 'undefined' && window.electron && window.electron.ipcRenderer) {
+      window.electron.ipcRenderer.on('editor:findInFilesResults', handler);
+      didRegister = true;
+    }
+    return () => {
+      if (
+        didRegister &&
+        typeof window !== 'undefined' &&
+        window.electron &&
+        window.electron.ipcRenderer
+      ) {
+        window.electron.ipcRenderer.removeListener('editor:findInFilesResults', handler);
+      }
+    };
+  }, [showFindInFilesDialog]);
+
+  const handleFindInFiles = async () => {
+    if (!findInFilesQuery.trim()) return;
+    setFindInFilesResults([]);
+    // Sende Suchanfrage an den Main-Prozess
+    if (typeof window !== 'undefined' && window.electron && window.electron.ipcRenderer) {
+      await window.electron.ipcRenderer.invoke('editor:findInFiles', findInFilesQuery, process.cwd());
+    }
+  };
+
+  const handleResultClick = (file: string, line: number) => {
+    if (onOpenFile) {
+      onOpenFile(file);
+      setShowFindInFilesDialog(false);
+      // Optional: Scroll zu Zeile im Editor
+    }
+  };
+
   useEffect(() => {
     // Listen for events from main process
-    if (window.electron) {
+    if (typeof window !== 'undefined' && window.electron && window.electron.ipcRenderer) {
       window.electron.ipcRenderer.on('show-commands-palette', () => {
         setShowCommandPalette(true);
       });
@@ -90,7 +143,7 @@ const Layout: React.FC<LayoutProps> = ({
     
     return () => {
       // Clean up event listeners
-      if (window.electron) {
+      if (typeof window !== 'undefined' && window.electron && window.electron.ipcRenderer) {
         window.electron.ipcRenderer.removeListener('show-commands-palette', () => {});
         window.electron.ipcRenderer.removeListener('show-accessibility-features', () => {});
         window.electron.ipcRenderer.removeListener('show-process-info', () => {});
@@ -120,22 +173,19 @@ const Layout: React.FC<LayoutProps> = ({
 
   const handleTabChange = (tab: string) => {
     setActiveTab(tab);
-    
-    // Wenn Terminal-Tab ausgewählt wird, Terminal öffnen
     if (tab === 'terminal') {
       setShowTerminal(true);
-      if (onTerminalOpen) {
-        onTerminalOpen();
-      }
+      if (onTerminalOpen) onTerminalOpen();
     } else {
       setShowTerminal(false);
+      if (onTerminalClose) onTerminalClose();
     }
   };
 
   const handleHelpAction = async (action: string) => {
     console.log('Help action:', action);
     
-    if (window.electron) {
+    if (typeof window !== 'undefined' && window.electron && window.electron.ipcRenderer) {
       switch (action) {
         case 'showCommands':
           await window.electron.ipcRenderer.invoke('help:showCommands');
@@ -168,7 +218,7 @@ const Layout: React.FC<LayoutProps> = ({
   const handleFileAction = async (action: string, data?: any) => {
     console.log('File action:', action, data);
     
-    if (window.electron) {
+    if (typeof window !== 'undefined' && window.electron && window.electron.ipcRenderer) {
       switch (action) {
         case 'newTextFile':
           await window.electron.ipcRenderer.invoke('file:newTextFile');
@@ -332,7 +382,7 @@ const Layout: React.FC<LayoutProps> = ({
     
     // Hilfsfunktion zum Ausführen von Editor-Befehlen
     const executeEditorCommand = (command: string) => {
-      if (window.electron) {
+      if (typeof window !== 'undefined' && window.electron && window.electron.ipcRenderer) {
         window.electron.ipcRenderer.send('editor:executeCommand', command);
       }
     };
@@ -416,6 +466,11 @@ const Layout: React.FC<LayoutProps> = ({
     }
   };
 
+  // --- MiniStatusBar unten ---
+  const [errorCount, setErrorCount] = useState(0);
+  const [problemCount, setProblemCount] = useState(0);
+  const [portForwardCount, setPortForwardCount] = useState(0);
+
   return (
     <div className="app-container">
       <Titlebar />
@@ -460,6 +515,7 @@ const Layout: React.FC<LayoutProps> = ({
                     onClick={() => {
                       setShowTerminal(false);
                       if (onTerminalClose) onTerminalClose();
+                      setActiveTab('explorer'); // Explorer als Fallback aktivieren
                     }}
                   >
                     ×
@@ -643,8 +699,32 @@ const Layout: React.FC<LayoutProps> = ({
               <button onClick={() => setShowFindInFilesDialog(false)}>×</button>
             </div>
             <div className="dialog-content">
-              <input type="text" placeholder="Suchen..." autoFocus />
-              <button>Suchen</button>
+              <input
+                ref={searchInputRef}
+                type="text"
+                placeholder="Suchen..."
+                value={findInFilesQuery}
+                onChange={e => setFindInFilesQuery(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') handleFindInFiles(); }}
+                autoFocus
+              />
+              <button onClick={handleFindInFiles}>Suchen</button>
+              <div className="search-results">
+                {findInFilesResults.length === 0 && findInFilesQuery && (
+                  <div className="no-results">Keine Treffer gefunden.</div>
+                )}
+                {findInFilesResults.map((result: any, idx: number) => (
+                  <div
+                    key={idx}
+                    className="search-result"
+                    onClick={() => handleResultClick(result.file, result.line)}
+                  >
+                    <span className="result-file">{result.file}</span>:
+                    <span className="result-line">{result.line}</span>
+                    <span className="result-content">{result.content}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -665,6 +745,27 @@ const Layout: React.FC<LayoutProps> = ({
           </div>
         </div>
       )}
+      
+      {/* MiniStatusBar: Fehler, Probleme, Port Forwards */}
+      <div style={{
+        width: '100%',
+        height: '24px',
+        background: '#23272e',
+        color: '#d4d4d4',
+        display: 'flex',
+        alignItems: 'center',
+        fontSize: '13px',
+        borderTop: '1px solid #333',
+        padding: '0 16px',
+        gap: '24px',
+        position: 'absolute',
+        bottom: 0,
+        left: 0
+      }}>
+        <span style={{color: errorCount > 0 ? '#e06c75' : '#888'}}>Fehler: {errorCount}</span>
+        <span style={{color: problemCount > 0 ? '#e5c07b' : '#888'}}>Probleme: {problemCount}</span>
+        <span style={{color: portForwardCount > 0 ? '#61afef' : '#888'}}>Port-Forwards: {portForwardCount}</span>
+      </div>
     </div>
   );
 };

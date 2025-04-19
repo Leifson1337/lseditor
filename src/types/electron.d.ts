@@ -55,6 +55,20 @@ declare module 'electron' {
   }
 } 
 
+declare global {
+  interface Window {
+    electron?: {
+      ipcRenderer?: {
+        on: (...args: any[]) => void;
+        removeListener: (...args: any[]) => void;
+        invoke: (...args: any[]) => Promise<any>;
+        send: (...args: any[]) => void;
+      };
+    };
+  }
+}
+export {};
+
 // Definiere die globale window-Schnittstelle mit Electron-Eigenschaften
 interface Window {
   electron?: {

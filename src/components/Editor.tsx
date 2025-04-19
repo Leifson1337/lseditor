@@ -15,7 +15,34 @@ export const Editor: React.FC<EditorProps> = ({ filePath, content, isLoading }) 
   useEffect(() => {
     if (filePath && typeof filePath === 'string') {
       const extension = filePath.split('.').pop()?.toLowerCase();
-      setLanguage(extension || 'plaintext');
+      // Mappe Dateiendungen auf SyntaxHighlighter-Sprachen
+      let lang = 'plaintext';
+      switch (extension) {
+        case 'js': lang = 'javascript'; break;
+        case 'ts': lang = 'typescript'; break;
+        case 'tsx': lang = 'tsx'; break;
+        case 'jsx': lang = 'jsx'; break;
+        case 'json': lang = 'json'; break;
+        case 'css': lang = 'css'; break;
+        case 'html': lang = 'html'; break;
+        case 'md': lang = 'markdown'; break;
+        case 'py': lang = 'python'; break;
+        case 'sh': lang = 'bash'; break;
+        case 'yml':
+        case 'yaml': lang = 'yaml'; break;
+        case 'xml': lang = 'xml'; break;
+        case 'c': lang = 'c'; break;
+        case 'cpp': lang = 'cpp'; break;
+        case 'java': lang = 'java'; break;
+        case 'go': lang = 'go'; break;
+        case 'php': lang = 'php'; break;
+        case 'rs': lang = 'rust'; break;
+        case 'swift': lang = 'swift'; break;
+        case 'rb': lang = 'ruby'; break;
+        case 'sql': lang = 'sql'; break;
+        default: lang = extension || 'plaintext'; break;
+      }
+      setLanguage(lang);
     } else {
       setLanguage('plaintext');
     }

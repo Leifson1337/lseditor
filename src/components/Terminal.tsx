@@ -25,7 +25,8 @@ export const Terminal: React.FC<TerminalProps> = ({ onResize, onData }) => {
     }
 
     console.log('Initializing xterm.js');
-    const xterm = new XTerm({
+    // Terminal mit allowProposedApi: true initialisieren
+    const xterm = new XTerm({ allowProposedApi: true, 
       cursorBlink: true,
       fontSize: 14,
       fontFamily: 'Consolas, Monaco, monospace',
@@ -35,11 +36,14 @@ export const Terminal: React.FC<TerminalProps> = ({ onResize, onData }) => {
       },
     });
 
+    const unicodeAddon = new Unicode11Addon();
+    xterm.loadAddon(unicodeAddon);
+    xterm.unicode.activeVersion = '11';
+
     const fitAddon = new FitAddon();
     xterm.loadAddon(fitAddon);
     xterm.loadAddon(new WebLinksAddon());
     xterm.loadAddon(new SearchAddon());
-    xterm.loadAddon(new Unicode11Addon());
 
     console.log('Opening terminal in container');
     xterm.open(terminalRef.current);
