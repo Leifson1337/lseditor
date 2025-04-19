@@ -21,25 +21,46 @@ body {
 }
 
 .app-container {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto 1fr;
   height: 100vh;
   width: 100vw;
   overflow: hidden;
 }
 
-.main-content {
-  display: flex;
-  flex: 1;
-  overflow: hidden;
-  flex-direction: row;
+.titlebar {
+  grid-row: 1;
+  z-index: 100;
+  position: relative;
 }
 
-/* Linker Bereich mit Sidebar und Sidebar-Inhalt */
-.left-panel {
+.main-content {
+  grid-row: 2;
   display: flex;
-  flex-direction: row;
-  height: 100%;
+  overflow: hidden;
+  position: relative;
+}
+
+.status-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  height: 24px;
+  background-color: var(--bg-secondary, #252526);
+  border-top: 1px solid var(--border-color, #3c3c3c);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.left-panel {
+  display: grid;
+  grid-template-columns: 48px 1fr;
   min-width: 250px;
   max-width: 350px;
   width: 20vw;
@@ -47,23 +68,12 @@ body {
 }
 
 .sidebar {
-  width: 48px;
+  grid-column: 1;
   background-color: var(--bg-secondary);
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding-top: 0;
-  position: relative;
-  height: 100%;
-  flex-shrink: 0;
-}
-
-.sidebar-content-panel {
-  flex: 1;
-  background-color: var(--bg-secondary);
-  overflow: auto;
-  height: 100%;
-  border-right: 1px solid var(--border-color);
+  padding-top: 48px;
 }
 
 .sidebar-tabs {
@@ -72,54 +82,37 @@ body {
   align-items: center;
   gap: 8px;
   padding: 10px 0 0 0;
+  z-index: 3;
 }
 
-.sidebar-icon {
-  width: 32px;
-  height: 32px;
-  margin: 4px 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-secondary);
-  cursor: pointer;
-  border-radius: 4px;
-  transition: background-color 0.2s;
-}
-
-.sidebar-icon:hover {
-  background-color: var(--hover-bg);
-  color: var(--text-primary);
-}
-
-.sidebar-icon.active {
-  color: var(--accent-blue);
-  background-color: var(--hover-bg);
-}
-
-/* Mittlerer Bereich mit Editor und Terminal */
-.editor-container {
+.sidebar-content-panel {
+  grid-column: 2;
+  background-color: var(--bg-secondary);
+  overflow: hidden;
+  border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
-  flex: 1 1 0;
+}
+
+.editor-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
-  min-width: 0;
 }
 
 .editor-area {
-  display: flex;
-  flex-direction: column;
   flex: 1;
-  overflow: hidden;
   position: relative;
+  overflow: hidden;
 }
 
 .editor-content {
-  flex: 1;
+  height: 100%;
+  width: 100%;
   overflow: hidden;
 }
 
-/* Terminal im Editor-Bereich */
 .terminal-container {
   position: absolute;
   bottom: 0;
@@ -156,7 +149,6 @@ body {
   color: var(--text-primary);
 }
 
-/* Rechter Bereich mit KI-Chat */
 .right-panel {
   display: flex;
   flex-direction: row;
@@ -336,17 +328,6 @@ body {
 .tab.active {
   background-color: var(--bg-secondary);
   border-bottom: none;
-}
-
-.status-bar {
-  height: 22px;
-  background-color: var(--bg-secondary);
-  border-top: 1px solid var(--border-color);
-  display: flex;
-  align-items: center;
-  padding: 0 10px;
-  font-size: 12px;
-  color: var(--text-secondary);
 }
 
 /* Dialog styles for Help menu functionality */

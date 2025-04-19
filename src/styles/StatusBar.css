@@ -12,16 +12,23 @@
 }
 
 .status-bar-left,
-.status-bar-right {
+.status-bar-right,
+.status-bar-center {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.status-bar-center {
+  flex: 1;
+  justify-content: center;
 }
 
 .status-item {
   display: flex;
   align-items: center;
   gap: 4px;
+  padding: 0 8px;
 }
 
 .status-label {
@@ -38,4 +45,16 @@
 
 .status-value.disconnected {
   color: #f44336;
-} 
+}
+
+.status-value.error {
+  color: #e06c75;
+}
+
+.status-value.warning {
+  color: #e5c07b;
+}
+
+.status-value.info {
+  color: #61afef;
+}

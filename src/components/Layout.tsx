@@ -478,13 +478,14 @@ const Layout: React.FC<LayoutProps> = ({
 
   return (
     <div className="app-container">
-      <Titlebar />
-      <MenuBar 
-        onHelpAction={handleHelpAction} 
-        onFileAction={handleFileAction} 
-        onEditAction={handleEditAction}
-        recentProjects={recentProjects} 
-      />
+      <Titlebar>
+        <MenuBar 
+          onHelpAction={handleHelpAction} 
+          onFileAction={handleFileAction} 
+          onEditAction={handleEditAction}
+          recentProjects={recentProjects} 
+        />
+      </Titlebar>
       <div className="main-content">
         {/* Linke Seite mit Sidebar und Sidebar-Inhalt */}
         <div className="left-panel">
@@ -533,11 +534,6 @@ const Layout: React.FC<LayoutProps> = ({
               </div>
             )}
           </div>
-          <StatusBar
-            activeFile={activeFile}
-            terminalPort={terminalPort}
-            isTerminalConnected={isTerminalOpen}
-          />
         </div>
         
         {/* Rechte Seite mit KI-Chat */}
@@ -751,26 +747,17 @@ const Layout: React.FC<LayoutProps> = ({
         </div>
       )}
       
-      {/* MiniStatusBar: Fehler, Probleme, Port Forwards */}
-      <div style={{
-        width: '100%',
-        height: '24px',
-        background: '#23272e',
-        color: '#d4d4d4',
-        display: 'flex',
-        alignItems: 'center',
-        fontSize: '13px',
-        borderTop: '1px solid #333',
-        padding: '0 16px',
-        gap: '24px',
-        position: 'absolute',
-        bottom: 0,
-        left: 0
-      }}>
-        <span style={{color: errorCount > 0 ? '#e06c75' : '#888'}}>Fehler: {errorCount}</span>
-        <span style={{color: problemCount > 0 ? '#e5c07b' : '#888'}}>Probleme: {problemCount}</span>
-        <span style={{color: portForwardCount > 0 ? '#61afef' : '#888'}}>Port-Forwards: {portForwardCount}</span>
-      </div>
+      {/* StatusBar außerhalb von main-content, damit sie nicht doppelt erscheint */}
+      <StatusBar
+        activeFile={activeFile}
+        terminalPort={terminalPort}
+        isTerminalConnected={isTerminalOpen}
+        errorCount={errorCount}
+        problemCount={problemCount}
+        portForwardCount={portForwardCount}
+      />
+      
+      {/* MiniStatusBar entfernt, da wir nur eine Statusbar benötigen */}
     </div>
   );
 };

@@ -1,7 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, ReactNode } from 'react';
 import './Titlebar.css';
 
-const Titlebar: React.FC = () => {
+interface TitlebarProps {
+  children: ReactNode;
+}
+
+const Titlebar: React.FC<TitlebarProps> = ({ children }) => {
   const [isMaximized, setIsMaximized] = useState<boolean>(false);
 
   useEffect(() => {
@@ -59,6 +63,7 @@ const Titlebar: React.FC = () => {
     <div className="titlebar">
       <div className="titlebar-drag" />
       <div className="titlebar-title">lseditor</div>
+      {children}
       <div className="titlebar-buttons">
         <button className="titlebar-btn" title="Minimize" onClick={handleMinimize}>
           <span>&#x2013;</span>
