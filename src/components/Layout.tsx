@@ -596,6 +596,14 @@ const Layout: React.FC<LayoutProps> = ({
       <div className="main-content">
         {/* Linke Seite mit Sidebar und Sidebar-Inhalt */}
         <div className="left-panel">
+          <StatusBar
+            activeFile={activeFile}
+            terminalPort={terminalPort}
+            isTerminalConnected={isTerminalOpen}
+            errorCount={errorCount}
+            problemCount={problemCount}
+            portForwardCount={portForwardCount}
+          />
           <Sidebar
             activeTab={activeTab}
             onTabChange={handleTabChange}
@@ -878,18 +886,6 @@ const Layout: React.FC<LayoutProps> = ({
           </div>
         </div>
       )}
-      
-      {/* StatusBar außerhalb von main-content, damit sie nicht doppelt erscheint */}
-      <StatusBar
-        activeFile={activeFile}
-        terminalPort={terminalPort}
-        isTerminalConnected={isTerminalOpen}
-        errorCount={errorCount}
-        problemCount={problemCount}
-        portForwardCount={portForwardCount}
-      />
-      
-      {/* MiniStatusBar entfernt, da wir nur eine Statusbar benötigen */}
     </div>
   );
 };

@@ -40,14 +40,17 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>, node: FileNode) => {
     if (node.type !== 'file') return;
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' || e.key === ' ') {
       onOpenFile(node.path);
     }
   };
 
   const handleFileClick = (filePath: string) => {
-    // Nur die Datei auswählen, nicht sofort öffnen
     setSelectedFile(filePath);
+    // Datei direkt öffnen, wenn sie schon ausgewählt ist (Einzelklick auf bereits selektierte Datei)
+    if (selectedFile === filePath && onOpenFile) {
+      onOpenFile(filePath);
+    }
   };
 
   const handleFileDoubleClick = (filePath: string) => {
@@ -101,7 +104,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   };
 
   const handleContainerKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'Enter' && selectedFile) {
+    if ((e.key === 'Enter' || e.key === ' ') && selectedFile) {
       onOpenFile(selectedFile);
     }
   };

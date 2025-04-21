@@ -1,6 +1,7 @@
 .sidebar-content-panel {
   flex: 1;
-  overflow: hidden;
+  overflow-y: auto;
+  max-height: 100vh;
   height: 100%;
   background: var(--sidebar-bg, #23272e);
   display: flex;
