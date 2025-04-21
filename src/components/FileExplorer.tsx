@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { FolderIcon, FileIcon, ChevronRightIcon, ChevronDownIcon } from './Icons';
 import '../styles/FileExplorer.css';
 
@@ -23,6 +23,11 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
 
+  // Synchronisiere selectedFile, wenn activeFile sich ändert
+  useEffect(() => {
+    if (activeFile) setSelectedFile(activeFile);
+  }, [activeFile]);
+
   const toggleFolder = (path: string) => {
     const newExpandedFolders = new Set(expandedFolders);
     if (newExpandedFolders.has(path)) {
@@ -41,6 +46,13 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   };
 
   const handleFileClick = (filePath: string) => {
+    // Nur die Datei auswählen, nicht sofort öffnen
+    setSelectedFile(filePath);
+  };
+
+  const handleFileDoubleClick = (filePath: string) => {
+    console.log('Double-clicked file:', filePath);
+    // Bei Doppelklick die Datei öffnen
     if (onOpenFile) {
       onOpenFile(filePath);
     }
@@ -78,11 +90,8 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
         className={`file-node file ${isActive ? 'active' : ''} ${isSelected ? 'selected' : ''}`}
         data-level={level}
         tabIndex={0}
-        onClick={() => {
-          setSelectedFile(node.path);
-          handleFileClick(node.path);
-        }}
-        onDoubleClick={() => onOpenFile(node.path)}
+        onClick={() => handleFileClick(node.path)}
+        onDoubleClick={() => handleFileDoubleClick(node.path)}
         onKeyDown={(e) => handleKeyDown(e, node)}
       >
         {getFileIconByExtension(node.name)}

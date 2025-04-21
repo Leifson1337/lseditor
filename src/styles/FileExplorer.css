@@ -16,15 +16,11 @@
   padding: 0;
   min-height: 0;
   flex: 1;
-  height: auto;
+  height: 100%;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  position: absolute;
-  top: 80px;  /* Mehr Abstand von der Titlebar */
-  bottom: 80px; /* Noch mehr Abstand von der Statusbar */
-  left: 0;
-  right: 0;
+  position: relative;
 }
 
 .file-explorer-header {
@@ -38,7 +34,11 @@
 .file-explorer-content {
   flex: 1;
   overflow-y: auto;
+  min-height: 0;
   padding: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .file-explorer-item {
@@ -117,10 +117,12 @@
 
 /* Styling für die ausklappbaren Elemente */
 .file-children {
-  margin-left: 20px;
+  margin-left: 16px;
   display: flex;
   flex-direction: column;
-  overflow: visible;
+  gap: 2px;
+  min-width: 0;
+  overflow-y: visible;
 }
 
 /* Verbesserte Styles für Ordner und Dateien */

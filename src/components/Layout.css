@@ -590,6 +590,29 @@ body {
   border-bottom: 1px solid #0e639c;
 }
 
+.empty-editor {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  background-color: var(--bg-primary, #1e1e1e);
+  color: var(--text-secondary, #858585);
+  text-align: center;
+  padding: 20px;
+}
+
+.empty-editor h2 {
+  font-size: 1.5rem;
+  margin-bottom: 1rem;
+  font-weight: 400;
+}
+
+.empty-editor p {
+  font-size: 1rem;
+  max-width: 400px;
+}
+
 @media (max-width: 900px) {
   .right-panel {
     min-width: 180px;

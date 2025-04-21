@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import './Layout.css';
 import Sidebar from './Sidebar';
 import StatusBar from './StatusBar';
@@ -66,10 +66,20 @@ const Layout: React.FC<LayoutProps> = ({
   const [showFindInFilesDialog, setShowFindInFilesDialog] = useState(false);
   const [showReplaceInFilesDialog, setShowReplaceInFilesDialog] = useState(false);
 
+  // Editor-Zustände für Dateibearbeitung
+  const [currentFileContent, setCurrentFileContent] = useState<string>(initialContent);
+  const [currentLanguage, setCurrentLanguage] = useState<string>(initialLanguage);
+  const [openedFile, setOpenedFile] = useState<string | null>(activeFile || null);
+
+  // Effekt zum Überprüfen der Monaco-Verfügbarkeit
+  useEffect(() => {
+    // Nicht benötigt, da wir den Monaco-Editor durch einen einfachen Textbereich ersetzen
+  }, []);
+
   // --- Suchfunktion für "In Dateien suchen" ---
   const [findInFilesQuery, setFindInFilesQuery] = useState('');
   const [findInFilesResults, setFindInFilesResults] = useState<any[]>([]);
-  const searchInputRef = React.createRef<HTMLInputElement>();
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (showFindInFilesDialog && searchInputRef.current) {
@@ -294,11 +304,11 @@ const Layout: React.FC<LayoutProps> = ({
           if (activeFile) {
             // Hier würden wir den aktuellen Dateiinhalt abrufen
             const content = document.querySelector('.editor-content')?.textContent || '';
-            const result = await window.electron.ipcRenderer.invoke('file:save', activeFile, content);
-            if (result.success) {
-              console.log('File saved:', result.path);
+            const result = await window.electron.ipcRenderer.invoke('fs:writeFile', activeFile, content);
+            if (result) {
+              console.log('File saved:', result);
             } else {
-              console.error('Error saving file:', result.error);
+              console.error('Error saving file:', result);
             }
           } else {
             // Wenn keine Datei aktiv ist, verhalte dich wie "Speichern unter"
@@ -310,15 +320,15 @@ const Layout: React.FC<LayoutProps> = ({
           // Hier würden wir den aktuellen Dateiinhalt abrufen
           const content = document.querySelector('.editor-content')?.textContent || '';
           const defaultPath = activeFile || '';
-          const saveResult = await window.electron.ipcRenderer.invoke('file:saveAs', content, defaultPath);
+          const saveResult = await window.electron.ipcRenderer.invoke('fs:writeFile', defaultPath, content);
           
-          if (saveResult.success) {
-            console.log('File saved as:', saveResult.path);
+          if (saveResult) {
+            console.log('File saved as:', saveResult);
             if (onOpenFile) {
-              onOpenFile(saveResult.path);
+              onOpenFile(saveResult);
             }
           } else {
-            console.error('Error saving file:', saveResult.error);
+            console.error('Error saving file:', saveResult);
           }
           break;
         
@@ -349,11 +359,11 @@ const Layout: React.FC<LayoutProps> = ({
         case 'revertFile':
           if (activeFile) {
             const revertResult = await window.electron.ipcRenderer.invoke('file:revertFile', activeFile);
-            if (revertResult.success) {
+            if (revertResult) {
               console.log('File reverted:', activeFile);
               // In einer echten App würden wir hier den Editor-Inhalt aktualisieren
             } else {
-              console.error('Error reverting file:', revertResult.error);
+              console.error('Error reverting file:', revertResult);
             }
           }
           break;
@@ -454,13 +464,110 @@ const Layout: React.FC<LayoutProps> = ({
     }
   };
 
+  // Funktion zum Laden und Öffnen einer Datei
+  const handleOpenFile = async (filePath: string) => {
+    console.log('Opening file:', filePath);
+    try {
+      // Dateiinhalt laden
+      if (typeof window !== 'undefined' && window.electron && window.electron.ipcRenderer) {
+        let fileContent;
+        
+        // Versuche zuerst mit fs:readFile
+        try {
+          fileContent = await window.electron.ipcRenderer.invoke('fs:readFile', filePath);
+          console.log('File content loaded with fs:readFile:', fileContent ? 'Content loaded' : 'No content');
+        } catch (readError) {
+          console.error('Error with fs:readFile, trying readFile:', readError);
+          // Fallback auf alten Handler
+          try {
+            fileContent = await window.electron.ipcRenderer.invoke('readFile', filePath);
+            console.log('File content loaded with readFile:', fileContent ? 'Content loaded' : 'No content');
+          } catch (fallbackError) {
+            console.error('Both file reading methods failed:', fallbackError);
+            throw new Error('Konnte Datei nicht lesen');
+          }
+        }
+        
+        // Dateiendung bestimmen für Syntax-Highlighting
+        const extension = filePath.split('.').pop()?.toLowerCase() || '';
+        let language = 'plaintext';
+        
+        // Sprachzuordnung basierend auf Dateiendung
+        switch (extension) {
+          case 'js': language = 'javascript'; break;
+          case 'jsx': language = 'javascript'; break;
+          case 'ts': language = 'typescript'; break;
+          case 'tsx': language = 'typescript'; break;
+          case 'html': language = 'html'; break;
+          case 'css': language = 'css'; break;
+          case 'json': language = 'json'; break;
+          case 'md': language = 'markdown'; break;
+          default: language = 'plaintext';
+        }
+        
+        console.log('Setting file content and language:', language);
+        // Datei im Editor öffnen
+        setCurrentFileContent(fileContent || '');
+        setCurrentLanguage(language);
+        setOpenedFile(filePath);
+        
+        // Auch die übergebene onOpenFile-Funktion aufrufen (falls vorhanden)
+        if (onOpenFile) {
+          onOpenFile(filePath);
+        }
+      }
+    } catch (error) {
+      console.error('Error opening file:', error);
+      alert(`Fehler beim Öffnen der Datei: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
+  const handleSaveFile = async () => {
+    if (!openedFile) return;
+    
+    try {
+      if (typeof window !== 'undefined' && window.electron && window.electron.ipcRenderer) {
+        // Holen Sie den aktuellen Inhalt aus dem Textarea
+        const content = currentFileContent;
+        
+        let success = false;
+        
+        // Versuche zuerst mit fs:writeFile
+        try {
+          success = await window.electron.ipcRenderer.invoke('fs:writeFile', openedFile, content);
+          console.log('File saved with fs:writeFile:', success ? 'Success' : 'Failed');
+        } catch (writeError) {
+          console.error('Error with fs:writeFile, trying writeFile:', writeError);
+          // Fallback auf alten Handler
+          try {
+            success = await window.electron.ipcRenderer.invoke('writeFile', openedFile, content);
+            console.log('File saved with writeFile:', success ? 'Success' : 'Failed');
+          } catch (fallbackError) {
+            console.error('Both file writing methods failed:', fallbackError);
+            throw new Error('Konnte Datei nicht speichern');
+          }
+        }
+        
+        if (success) {
+          console.log('File saved:', openedFile);
+        } else {
+          console.error('Error saving file');
+          alert('Fehler beim Speichern der Datei');
+        }
+      }
+    } catch (error) {
+      console.error('Error saving file:', error);
+      alert(`Fehler beim Speichern der Datei: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
   const renderSidebarContent = () => {
     switch (activeTab) {
       case 'explorer':
         return (
           <FileExplorer 
             fileStructure={fileStructure} 
-            onOpenFile={onOpenFile}
+            onOpenFile={handleOpenFile}
             activeFile={activeFile}
           />
         );
@@ -508,8 +615,33 @@ const Layout: React.FC<LayoutProps> = ({
                   <p>Hier können Sie verschiedene Editor-Funktionen ausprobieren und testen.</p>
                   <button onClick={() => setShowEditorPlayground(false)}>Schließen</button>
                 </div>
+              ) : openedFile ? (
+                <div className="simple-editor-container" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ padding: '8px', background: '#1e1e1e', color: '#ddd', borderBottom: '1px solid #333' }}>
+                    <strong>Datei:</strong> {openedFile}
+                  </div>
+                  <textarea 
+                    style={{ 
+                      flex: 1, 
+                      background: '#1e1e1e', 
+                      color: '#ddd', 
+                      border: 'none', 
+                      padding: '12px',
+                      fontFamily: 'monospace',
+                      fontSize: '14px',
+                      resize: 'none',
+                      outline: 'none'
+                    }}
+                    value={currentFileContent}
+                    onChange={(e) => setCurrentFileContent(e.target.value)}
+                    spellCheck={false}
+                  />
+                </div>
               ) : (
-                children
+                <div className="empty-editor">
+                  <h2>Keine Datei geöffnet</h2>
+                  <p>Wählen Sie eine Datei aus dem Explorer aus, um sie zu bearbeiten.</p>
+                </div>
               )}
             </div>
             {showTerminal && (
