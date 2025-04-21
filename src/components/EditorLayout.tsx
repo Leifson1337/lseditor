@@ -13,7 +13,6 @@ interface EditorLayoutProps {
   initialContent?: string;
   initialLanguage?: string;
   onSave?: (content: string) => void;
-  onFileOpen?: (path: string) => void;
   fileStructure: any[];
   activeFile?: string;
   projectPath?: string;
@@ -23,7 +22,6 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   initialContent = '',
   initialLanguage = 'typescript',
   onSave,
-  onFileOpen,
   fileStructure,
   activeFile,
   projectPath = ''
@@ -32,25 +30,46 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const [tabs, setTabs] = useState<Array<{ id: string; title: string; path: string }>>([]);
+
+
   const [editorContent, setEditorContent] = useState<string>(initialContent);
   const [editorLanguage, setEditorLanguage] = useState<string>(initialLanguage);
 
-  const handleFileOpen = (path: string) => {
-    if (onFileOpen) {
-      onFileOpen(path);
-    }
-    // Add new tab if it doesn't exist
-    let tab = tabs.find(tab => tab.path === path);
+  // Dateiinhalt laden und Tab aktivieren
+  const openFileInTab = async (filePath: string) => {
+    if (!filePath) return;
+    let tab = tabs.find(tab => tab.path === filePath);
     if (!tab) {
       tab = {
         id: Math.random().toString(36).substr(2, 9),
-        title: path.split('/').pop() || path,
-        path
+        title: filePath.split(/[\\/]/).pop() || filePath,
+        path: filePath
       };
-      setTabs([...tabs, tab]);
+      setTabs(prev => [...prev, tab!]);
     }
     setActiveTab(tab.id);
+    // Dateiinhalt laden
+    try {
+      let content = '';
+      if (window.electron?.ipcRenderer.invoke) {
+        content = await window.electron.ipcRenderer.invoke('fs:readFile', filePath);
+        if (!content) {
+          content = await window.electron.ipcRenderer.invoke('readFile', filePath);
+        }
+      }
+      setEditorContent(content ?? '');
+    } catch {
+      setEditorContent('Fehler beim Laden der Datei.');
+    }
   };
+
+  // Tab-Wechsel lädt Inhalt
+  useEffect(() => {
+    const tab = tabs.find(t => t.id === activeTab);
+    if (tab) {
+      openFileInTab(tab.path);
+    }
+  }, [activeTab]);
 
   const handleTabClose = (tabId: string) => {
     setTabs(tabs.filter(tab => tab.id !== tabId));
@@ -58,85 +77,6 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
       setActiveTab(tabs.length > 1 ? tabs[tabs.length - 2].id : null);
     }
   };
-
-  useEffect(() => {
-    const tab = tabs.find(t => t.id === activeTab);
-    if (tab) {
-      // Detailliertes Logging für Debugging
-      console.log('Aktiver Tab zum Laden:', tab);
-      console.log('Datei wird geladen:', tab.path);
-      console.log('Projekt-Pfad:', projectPath);
-
-      try {
-        // Den Pfad der Datei normalisieren
-        let filePath = tab.path;
-
-        // Prüfen, ob es ein absoluter Pfad ist
-        if (!filePath.match(/^([a-zA-Z]:\\|\\\\)/)) {
-          // Wenn nicht, zum Projektpfad hinzufügen
-          filePath = projectPath ? 
-            (projectPath.endsWith('\\') ? `${projectPath}${filePath}` : `${projectPath}\\${filePath}`) 
-            : filePath;
-        }
-        
-        console.log('Finaler Dateipfad für Lesen:', filePath);
-
-        // Direkten IPC-Aufruf zum Lesen verwenden
-        window.electron?.ipcRenderer.invoke('readFile', filePath)
-          .then(content => {
-            console.log('Datei erfolgreich gelesen, Länge:', content ? content.length : 0);
-            setEditorContent(content ?? '');
-            
-            // Sprache anhand Dateiendung setzen
-            const ext = tab.path.split('.').pop()?.toLowerCase();
-            let lang = 'plaintext';
-            switch (ext) {
-              case 'js': lang = 'javascript'; break;
-              case 'ts': lang = 'typescript'; break;
-              case 'tsx': lang = 'typescript'; break;
-              case 'json': lang = 'json'; break;
-              case 'css': lang = 'css'; break;
-              case 'html': lang = 'html'; break;
-              case 'md': lang = 'markdown'; break;
-              case 'py': lang = 'python'; break;
-              default: lang = 'plaintext';
-            }
-            setEditorLanguage(lang);
-          })
-          .catch(err => {
-            // Alternativ mit fallback fs:readFile versuchen
-            console.log('Fallback: Versuche fs:readFile mit:', filePath);
-            window.electron?.ipcRenderer.invoke('fs:readFile', filePath)
-              .then(content => {
-                console.log('Datei mit fs:readFile erfolgreich gelesen');
-                setEditorContent(content ?? '');
-                // Language handling...
-                const ext = tab.path.split('.').pop()?.toLowerCase();
-                let lang = 'plaintext';
-                switch (ext) {
-                  case 'js': lang = 'javascript'; break;
-                  case 'ts': lang = 'typescript'; break;
-                  case 'tsx': lang = 'typescript'; break;
-                  case 'json': lang = 'json'; break;
-                  case 'css': lang = 'css'; break;
-                  case 'html': lang = 'html'; break;
-                  case 'md': lang = 'markdown'; break;
-                  case 'py': lang = 'python'; break;
-                  default: lang = 'plaintext';
-                }
-                setEditorLanguage(lang);
-              })
-              .catch(fsErr => {
-                console.error('Beide Methoden zum Lesen fehlgeschlagen:', fsErr);
-                setEditorContent('Fehler beim Lesen der Datei. Pfad: ' + filePath);
-              });
-          });
-      } catch (error) {
-        console.error('Fehler beim Verarbeiten des Tab-Pfads:', error);
-        setEditorContent('Fehler: ' + (error instanceof Error ? error.message : String(error)));
-      }
-    }
-  }, [activeTab, projectPath]);
 
   return (
     <ThemeProvider>
@@ -174,8 +114,8 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                   <div className="sidebar-content-panel">
                     <FileExplorer
                       fileStructure={fileStructure}
-                      onOpenFile={handleFileOpen}
-                      activeFile={tabs.find(t => t.id === activeTab)?.path || null}
+                      onOpenFile={openFileInTab}
+                      activeFile={tabs.find(t => t.id === activeTab)?.path || ''}
                       projectPath={projectPath}
                     />
                   </div>
@@ -186,9 +126,8 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                 {tabs.length > 0 && activeTab ? (
                   <Editor
                     height="100%"
-                    defaultLanguage={editorLanguage}
-                    defaultValue={editorContent}
                     value={editorContent}
+                    language={editorLanguage}
                     theme="vs-dark"
                     options={{
                       minimap: { enabled: true },

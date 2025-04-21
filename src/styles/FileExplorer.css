@@ -21,7 +21,7 @@
   display: flex;
   flex-direction: column;
   position: relative;
-  overflow: hidden !important;
+  overflow-y: auto !important;
 }
 
 .file-explorer-header {
@@ -189,3 +189,38 @@
 .file-node[data-level="3"] { padding-left: 70px; }
 .file-node[data-level="4"] { padding-left: 90px; }
 .file-node[data-level="5"] { padding-left: 110px; }
+
+/* Kontextmenü für Rechtsklick */
+.file-context-menu {
+  position: fixed;
+  background: #23272e;
+  color: #fff;
+  border: 1px solid #333;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  padding: 6px 0;
+  min-width: 150px;
+  z-index: 9999;
+  font-size: 15px;
+  list-style: none;
+  margin: 0;
+}
+.file-context-menu li {
+  padding: 8px 18px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.file-context-menu li:hover {
+  background: #2563eb;
+  color: #fff;
+}
+
+.file-node input[type="text"] {
+  font-size: 14px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid #444;
+  background: #23272e;
+  color: #fff;
+  outline: none;
+}

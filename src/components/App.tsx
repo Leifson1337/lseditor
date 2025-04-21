@@ -444,14 +444,7 @@ const App: React.FC = () => {
         ) : (
           <Layout
             fileStructure={fileStructure}
-            onOpenFile={handleFileOpen}
-            activeFile={activeFile}
-            terminalPort={terminalPort}
-            isTerminalOpen={isTerminalOpen}
-            onTerminalOpen={handleTerminalOpen}
-            onTerminalClose={handleTerminalClose}
-            recentProjects={recentProjects}
-            projectPath={projectPath} // Projektpfad an Layout übergeben
+            projectPath={projectPath}
           >
             <Editor
               filePath={activeFile || 'Kein File geöffnet'}

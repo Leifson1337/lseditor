@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { FolderIcon, FileIcon, ChevronRightIcon, ChevronDownIcon } from './Icons';
 import '../styles/FileExplorer.css';
 
@@ -12,23 +12,50 @@ interface FileNode {
 interface FileExplorerProps {
   fileStructure: FileNode[];
   onOpenFile: (filePath: string) => void;
-  activeFile?: string | null;
+  activeFile?: string;
   projectPath?: string;
 }
+
+// Kontextmenü-Typen explizit deklarieren
+interface ContextMenuProps {
+  x: number;
+  y: number;
+  onOpen: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+  onClose: () => void;
+}
+
+const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, onOpen, onRename, onDelete, onClose }) => (
+  <ul className="file-context-menu" style={{ top: y, left: x, position: 'fixed', zIndex: 1000 }}>
+    <li onClick={onOpen}>Öffnen</li>
+    <li onClick={onRename}>Umbenennen</li>
+    <li onClick={onDelete}>Löschen</li>
+    <li onClick={onClose}>Abbrechen</li>
+  </ul>
+);
 
 export const FileExplorer: React.FC<FileExplorerProps> = ({
   fileStructure,
   onOpenFile,
-  activeFile,
+  activeFile = '',
   projectPath = ''
 }) => {
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{x: number, y: number, file: string} | null>(null);
+  const [renamingFile, setRenamingFile] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState<string>('');
 
-  // Synchronisiere selectedFile, wenn activeFile sich ändert
-  useEffect(() => {
-    if (activeFile) setSelectedFile(activeFile);
-  }, [activeFile]);
+  // Doppelklick öffnet Datei IMMER im Editor (rechter Bereich)
+  const handleFileDoubleClick = (filePath: string) => {
+    let absPath = filePath;
+    if (!filePath.match(/^([a-zA-Z]:\\|\\\\)/)) {
+      absPath = projectPath
+        ? (projectPath.endsWith('\\') ? `${projectPath}${filePath}` : `${projectPath}\\${filePath}`)
+        : filePath;
+    }
+    onOpenFile(absPath);
+  };
 
   const toggleFolder = (path: string) => {
     const newExpandedFolders = new Set(expandedFolders);
@@ -40,54 +67,59 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     setExpandedFolders(newExpandedFolders);
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>, node: FileNode) => {
-    if (node.type !== 'file') return;
-    if (e.key === 'Enter' || e.key === ' ') {
-      onOpenFile(node.path);
+  // Kontextmenü-Handler
+  const handleContextMenu = (e: React.MouseEvent, filePath: string) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, file: filePath });
+  };
+
+  const handleOpenFromMenu = () => {
+    if (contextMenu) {
+      onOpenFile(contextMenu.file);
+      setContextMenu(null);
+    }
+  };
+  const handleRenameFromMenu = () => {
+    if (contextMenu) {
+      setRenamingFile(contextMenu.file);
+      setRenameValue(contextMenu.file.split(/[\\/]/).pop() || '');
+      setContextMenu(null);
+    }
+  };
+  const handleDeleteFromMenu = () => {
+    if (contextMenu) {
+      // TODO: Datei löschen implementieren
+      alert('Löschen: ' + contextMenu.file);
+      setContextMenu(null);
     }
   };
 
-  const handleFileClick = (filePath: string) => {
-    setSelectedFile(filePath);
-    // Datei sofort im Editor öffnen, mit absolutem Pfad wie bei handleFileDoubleClick
-    if (onOpenFile) {
-      if (!filePath.match(/^([a-zA-Z]:\\|\\\\)/)) {
-        const newPath = projectPath ?
-          projectPath.endsWith('\\') ?
-            `${projectPath}${filePath}` :
-            `${projectPath}\\${filePath}`
-          : filePath;
-        onOpenFile(newPath);
-      } else {
-        onOpenFile(filePath);
-      }
-    }
+  // Umbenennen bestätigen
+  const handleRenameConfirm = () => {
+    // TODO: Datei wirklich umbenennen (IPC/Backend)
+    alert(`Datei umbenennen: ${renamingFile} => ${renameValue}`);
+    setRenamingFile(null);
+    setRenameValue('');
   };
 
-  const handleFileDoubleClick = (filePath: string) => {
-    // Detailliertes Logging für Debugging
-    console.log('Double-clicked file:', filePath);
-    console.log('Project path is:', projectPath);
-    // Datei sofort im Editor öffnen, mit absolutem Pfad wie bei handleFileClick
-    if (onOpenFile) {
-      if (!filePath.match(/^([a-zA-Z]:\\|\\\\)/)) {
-        const newPath = projectPath ?
-          projectPath.endsWith('\\') ?
-            `${projectPath}${filePath}` :
-            `${projectPath}\\${filePath}`
-          : filePath;
-        onOpenFile(newPath);
-      } else {
-        onOpenFile(filePath);
-      }
+  // Hilfsfunktion für Dateispezifische Icons
+  function getFileIconByExtension(filename: string) {
+    const ext = filename.split('.').pop()?.toLowerCase();
+    switch (ext) {
+      case 'js': case 'jsx': return <span title="JavaScript" style={{color: '#f7e018'}}>[JS]</span>;
+      case 'ts': case 'tsx': return <span title="TypeScript" style={{color: '#3178c6'}}>[TS]</span>;
+      case 'json': return <span title="JSON" style={{color: '#cbcb41'}}>&#123;&#125;</span>;
+      case 'md': return <span title="Markdown" style={{color: '#519975'}}>[MD]</span>;
+      case 'css': return <span title="CSS" style={{color: '#563d7c'}}>[CSS]</span>;
+      case 'html': return <span title="HTML" style={{color: '#e34c26'}}>[HTML]</span>;
+      case 'py': return <span title="Python" style={{color: '#3572A5'}}>[PY]</span>;
+      default: return <FileIcon />;
     }
-  };
+  }
 
   const renderFileNode = (node: FileNode, level: number = 0) => {
     const isExpanded = expandedFolders.has(node.path);
     const isActive = activeFile === node.path;
-    const isSelected = selectedFile === node.path;
-
     if (node.type === 'directory') {
       return (
         <div key={node.path}>
@@ -108,83 +140,46 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
         </div>
       );
     }
-
     return (
       <div
         key={node.path}
-        className={`file-node file ${isActive ? 'active' : ''} ${isSelected ? 'selected' : ''}`}
+        className={`file-node file ${isActive ? 'active' : ''}`}
         data-level={level}
         tabIndex={0}
-        onClick={() => handleFileClick(node.path)}
         onDoubleClick={() => handleFileDoubleClick(node.path)}
-        onKeyDown={(e) => handleKeyDown(e, node)}
+        onContextMenu={e => handleContextMenu(e, node.path)}
       >
         {getFileIconByExtension(node.name)}
-        <span className="file-name">{node.name}</span>
+        {renamingFile === node.path ? (
+          <input
+            type="text"
+            value={renameValue}
+            autoFocus
+            onChange={e => setRenameValue(e.target.value)}
+            onBlur={handleRenameConfirm}
+            onKeyDown={e => { if (e.key === 'Enter') handleRenameConfirm(); if (e.key === 'Escape') setRenamingFile(null); }}
+            style={{ marginLeft: 8, fontSize: 14 }}
+          />
+        ) : (
+          <span className="file-name">{node.name}</span>
+        )}
       </div>
     );
   };
 
-  const handleContainerKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if ((e.key === 'Enter' || e.key === ' ') && selectedFile) {
-      onOpenFile(selectedFile);
-    }
-  };
-
-  // Hilfsfunktion zur Auswahl eines passenden Icons anhand der Dateiendung
-  const getFileIconByExtension = (filename: string) => {
-    const ext = filename.split('.').pop()?.toLowerCase();
-    switch (ext) {
-      case 'js':
-      case 'jsx':
-        return <span title="JavaScript" style={{color: '#f7e018'}}>[JS]</span>;
-      case 'ts':
-      case 'tsx':
-        return <span title="TypeScript" style={{color: '#3178c6'}}>[TS]</span>;
-      case 'json':
-        return <span title="JSON" style={{color: '#cbcb41'}}>[&#123;&#125;]</span>;
-      case 'md':
-        return <span title="Markdown" style={{color: '#519975'}}>[MD]</span>;
-      case 'css':
-        return <span title="CSS" style={{color: '#563d7c'}}>[CSS]</span>;
-      case 'html':
-        return <span title="HTML" style={{color: '#e34c26'}}>[HTML]</span>;
-      case 'png':
-      case 'jpg':
-      case 'jpeg':
-      case 'gif':
-        return <span title="Bild" style={{color: '#c678dd'}}>[IMG]</span>;
-      case 'svg':
-        return <span title="SVG" style={{color: '#ffb13b'}}>[SVG]</span>;
-      case 'sh':
-      case 'bash':
-        return <span title="Shell" style={{color: '#4ec9b0'}}>[SH]</span>;
-      case 'py':
-        return <span title="Python" style={{color: '#3572A5'}}>[PY]</span>;
-      case 'lock':
-        return <span title="Lockfile" style={{color: '#a0a0a0'}}>[LOCK]</span>;
-      case 'yml':
-      case 'yaml':
-        return <span title="YAML" style={{color: '#cb171e'}}>[YML]</span>;
-      case 'txt':
-        return <span title="Text" style={{color: '#888'}}>[TXT]</span>;
-      default:
-        return <FileIcon />;
-    }
-  };
-
   return (
-    <div className="file-explorer" tabIndex={0} onKeyDown={handleContainerKeyDown} style={{overflowY: 'auto', height: '100%', maxHeight: '100vh', minHeight: 0}}>
-      <div className="file-explorer-header">
-        <h3>Dateien</h3>
-      </div>
-      <div className="file-explorer-content">
-        {fileStructure && fileStructure.length > 0 ? (
-          fileStructure.map((node) => renderFileNode(node))
-        ) : (
-          <div className="empty-explorer">Keine Dateien gefunden</div>
-        )}
-      </div>
+    <div className="file-explorer">
+      {fileStructure.map((node) => renderFileNode(node))}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onOpen={handleOpenFromMenu}
+          onRename={handleRenameFromMenu}
+          onDelete={handleDeleteFromMenu}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
     </div>
   );
 };
