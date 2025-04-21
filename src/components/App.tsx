@@ -451,6 +451,7 @@ const App: React.FC = () => {
             onTerminalOpen={handleTerminalOpen}
             onTerminalClose={handleTerminalClose}
             recentProjects={recentProjects}
+            projectPath={projectPath} // Projektpfad an Layout übergeben
           >
             <Editor
               filePath={activeFile || 'Kein File geöffnet'}

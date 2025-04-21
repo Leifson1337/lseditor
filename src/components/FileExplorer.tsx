@@ -13,12 +13,14 @@ interface FileExplorerProps {
   fileStructure: FileNode[];
   onOpenFile: (filePath: string) => void;
   activeFile?: string | null;
+  projectPath?: string;
 }
 
 export const FileExplorer: React.FC<FileExplorerProps> = ({
   fileStructure,
   onOpenFile,
-  activeFile
+  activeFile,
+  projectPath = ''
 }) => {
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
@@ -47,17 +49,37 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
 
   const handleFileClick = (filePath: string) => {
     setSelectedFile(filePath);
-    // Datei direkt öffnen, wenn sie schon ausgewählt ist (Einzelklick auf bereits selektierte Datei)
-    if (selectedFile === filePath && onOpenFile) {
-      onOpenFile(filePath);
+    // Datei sofort im Editor öffnen, mit absolutem Pfad wie bei handleFileDoubleClick
+    if (onOpenFile) {
+      if (!filePath.match(/^([a-zA-Z]:\\|\\\\)/)) {
+        const newPath = projectPath ?
+          projectPath.endsWith('\\') ?
+            `${projectPath}${filePath}` :
+            `${projectPath}\\${filePath}`
+          : filePath;
+        onOpenFile(newPath);
+      } else {
+        onOpenFile(filePath);
+      }
     }
   };
 
   const handleFileDoubleClick = (filePath: string) => {
+    // Detailliertes Logging für Debugging
     console.log('Double-clicked file:', filePath);
-    // Bei Doppelklick die Datei öffnen
+    console.log('Project path is:', projectPath);
+    // Datei sofort im Editor öffnen, mit absolutem Pfad wie bei handleFileClick
     if (onOpenFile) {
-      onOpenFile(filePath);
+      if (!filePath.match(/^([a-zA-Z]:\\|\\\\)/)) {
+        const newPath = projectPath ?
+          projectPath.endsWith('\\') ?
+            `${projectPath}${filePath}` :
+            `${projectPath}\\${filePath}`
+          : filePath;
+        onOpenFile(newPath);
+      } else {
+        onOpenFile(filePath);
+      }
     }
   };
 
@@ -152,8 +174,17 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   };
 
   return (
-    <div className="file-explorer" tabIndex={0} onKeyDown={handleContainerKeyDown}>
-      {fileStructure.map((node) => renderFileNode(node))}
+    <div className="file-explorer" tabIndex={0} onKeyDown={handleContainerKeyDown} style={{overflowY: 'auto', height: '100%', maxHeight: '100vh', minHeight: 0}}>
+      <div className="file-explorer-header">
+        <h3>Dateien</h3>
+      </div>
+      <div className="file-explorer-content">
+        {fileStructure && fileStructure.length > 0 ? (
+          fileStructure.map((node) => renderFileNode(node))
+        ) : (
+          <div className="empty-explorer">Keine Dateien gefunden</div>
+        )}
+      </div>
     </div>
   );
 };

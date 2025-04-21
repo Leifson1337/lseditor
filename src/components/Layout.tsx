@@ -27,6 +27,7 @@ interface LayoutProps {
   onTerminalOpen?: () => void;
   onTerminalClose?: () => void;
   recentProjects?: string[];
+  projectPath?: string;
 }
 
 interface FindInFilesResult {
@@ -48,7 +49,8 @@ const Layout: React.FC<LayoutProps> = ({
   isTerminalOpen = false,
   onTerminalOpen = () => {},
   onTerminalClose = () => {},
-  recentProjects = []
+  recentProjects = [],
+  projectPath = ''
 }) => {
   const [activeTab, setActiveTab] = useState('explorer');
   const [isAIChatOpen, setIsAIChatOpen] = useState(true);
@@ -510,7 +512,11 @@ const Layout: React.FC<LayoutProps> = ({
         setCurrentFileContent(fileContent || '');
         setCurrentLanguage(language);
         setOpenedFile(filePath);
-        
+        // Editor-Textarea fokussieren, damit sofort getippt werden kann
+        setTimeout(() => {
+          const textarea = document.querySelector('.simple-editor-container textarea') as HTMLTextAreaElement;
+          if (textarea) textarea.focus();
+        }, 100);
         // Auch die übergebene onOpenFile-Funktion aufrufen (falls vorhanden)
         if (onOpenFile) {
           onOpenFile(filePath);

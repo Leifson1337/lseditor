@@ -16,12 +16,12 @@
   margin: 0;
   padding: 0;
   min-height: 0;
-  flex: 1;
-  height: 100%;
-  overflow-y: auto;
+  flex: 1 1 auto;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   position: relative;
+  overflow: hidden !important;
 }
 
 .file-explorer-header {
@@ -30,16 +30,24 @@
   font-size: 15px;
   color: var(--text-primary, #fff);
   flex-shrink: 0;
+  background: inherit;
+  z-index: 2;
 }
 
 .file-explorer-content {
-  flex: 1;
+  position: absolute;
+  top: 48px;
+  bottom: 0;
+  left: 0;
+  right: 0;
   overflow-y: auto;
   min-height: 0;
+  max-height: none;
   padding: 8px 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: block;
+  /* Ermögliche mehr Scrollbereich oben/unten */
+  margin-bottom: 32px;
+  margin-top: 16px;
 }
 
 .file-explorer-item {
@@ -49,6 +57,11 @@
   color: var(--text-primary, #d4d4d4);
   border-radius: 4px;
   transition: background-color 0.2s;
+  min-height: 32px;
+  line-height: 32px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  gap: 8px;
 }
 
 .file-explorer-item:hover {
@@ -138,6 +151,16 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.file-node.file,
+.file-explorer-item {
+  min-height: 32px;
+  line-height: 32px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
 }
 
 .file-node:hover {
