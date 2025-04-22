@@ -46,6 +46,9 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   const [renamingFile, setRenamingFile] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState<string>('');
 
+  // SCROLL-FIX: Explorer-Liste scrollbar machen
+  // (max-height: 100%; overflow-y: auto)
+
   // Doppelklick öffnet Datei IMMER im Editor (rechter Bereich)
   const handleFileDoubleClick = (filePath: string) => {
     let absPath = filePath;
@@ -168,8 +171,8 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   };
 
   return (
-    <div className="file-explorer">
-      {fileStructure.map((node) => renderFileNode(node))}
+    <div className="file-explorer-root" style={{height:'100%',maxHeight:'100%',overflowY:'auto'}}>
+      {fileStructure.map(node => renderFileNode(node))}
       {contextMenu && (
         <ContextMenu
           x={contextMenu.x}

@@ -6,6 +6,7 @@ interface Tab {
   id: string;
   title: string;
   path: string;
+  dirty?: boolean;
 }
 
 interface TabBarProps {
@@ -29,7 +30,9 @@ export const TabBar: React.FC<TabBarProps> = ({
           className={`tab ${tab.id === activeTab ? 'active' : ''}`}
           onClick={() => onTabSelect(tab.id)}
         >
-          <span className="tab-title">{tab.title}</span>
+          <span className="tab-title">
+            {tab.title}{tab.dirty ? ' *' : ''}
+          </span>
           <button
             className="tab-close"
             onClick={(e) => {

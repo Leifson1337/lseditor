@@ -11,6 +11,24 @@
   position: relative;
 }
 
+.file-explorer-root {
+  background: var(--background-color, #22252a);
+  margin: 0;
+  padding: 0;
+  flex: 1 1 auto;
+  height: 100%;
+  max-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow-y: auto !important;
+  min-height: 0;
+}
+
+.file-explorer-root > *:last-child {
+  margin-bottom: 32px;
+}
+
 .file-explorer {
   background: var(--background-color, #22252a);
   margin: 0;

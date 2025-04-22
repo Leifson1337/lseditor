@@ -48,9 +48,16 @@
 
 .sidebar-content-panel {
   flex: 1;
-  overflow: auto;
+  overflow-y: auto !important;
   height: 100%;
+  max-height: 100vh;
   border-right: 1px solid var(--border-color);
+  min-height: 0;
+  position: relative;
+  background: var(--sidebar-bg, #23272e);
+  display: flex;
+  flex-direction: column;
+  padding: 0;
 }
 
 .editor-container {
@@ -65,4 +72,50 @@
   left: 0;
   right: 0;
   bottom: 0;
+}
+
+.file-explorer-root {
+  flex: 1 1 auto;
+  height: 100%;
+  max-height: none;
+  min-height: 0;
+  overflow-y: auto !important;
+  background: var(--background-color, #22252a);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.file-explorer-root > *:last-child {
+  margin-bottom: 48px;
+}
+
+.editor-empty-ui {
+  height: 100%;
+  width: 100%;
+  min-height: 300px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #888;
+  background: linear-gradient(135deg, #23272e 80%, #23272e00 100%);
+  font-size: 1.2rem;
+  user-select: none;
+  transition: background 0.2s;
+}
+
+.editor-empty-title {
+  font-size: 2rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: #aaa;
+}
+
+.editor-empty-desc {
+  font-size: 1.1rem;
+  color: #b9b9b9;
+  margin-bottom: 12px;
+  text-align: center;
+  max-width: 340px;
 }

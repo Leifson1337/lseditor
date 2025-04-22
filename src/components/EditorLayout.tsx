@@ -8,6 +8,8 @@ import { ThemeProvider } from '../contexts/ThemeContext';
 import { EditorProvider } from '../contexts/EditorContext';
 import { AIProvider } from '../contexts/AIContext';
 import '../styles/EditorLayout.css';
+import { FaRegFile } from 'react-icons/fa';
+import { ResizableSidebar, ResizableAIPanel, ResizableMainArea } from './ResizableComponents';
 
 interface EditorLayoutProps {
   initialContent?: string;
@@ -29,7 +31,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string | null>(null);
-  const [tabs, setTabs] = useState<Array<{ id: string; title: string; path: string }>>([]);
+  const [tabs, setTabs] = useState<Array<{ id: string; title: string; path: string; dirty: boolean }>>([]);
   const [sidebarTab, setSidebarTab] = useState<string>('explorer');
 
   const [editorContent, setEditorContent] = useState<string>(initialContent);
@@ -43,7 +45,8 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
       tab = {
         id: Math.random().toString(36).substr(2, 9),
         title: filePath.split(/[\\/]/).pop() || filePath,
-        path: filePath
+        path: filePath,
+        dirty: false
       };
       setTabs(prev => [...prev, tab!]);
     }
@@ -78,6 +81,50 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
     }
   };
 
+  // Hilfsfunktion: Prüfen ob Datei ein Bild/Video ist
+  const isMediaFile = (filename: string) => {
+    const ext = filename.split('.').pop()?.toLowerCase();
+    if (!ext) return false;
+    const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'svg', 'webp'];
+    const videoExts = ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv'];
+    return imageExts.includes(ext) || videoExts.includes(ext);
+  };
+
+  // dirty-Flag in Tabs verwalten
+  const setTabDirty = (tabId: string, dirty: boolean) => {
+    setTabs(prevTabs => prevTabs.map(tab =>
+      tab.id === tabId ? { ...tab, dirty } : tab
+    ));
+  };
+
+  // Datei speichern
+  const saveActiveTab = async () => {
+    const tab = tabs.find(t => t.id === activeTab);
+    if (!tab) return;
+    if (window.electron?.ipcRenderer.invoke) {
+      await window.electron.ipcRenderer.invoke('file:save', tab.path, editorContent);
+      setTabDirty(tab.id, false);
+    }
+  };
+
+  // STRG+S Listener
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        saveActiveTab();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeTab, editorContent, tabs]);
+
+  // Editor-Inhalt ändern
+  const handleEditorChange = (val: string | undefined) => {
+    setEditorContent(val ?? '');
+    if (activeTab) setTabDirty(activeTab, true);
+  };
+
   return (
     <ThemeProvider>
       <EditorProvider>
@@ -106,49 +153,74 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
             
             <div className="editor-layout-main">
               {isSidebarOpen && (
-                <div className="sidebar-container">
-                  <Sidebar 
-                    activeTab={sidebarTab}
-                    onTabChange={setSidebarTab}
-                  />
-                  <div className="sidebar-content-panel">
-                    {sidebarTab === 'explorer' && (
-                      <FileExplorer
-                        fileStructure={fileStructure}
-                        onOpenFile={openFileInTab}
-                        activeFile={tabs.find(t => t.id === activeTab)?.path || ''}
-                        projectPath={projectPath}
-                      />
-                    )}
+                <ResizableSidebar initialWidth={260} minWidth={160} maxWidth={480}>
+                  <div className="sidebar-container">
+                    <Sidebar 
+                      activeTab={sidebarTab}
+                      onTabChange={setSidebarTab}
+                    />
+                    <div className="sidebar-content-panel">
+                      {sidebarTab === 'explorer' && (
+                        <FileExplorer
+                          fileStructure={fileStructure}
+                          onOpenFile={openFileInTab}
+                          activeFile={tabs.find(t => t.id === activeTab)?.path || ''}
+                          projectPath={projectPath}
+                        />
+                      )}
+                    </div>
                   </div>
-                </div>
+                </ResizableSidebar>
               )}
-              
-              <div className="editor-container">
-                {tabs.length > 0 && activeTab ? (
-                  <Editor
-                    height="100%"
-                    value={editorContent}
-                    language={editorLanguage}
-                    theme="vs-dark"
-                    options={{
-                      minimap: { enabled: true },
-                      fontSize: 14,
-                      lineNumbers: 'on',
-                      roundedSelection: false,
-                      scrollBeyondLastLine: false,
-                      readOnly: false,
-                      automaticLayout: true,
-                    }}
-                    onChange={val => setEditorContent(val ?? '')}
-                  />
-                ) : (
-                  <div className="editor-empty">Keine Datei geöffnet</div>
-                )}
-              </div>
-              
+              <ResizableMainArea>
+                <div className="editor-container">
+                  {tabs.length > 0 && activeTab ? (
+                    isMediaFile(tabs.find(t => t.id === activeTab)?.title || '') ? (
+                      <div className="media-preview">
+                        {/* Bild- oder Videoanzeige */}
+                        {(() => {
+                          const file = tabs.find(t => t.id === activeTab)?.path || '';
+                          const ext = (file && typeof file === 'string') ? file.split('.').pop()?.toLowerCase() || '' : '';
+                          if (["png","jpg","jpeg","gif","bmp","svg","webp"].includes(ext)) {
+                            return <img src={`file://${file}`} alt={file} style={{maxWidth:'100%',maxHeight:'100%'}} />;
+                          }
+                          if (["mp4","webm","ogg","mov","avi","mkv"].includes(ext)) {
+                            return <video src={`file://${file}`} controls style={{maxWidth:'100%',maxHeight:'100%'}} />;
+                          }
+                          return <div>Dateityp nicht unterstützt</div>;
+                        })()}
+                      </div>
+                    ) : (
+                      <Editor
+                        height="100%"
+                        value={editorContent}
+                        language={editorLanguage}
+                        theme="vs-dark"
+                        options={{
+                          minimap: { enabled: true },
+                          fontSize: 14,
+                          lineNumbers: 'on',
+                          roundedSelection: false,
+                          scrollBeyondLastLine: false,
+                          readOnly: false,
+                          automaticLayout: true,
+                        }}
+                        onChange={handleEditorChange}
+                      />
+                    )
+                  ) : (
+                    <div className="editor-empty-ui">
+                      <FaRegFile size={64} color="#888" style={{marginBottom: 16}} />
+                      <div className="editor-empty-title">Keine Datei geöffnet</div>
+                      <div className="editor-empty-desc">Wähle links eine Datei aus oder erstelle eine neue Datei, um loszulegen.</div>
+                    </div>
+                  )}
+                </div>
+              </ResizableMainArea>
               {isAIPanelOpen && (
-                <AIChatPanel />
+                <ResizableAIPanel minWidth={260} maxWidth={600} initialWidth={340}>
+                  <AIChatPanel />
+                </ResizableAIPanel>
               )}
             </div>
           </div>
