@@ -30,7 +30,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const [tabs, setTabs] = useState<Array<{ id: string; title: string; path: string }>>([]);
-
+  const [sidebarTab, setSidebarTab] = useState<string>('explorer');
 
   const [editorContent, setEditorContent] = useState<string>(initialContent);
   const [editorLanguage, setEditorLanguage] = useState<string>(initialLanguage);
@@ -108,16 +108,18 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
               {isSidebarOpen && (
                 <div className="sidebar-container">
                   <Sidebar 
-                    activeTab="explorer"
-                    onTabChange={(tab) => console.log('Tab changed:', tab)}
+                    activeTab={sidebarTab}
+                    onTabChange={setSidebarTab}
                   />
                   <div className="sidebar-content-panel">
-                    <FileExplorer
-                      fileStructure={fileStructure}
-                      onOpenFile={openFileInTab}
-                      activeFile={tabs.find(t => t.id === activeTab)?.path || ''}
-                      projectPath={projectPath}
-                    />
+                    {sidebarTab === 'explorer' && (
+                      <FileExplorer
+                        fileStructure={fileStructure}
+                        onOpenFile={openFileInTab}
+                        activeFile={tabs.find(t => t.id === activeTab)?.path || ''}
+                        projectPath={projectPath}
+                      />
+                    )}
                   </div>
                 </div>
               )}

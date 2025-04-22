@@ -13,7 +13,7 @@ import { TerminalContainer } from './TerminalContainer';
 import { TerminalPanel } from './TerminalPanel';
 import { AIConfig } from '../types/AITypes';
 import { FileNode } from '../types/FileNode';
-import { Editor } from './Editor';
+import { EditorLayout } from './EditorLayout';
 import SettingsIcon from './SettingsIcon';
 import { ThemeProvider } from '../contexts/ThemeContext';
 
@@ -446,11 +446,9 @@ const App: React.FC = () => {
             fileStructure={fileStructure}
             projectPath={projectPath}
           >
-            <Editor
-              filePath={activeFile || 'Kein File geöffnet'}
-              content={editorContent || 'Willkommen! Öffne eine Datei, um sie zu bearbeiten.'}
-              isLoading={!isInitialized}
-              onChange={handleEditorChange}
+            <EditorLayout
+              fileStructure={fileStructure}
+              projectPath={projectPath}
             />
           </Layout>
         )}
