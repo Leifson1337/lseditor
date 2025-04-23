@@ -9,7 +9,6 @@ import { EditorProvider } from '../contexts/EditorContext';
 import { AIProvider } from '../contexts/AIContext';
 import '../styles/EditorLayout.css';
 import { FaRegFile } from 'react-icons/fa';
-import { ResizableSidebar, ResizableAIPanel, ResizableMainArea } from './ResizableComponents';
 
 interface EditorLayoutProps {
   initialContent?: string;
@@ -18,6 +17,8 @@ interface EditorLayoutProps {
   fileStructure: any[];
   activeFile?: string;
   projectPath?: string;
+  onEditorChange?: (content: string) => void;
+  onOpenFile?: (filePath: string) => void;
 }
 
 export const EditorLayout: React.FC<EditorLayoutProps> = ({
@@ -25,20 +26,24 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   initialLanguage = 'typescript',
   onSave,
   fileStructure,
-  activeFile,
-  projectPath = ''
+  activeFile = '',
+  projectPath = '',
+  onEditorChange,
+  onOpenFile
 }) => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const [tabs, setTabs] = useState<Array<{ id: string; title: string; path: string; dirty: boolean }>>([]);
   const [sidebarTab, setSidebarTab] = useState<string>('explorer');
+  const [editorContent, setEditorContent] = useState('');
 
-  const [editorContent, setEditorContent] = useState<string>(initialContent);
-  const [editorLanguage, setEditorLanguage] = useState<string>(initialLanguage);
+  const [sidebarWidth, setSidebarWidth] = useState(260);
+  const minSidebarWidth = 160;
+  const maxSidebarWidth = 480;
 
   // Dateiinhalt laden und Tab aktivieren
-  const openFileInTab = async (filePath: string) => {
+  const openFileInTab = (filePath: string) => {
     if (!filePath) return;
     let tab = tabs.find(tab => tab.path === filePath);
     if (!tab) {
@@ -48,31 +53,89 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
         path: filePath,
         dirty: false
       };
-      setTabs(prev => [...prev, tab!]);
+      setTabs([...tabs, tab]);
+      setActiveTab(tab.id);
+    } else {
+      setActiveTab(tab.id);
     }
-    setActiveTab(tab.id);
-    // Dateiinhalt laden
-    try {
-      let content = '';
-      if (window.electron?.ipcRenderer.invoke) {
-        content = await window.electron.ipcRenderer.invoke('fs:readFile', filePath);
-        if (!content) {
-          content = await window.electron.ipcRenderer.invoke('readFile', filePath);
-        }
-      }
-      setEditorContent(content ?? '');
-    } catch {
-      setEditorContent('Fehler beim Laden der Datei.');
-    }
+    // Jetzt zentrale onOpenFile-Prop aufrufen
+    if (onOpenFile) onOpenFile(filePath);
   };
 
-  // Tab-Wechsel lädt Inhalt
   useEffect(() => {
-    const tab = tabs.find(t => t.id === activeTab);
-    if (tab) {
-      openFileInTab(tab.path);
+    // Wenn activeFile sich ändert, Tab aktivieren
+    if (activeFile) {
+      let tab = tabs.find(t => t.path === activeFile);
+      if (!tab) {
+        tab = {
+          id: Math.random().toString(36).substr(2, 9),
+          title: activeFile.split(/[\\/]/).pop() || activeFile,
+          path: activeFile,
+          dirty: false
+        };
+        setTabs([...tabs, tab]);
+        setActiveTab(tab.id);
+      } else {
+        setActiveTab(tab.id);
+      }
     }
-  }, [activeTab]);
+  }, [activeFile]);
+
+  // dirty-Flag in Tabs verwalten
+  const setTabDirty = (tabId: string, dirty: boolean) => {
+    setTabs(prevTabs => prevTabs.map(tab =>
+      tab.id === tabId ? { ...tab, dirty } : tab
+    ));
+  };
+
+  // Dateiinhalt laden, wenn activeFile sich ändert
+  useEffect(() => {
+    async function loadFileContent() {
+      console.log('DEBUG: activeFile:', activeFile);
+      if (activeFile) {
+        try {
+          if (window.electron && window.electron.ipcRenderer) {
+            const content = await window.electron.ipcRenderer.invoke('file:read', activeFile);
+            console.log('DEBUG: loaded content for', activeFile, ':', content);
+            setEditorContent(typeof content === 'string' ? content : '');
+          } else {
+            console.log('DEBUG: window.electron oder ipcRenderer nicht verfügbar');
+            setEditorContent('');
+          }
+        } catch (e) {
+          console.error('Fehler beim Laden der Datei:', e);
+          setEditorContent('');
+        }
+      } else {
+        setEditorContent('');
+      }
+    }
+    loadFileContent();
+  }, [activeFile]);
+
+  // Editor-Inhalt ändern
+  const handleEditorChange = (val: string | undefined) => {
+    setEditorContent(val ?? '');
+    if (onEditorChange) onEditorChange(val ?? '');
+    if (activeTab) setTabDirty(activeTab, true);
+  };
+
+  // --- DEBUG: Editor anzeigen, wenn Inhalt geladen ---
+  useEffect(() => {
+    if (editorContent && typeof editorContent === 'string') {
+      const editorRoot = document.querySelector('.monaco-editor, .editor-container');
+      if (editorRoot && typeof editorRoot.scrollIntoView === 'function') {
+        setTimeout(() => editorRoot.scrollIntoView({ block: 'center' }), 100);
+      }
+    }
+  }, [editorContent, activeTab]);
+
+  // --- DEBUG: Editor-Content und Tab-Infos loggen ---
+  useEffect(() => {
+    console.log('EditorContent:', editorContent);
+    console.log('ActiveTab:', activeTab);
+    console.log('Tabs:', tabs);
+  }, [editorContent, activeTab, tabs]);
 
   const handleTabClose = (tabId: string) => {
     setTabs(tabs.filter(tab => tab.id !== tabId));
@@ -90,18 +153,11 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
     return imageExts.includes(ext) || videoExts.includes(ext);
   };
 
-  // dirty-Flag in Tabs verwalten
-  const setTabDirty = (tabId: string, dirty: boolean) => {
-    setTabs(prevTabs => prevTabs.map(tab =>
-      tab.id === tabId ? { ...tab, dirty } : tab
-    ));
-  };
-
   // Datei speichern
   const saveActiveTab = async () => {
     const tab = tabs.find(t => t.id === activeTab);
     if (!tab) return;
-    if (window.electron?.ipcRenderer.invoke) {
+    if (window.electron && window.electron.ipcRenderer) {
       await window.electron.ipcRenderer.invoke('file:save', tab.path, editorContent);
       setTabDirty(tab.id, false);
     }
@@ -119,17 +175,11 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [activeTab, editorContent, tabs]);
 
-  // Editor-Inhalt ändern
-  const handleEditorChange = (val: string | undefined) => {
-    setEditorContent(val ?? '');
-    if (activeTab) setTabDirty(activeTab, true);
-  };
-
   return (
     <ThemeProvider>
       <EditorProvider>
         <AIProvider>
-          <div className="editor-layout">
+          <div className="editor-layout-root">
             <div className="editor-layout-header">
               <button 
                 className="sidebar-toggle"
@@ -150,11 +200,10 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                 🤖
               </button>
             </div>
-            
             <div className="editor-layout-main">
               {isSidebarOpen && (
-                <ResizableSidebar initialWidth={260} minWidth={160} maxWidth={480}>
-                  <div className="sidebar-container">
+                <div style={{ width: sidebarWidth, minWidth: minSidebarWidth, maxWidth: maxSidebarWidth, height: '100%', position: 'relative', display: 'flex', flexDirection: 'column' }}>
+                  <div className="sidebar-container" style={{ width: '100%', minWidth: minSidebarWidth, maxWidth: maxSidebarWidth }}>
                     <Sidebar 
                       activeTab={sidebarTab}
                       onTabChange={setSidebarTab}
@@ -170,13 +219,34 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                       )}
                     </div>
                   </div>
-                </ResizableSidebar>
+                  {/* Resizer */}
+                  <div
+                    style={{ width: 6, cursor: 'col-resize', position: 'absolute', right: 0, top: 0, bottom: 0, zIndex: 10, background: '#2224', borderRadius: 3 }}
+                    onMouseDown={e => {
+                      e.preventDefault();
+                      const startX = e.clientX;
+                      const startWidth = sidebarWidth;
+                      const onMouseMove = (moveEvent: MouseEvent) => {
+                        let newWidth = startWidth + (moveEvent.clientX - startX);
+                        newWidth = Math.max(minSidebarWidth, Math.min(maxSidebarWidth, newWidth));
+                        setSidebarWidth(newWidth);
+                      };
+                      const onMouseUp = () => {
+                        window.removeEventListener('mousemove', onMouseMove);
+                        window.removeEventListener('mouseup', onMouseUp);
+                      };
+                      window.addEventListener('mousemove', onMouseMove);
+                      window.addEventListener('mouseup', onMouseUp);
+                    }}
+                  />
+                </div>
               )}
-              <ResizableMainArea>
-                <div className="editor-container">
+              {/* Editor wächst/shrinkt dynamisch mit Sidebar */}
+              <div style={{ flex: 1, minWidth: 0, minHeight: 0, height: '100%', width: '100%', display: 'flex', flexDirection: 'column' }}>
+                <div className="editor-container" style={{ height: '100%', width: '100%', flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
                   {tabs.length > 0 && activeTab ? (
                     isMediaFile(tabs.find(t => t.id === activeTab)?.title || '') ? (
-                      <div className="media-preview">
+                      <div className="media-preview" style={{ flex: 1, height: '100%', width: '100%' }}>
                         {/* Bild- oder Videoanzeige */}
                         {(() => {
                           const file = tabs.find(t => t.id === activeTab)?.path || '';
@@ -192,35 +262,46 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                       </div>
                     ) : (
                       <Editor
-                        height="100%"
+                        key={activeTab || 'editor'}
                         value={editorContent}
-                        language={editorLanguage}
-                        theme="vs-dark"
-                        options={{
-                          minimap: { enabled: true },
-                          fontSize: 14,
-                          lineNumbers: 'on',
-                          roundedSelection: false,
-                          scrollBeyondLastLine: false,
-                          readOnly: false,
-                          automaticLayout: true,
-                        }}
+                        language={(() => {
+                          const file = tabs.find(t => t.id === activeTab)?.path || '';
+                          const ext = file.split('.').pop()?.toLowerCase();
+                          switch (ext) {
+                            case 'js': return 'javascript';
+                            case 'ts': return 'typescript';
+                            case 'tsx': return 'typescript';
+                            case 'jsx': return 'javascript';
+                            case 'json': return 'json';
+                            case 'css': return 'css';
+                            case 'html': return 'html';
+                            case 'md': return 'markdown';
+                            case 'py': return 'python';
+                            case 'sh': return 'shell';
+                            case 'yml':
+                            case 'yaml': return 'yaml';
+                            case 'txt': return 'plaintext';
+                            default: return 'plaintext';
+                          }
+                        })()}
                         onChange={handleEditorChange}
+                        theme="vs-dark"
+                        options={{ automaticLayout: true }}
                       />
                     )
                   ) : (
-                    <div className="editor-empty-ui">
+                    <div className="editor-empty-ui" style={{ flex: 1, height: '100%', width: '100%', minHeight: 0, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       <FaRegFile size={64} color="#888" style={{marginBottom: 16}} />
                       <div className="editor-empty-title">Keine Datei geöffnet</div>
                       <div className="editor-empty-desc">Wähle links eine Datei aus oder erstelle eine neue Datei, um loszulegen.</div>
                     </div>
                   )}
                 </div>
-              </ResizableMainArea>
+              </div>
               {isAIPanelOpen && (
-                <ResizableAIPanel minWidth={260} maxWidth={600} initialWidth={340}>
+                <div style={{ width: 340, minWidth: 260, maxWidth: 600, height: '100%', position: 'relative', display: 'flex' }}>
                   <AIChatPanel />
-                </ResizableAIPanel>
+                </div>
               )}
             </div>
           </div>

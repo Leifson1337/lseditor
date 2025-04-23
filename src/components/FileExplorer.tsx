@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { FolderIcon, FileIcon, ChevronRightIcon, ChevronDownIcon } from './Icons';
 import '../styles/FileExplorer.css';
 
@@ -23,14 +23,17 @@ interface ContextMenuProps {
   onOpen: () => void;
   onRename: () => void;
   onDelete: () => void;
+  onLiveUpdate?: (() => void) | undefined;
   onClose: () => void;
+  isHtml?: boolean;
 }
 
-const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, onOpen, onRename, onDelete, onClose }) => (
+const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, onOpen, onRename, onDelete, onLiveUpdate, onClose, isHtml }) => (
   <ul className="file-context-menu" style={{ top: y, left: x, position: 'fixed', zIndex: 1000 }}>
     <li onClick={onOpen}>Öffnen</li>
     <li onClick={onRename}>Umbenennen</li>
     <li onClick={onDelete}>Löschen</li>
+    {isHtml && onLiveUpdate && <li onClick={onLiveUpdate}>Live-Update</li>}
     <li onClick={onClose}>Abbrechen</li>
   </ul>
 );
@@ -45,6 +48,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   const [contextMenu, setContextMenu] = useState<{x: number, y: number, file: string} | null>(null);
   const [renamingFile, setRenamingFile] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState<string>('');
+  const [refreshKey, setRefreshKey] = useState<number>(0);
 
   // SCROLL-FIX: Explorer-Liste scrollbar machen
   // (max-height: 100%; overflow-y: auto)
@@ -89,20 +93,85 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
       setContextMenu(null);
     }
   };
-  const handleDeleteFromMenu = () => {
+
+  // IPC-Hilfsfunktionen für Rename und Delete
+  async function renameFile(oldPath: string, newName: string): Promise<boolean> {
+    if (window.electron?.ipcRenderer.invoke) {
+      try {
+        // Versuche zuerst den neuen Handler
+        await window.electron.ipcRenderer.invoke('fs:renameFile', oldPath, newName);
+        return true;
+      } catch (e: any) {
+        alert('Fehler beim Umbenennen: ' + (typeof e === 'object' && 'message' in e ? (e as any).message : String(e)));
+      }
+    }
+    return false;
+  }
+  async function deleteFile(filePath: string): Promise<boolean> {
+    if (window.electron?.ipcRenderer.invoke) {
+      try {
+        await window.electron.ipcRenderer.invoke('fs:deleteFile', filePath);
+        return true;
+      } catch (e: any) {
+        alert('Fehler beim Löschen: ' + (typeof e === 'object' && 'message' in e ? (e as any).message : String(e)));
+      }
+    }
+    return false;
+  }
+
+  const handleDeleteFromMenu = async () => {
     if (contextMenu) {
-      // TODO: Datei löschen implementieren
-      alert('Löschen: ' + contextMenu.file);
+      if (window.confirm('Datei wirklich löschen?')) {
+        const success = await deleteFile(contextMenu.file);
+        if (success) setRefreshKey(k => k + 1);
+      }
       setContextMenu(null);
     }
   };
 
   // Umbenennen bestätigen
-  const handleRenameConfirm = () => {
-    // TODO: Datei wirklich umbenennen (IPC/Backend)
-    alert(`Datei umbenennen: ${renamingFile} => ${renameValue}`);
-    setRenamingFile(null);
-    setRenameValue('');
+  const handleRenameConfirm = async () => {
+    if (renamingFile && renameValue.trim() && renameValue !== renamingFile.split(/[\\/]/).pop()) {
+      const dir = renamingFile.substring(0, renamingFile.lastIndexOf("/")) || renamingFile.substring(0, renamingFile.lastIndexOf("\\"));
+      const newPath = dir ? dir + (dir.endsWith("/") || dir.endsWith("\\") ? '' : '/') + renameValue : renameValue;
+      const success = await renameFile(renamingFile, newPath);
+      setRenamingFile(null);
+      setRenameValue('');
+      if (success) setRefreshKey(k => k + 1);
+    } else {
+      setRenamingFile(null);
+      setRenameValue('');
+    }
+  };
+
+  // Live-Update für HTML-Dateien
+  const [liveUpdateFile, setLiveUpdateFile] = useState<string | null>(null);
+  const liveUpdateWindow = useRef<Window | null>(null);
+  useEffect(() => {
+    if (!liveUpdateFile) return;
+    // Datei initial öffnen
+    if (!liveUpdateWindow.current || liveUpdateWindow.current.closed) {
+      liveUpdateWindow.current = window.open(`file://${liveUpdateFile}`, '_blank');
+    } else {
+      liveUpdateWindow.current.location.reload();
+    }
+    // Listener für Dateiänderungen (Tab-Änderung)
+    const interval = setInterval(() => {
+      if (liveUpdateWindow.current && !liveUpdateWindow.current.closed) {
+        liveUpdateWindow.current.location.reload();
+      }
+    }, 2000); // alle 2 Sekunden reload (alternativ: auf echte Save-Events hören)
+    return () => clearInterval(interval);
+  }, [liveUpdateFile]);
+
+  const handleLiveUpdate = (filePath: string) => {
+    setLiveUpdateFile(filePath);
+    // Direkt öffnen
+    if (!liveUpdateWindow.current || liveUpdateWindow.current.closed) {
+      liveUpdateWindow.current = window.open(`file://${filePath}`, '_blank');
+    } else {
+      liveUpdateWindow.current.location.href = `file://${filePath}`;
+    }
   };
 
   // Hilfsfunktion für Dateispezifische Icons
@@ -120,9 +189,24 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     }
   }
 
+  // Hilfsfunktion: Ordner oben, Dateien unten, alphabetisch sortiert
+  function sortNodes(nodes: FileNode[]): FileNode[] {
+    return [...nodes].sort((a, b) => {
+      if (a.type === b.type) {
+        return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+      }
+      return a.type === 'directory' ? -1 : 1;
+    }).map(node =>
+      node.type === 'directory' && node.children
+        ? { ...node, children: sortNodes(node.children) }
+        : node
+    );
+  }
+
   const renderFileNode = (node: FileNode, level: number = 0) => {
     const isExpanded = expandedFolders.has(node.path);
     const isActive = activeFile === node.path;
+    const isHtml = node.type === 'file' && node.name.toLowerCase().endsWith('.html');
     if (node.type === 'directory') {
       return (
         <div key={node.path}>
@@ -137,7 +221,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
           </div>
           {isExpanded && node.children && (
             <div className="file-children">
-              {node.children.map((child) => renderFileNode(child, level + 1))}
+              {sortNodes(node.children).map((child) => renderFileNode(child, level + 1))}
             </div>
           )}
         </div>
@@ -171,8 +255,8 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   };
 
   return (
-    <div className="file-explorer-root" style={{height:'100%',maxHeight:'100%',overflowY:'auto'}}>
-      {fileStructure.map(node => renderFileNode(node))}
+    <div className="file-explorer-root" style={{height:'100%',maxHeight:'100%',overflowY:'auto'}} key={refreshKey}>
+      {sortNodes(fileStructure).map(node => renderFileNode(node))}
       {contextMenu && (
         <ContextMenu
           x={contextMenu.x}
@@ -180,6 +264,8 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
           onOpen={handleOpenFromMenu}
           onRename={handleRenameFromMenu}
           onDelete={handleDeleteFromMenu}
+          onLiveUpdate={contextMenu.file.toLowerCase().endsWith('.html') ? () => handleLiveUpdate(contextMenu.file) : undefined}
+          isHtml={contextMenu.file.toLowerCase().endsWith('.html')}
           onClose={() => setContextMenu(null)}
         />
       )}

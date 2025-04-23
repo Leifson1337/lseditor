@@ -449,6 +449,8 @@ const App: React.FC = () => {
             <EditorLayout
               fileStructure={fileStructure}
               projectPath={projectPath}
+              activeFile={activeFile}
+              onOpenFile={handleFileOpen}
             />
           </Layout>
         )}
