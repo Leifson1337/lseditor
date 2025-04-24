@@ -34,23 +34,31 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string | null>(null);
-  const [tabs, setTabs] = useState<Array<{ id: string; title: string; path: string; dirty: boolean }>>([]);
+  const [tabs, setTabs] = useState<Array<{ id: string; title: string; path: string; content: string; dirty: boolean }>>([]);
   const [sidebarTab, setSidebarTab] = useState<string>('explorer');
-  const [editorContent, setEditorContent] = useState('');
-
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const minSidebarWidth = 160;
   const maxSidebarWidth = 480;
 
-  // Dateiinhalt laden und Tab aktivieren
-  const openFileInTab = (filePath: string) => {
+  // Aktueller Tab-Inhalt für den Editor
+  const activeTabContent = tabs.find(t => t.id === activeTab)?.content || '';
+
+  // Datei in Tab öffnen und Inhalt laden
+  const openFileInTab = async (filePath: string) => {
     if (!filePath) return;
     let tab = tabs.find(tab => tab.path === filePath);
     if (!tab) {
+      let content = '';
+      if (window.electron && window.electron.ipcRenderer) {
+        content = await window.electron.ipcRenderer.invoke('fs:readFile', filePath);
+        if (!content) content = await window.electron.ipcRenderer.invoke('file:read', filePath);
+        if (!content) content = await window.electron.ipcRenderer.invoke('readFile', filePath);
+      }
       tab = {
         id: Math.random().toString(36).substr(2, 9),
         title: filePath.split(/[\\/]/).pop() || filePath,
         path: filePath,
+        content: typeof content === 'string' ? content : '',
         dirty: false
       };
       setTabs([...tabs, tab]);
@@ -58,84 +66,49 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
     } else {
       setActiveTab(tab.id);
     }
-    // Jetzt zentrale onOpenFile-Prop aufrufen
-    if (onOpenFile) onOpenFile(filePath);
   };
 
+  // Wenn activeFile sich ändert, öffne Datei im Tab
   useEffect(() => {
-    // Wenn activeFile sich ändert, Tab aktivieren
-    if (activeFile) {
-      let tab = tabs.find(t => t.path === activeFile);
-      if (!tab) {
-        tab = {
-          id: Math.random().toString(36).substr(2, 9),
-          title: activeFile.split(/[\\/]/).pop() || activeFile,
-          path: activeFile,
-          dirty: false
-        };
-        setTabs([...tabs, tab]);
-        setActiveTab(tab.id);
-      } else {
-        setActiveTab(tab.id);
-      }
-    }
+    if (activeFile) openFileInTab(activeFile);
   }, [activeFile]);
 
   // dirty-Flag in Tabs verwalten
   const setTabDirty = (tabId: string, dirty: boolean) => {
-    setTabs(prevTabs => prevTabs.map(tab =>
+    setTabs(tabs.map(tab =>
       tab.id === tabId ? { ...tab, dirty } : tab
     ));
   };
 
-  // Dateiinhalt laden, wenn activeFile sich ändert
-  useEffect(() => {
-    async function loadFileContent() {
-      console.log('DEBUG: activeFile:', activeFile);
-      if (activeFile) {
-        try {
-          if (window.electron && window.electron.ipcRenderer) {
-            const content = await window.electron.ipcRenderer.invoke('file:read', activeFile);
-            console.log('DEBUG: loaded content for', activeFile, ':', content);
-            setEditorContent(typeof content === 'string' ? content : '');
-          } else {
-            console.log('DEBUG: window.electron oder ipcRenderer nicht verfügbar');
-            setEditorContent('');
-          }
-        } catch (e) {
-          console.error('Fehler beim Laden der Datei:', e);
-          setEditorContent('');
-        }
-      } else {
-        setEditorContent('');
-      }
-    }
-    loadFileContent();
-  }, [activeFile]);
-
   // Editor-Inhalt ändern
   const handleEditorChange = (val: string | undefined) => {
-    setEditorContent(val ?? '');
-    if (onEditorChange) onEditorChange(val ?? '');
-    if (activeTab) setTabDirty(activeTab, true);
+    if (!activeTab) return;
+    setTabs(tabs.map(tab =>
+      tab.id === activeTab ? { ...tab, content: val ?? '', dirty: true } : tab
+    ));
   };
 
-  // --- DEBUG: Editor anzeigen, wenn Inhalt geladen ---
-  useEffect(() => {
-    if (editorContent && typeof editorContent === 'string') {
-      const editorRoot = document.querySelector('.monaco-editor, .editor-container');
-      if (editorRoot && typeof editorRoot.scrollIntoView === 'function') {
-        setTimeout(() => editorRoot.scrollIntoView({ block: 'center' }), 100);
-      }
+  // Datei speichern
+  const saveActiveTab = async () => {
+    const tab = tabs.find(t => t.id === activeTab);
+    if (!tab) return;
+    if (window.electron && window.electron.ipcRenderer) {
+      await window.electron.ipcRenderer.invoke('file:save', tab.path, tab.content);
+      setTabs(tabs.map(t => t.id === tab.id ? { ...t, dirty: false } : t));
     }
-  }, [editorContent, activeTab]);
+  };
 
-  // --- DEBUG: Editor-Content und Tab-Infos loggen ---
+  // STRG+S Listener
   useEffect(() => {
-    console.log('EditorContent:', editorContent);
-    console.log('ActiveTab:', activeTab);
-    console.log('Tabs:', tabs);
-  }, [editorContent, activeTab, tabs]);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        saveActiveTab();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeTab, tabs]);
 
   const handleTabClose = (tabId: string) => {
     setTabs(tabs.filter(tab => tab.id !== tabId));
@@ -152,28 +125,6 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
     const videoExts = ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv'];
     return imageExts.includes(ext) || videoExts.includes(ext);
   };
-
-  // Datei speichern
-  const saveActiveTab = async () => {
-    const tab = tabs.find(t => t.id === activeTab);
-    if (!tab) return;
-    if (window.electron && window.electron.ipcRenderer) {
-      await window.electron.ipcRenderer.invoke('file:save', tab.path, editorContent);
-      setTabDirty(tab.id, false);
-    }
-  };
-
-  // STRG+S Listener
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-        e.preventDefault();
-        saveActiveTab();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeTab, editorContent, tabs]);
 
   return (
     <ThemeProvider>
@@ -263,7 +214,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                     ) : (
                       <Editor
                         key={activeTab || 'editor'}
-                        value={editorContent}
+                        value={activeTabContent}
                         language={(() => {
                           const file = tabs.find(t => t.id === activeTab)?.path || '';
                           const ext = file.split('.').pop()?.toLowerCase();

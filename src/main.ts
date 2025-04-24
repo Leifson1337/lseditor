@@ -947,6 +947,18 @@ ipcMain.handle('editor:replaceInFiles', async (event, searchText, replaceText, s
   }
 });
 
+// IPC-Handler für Datei-Lesevorgänge
+ipcMain.handle('file:read', async (event, filePath) => {
+  try {
+    const fsPromises = require('fs').promises;
+    const content = await fsPromises.readFile(filePath, 'utf-8');
+    return content;
+  } catch (error) {
+    console.error('Fehler beim Lesen der Datei:', filePath, error);
+    return '';
+  }
+});
+
 // Hilfsfunktion zum rekursiven Auflisten aller Dateien
 function getAllFilesRecursive(dir: string): Promise<string[]> {
   return new Promise((resolve, reject) => {

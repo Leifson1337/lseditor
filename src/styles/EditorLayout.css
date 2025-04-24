@@ -74,31 +74,24 @@
   display: flex;
   flex-direction: column;
   position: relative;
-  background: transparent !important;
+  background: var(--background-color, #23272e);
 }
 
 .editor-container .monaco-editor {
-  position: static !important;
-  top: unset !important;
-  left: unset !important;
-  right: unset !important;
-  bottom: unset !important;
-  width: 100% !important;
   height: 100% !important;
-  min-width: 0 !important;
-  min-height: 0 !important;
-  background: transparent !important;
+  width: 100% !important;
 }
 
-.monaco-editor,
-.monaco-editor-background,
-.monaco-scrollable-element,
-.monaco-editor .overflow-guard {
-  width: 100% !important;
-  height: 100% !important;
-  min-width: 0 !important;
-  min-height: 0 !important;
-  background: transparent !important;
+.editor-empty-ui {
+  flex: 1;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
 }
 
 .file-explorer-root {
