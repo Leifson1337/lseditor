@@ -71,14 +71,8 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   // Wenn activeFile sich ändert, öffne Datei im Tab
   useEffect(() => {
     if (activeFile) openFileInTab(activeFile);
+    // eslint-disable-next-line
   }, [activeFile]);
-
-  // dirty-Flag in Tabs verwalten
-  const setTabDirty = (tabId: string, dirty: boolean) => {
-    setTabs(tabs.map(tab =>
-      tab.id === tabId ? { ...tab, dirty } : tab
-    ));
-  };
 
   // Editor-Inhalt ändern
   const handleEditorChange = (val: string | undefined) => {
@@ -86,6 +80,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
     setTabs(tabs.map(tab =>
       tab.id === activeTab ? { ...tab, content: val ?? '', dirty: true } : tab
     ));
+    if (onEditorChange) onEditorChange(val ?? '');
   };
 
   // Datei speichern
@@ -96,6 +91,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
       await window.electron.ipcRenderer.invoke('file:save', tab.path, tab.content);
       setTabs(tabs.map(t => t.id === tab.id ? { ...t, dirty: false } : t));
     }
+    if (onSave && tab) onSave(tab.content);
   };
 
   // STRG+S Listener
@@ -108,6 +104,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
+    // eslint-disable-next-line
   }, [activeTab, tabs]);
 
   const handleTabClose = (tabId: string) => {
@@ -196,50 +193,44 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
               <div style={{ flex: 1, minWidth: 0, minHeight: 0, height: '100%', width: '100%', display: 'flex', flexDirection: 'column' }}>
                 <div className="editor-container" style={{ height: '100%', width: '100%', flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
                   {tabs.length > 0 && activeTab ? (
-                    isMediaFile(tabs.find(t => t.id === activeTab)?.title || '') ? (
-                      <div className="media-preview" style={{ flex: 1, height: '100%', width: '100%' }}>
-                        {/* Bild- oder Videoanzeige */}
-                        {(() => {
-                          const file = tabs.find(t => t.id === activeTab)?.path || '';
-                          const ext = (file && typeof file === 'string') ? file.split('.').pop()?.toLowerCase() || '' : '';
-                          if (["png","jpg","jpeg","gif","bmp","svg","webp"].includes(ext)) {
-                            return <img src={`file://${file}`} alt={file} style={{maxWidth:'100%',maxHeight:'100%'}} />;
-                          }
-                          if (["mp4","webm","ogg","mov","avi","mkv"].includes(ext)) {
-                            return <video src={`file://${file}`} controls style={{maxWidth:'100%',maxHeight:'100%'}} />;
-                          }
-                          return <div>Dateityp nicht unterstützt</div>;
-                        })()}
-                      </div>
-                    ) : (
-                      <Editor
-                        key={activeTab || 'editor'}
-                        value={activeTabContent}
-                        language={(() => {
-                          const file = tabs.find(t => t.id === activeTab)?.path || '';
-                          const ext = file.split('.').pop()?.toLowerCase();
-                          switch (ext) {
-                            case 'js': return 'javascript';
-                            case 'ts': return 'typescript';
-                            case 'tsx': return 'typescript';
-                            case 'jsx': return 'javascript';
-                            case 'json': return 'json';
-                            case 'css': return 'css';
-                            case 'html': return 'html';
-                            case 'md': return 'markdown';
-                            case 'py': return 'python';
-                            case 'sh': return 'shell';
-                            case 'yml':
-                            case 'yaml': return 'yaml';
-                            case 'txt': return 'plaintext';
-                            default: return 'plaintext';
-                          }
-                        })()}
-                        onChange={handleEditorChange}
-                        theme="vs-dark"
-                        options={{ automaticLayout: true }}
-                      />
-                    )
+                    <Editor
+                      key={activeTab || 'editor'}
+                      value={activeTabContent}
+                      language={(() => {
+                        const file = tabs.find(t => t.id === activeTab)?.path || '';
+                        const ext = file.split('.').pop()?.toLowerCase();
+                        switch (ext) {
+                          case 'js': return 'javascript';
+                          case 'ts': return 'typescript';
+                          case 'tsx': return 'typescript';
+                          case 'jsx': return 'javascript';
+                          case 'json': return 'json';
+                          case 'css': return 'css';
+                          case 'html': return 'html';
+                          case 'md': return 'markdown';
+                          case 'py': return 'python';
+                          case 'sh': return 'shell';
+                          case 'yml':
+                          case 'yaml': return 'yaml';
+                          case 'txt': return 'plaintext';
+                          default: return 'plaintext';
+                        }
+                      })()}
+                      onChange={handleEditorChange}
+                      theme="vs-dark"
+                      options={{
+                        automaticLayout: true,
+                        quickSuggestions: true,
+                        suggestOnTriggerCharacters: true,
+                        wordBasedSuggestions: true,
+                        tabSize: 2,
+                        fontSize: 15,
+                        minimap: { enabled: true },
+                        scrollBeyondLastLine: false,
+                        renderValidationDecorations: 'on',
+                        renderLineHighlight: 'all',
+                      }}
+                    />
                   ) : (
                     <div className="editor-empty-ui" style={{ flex: 1, height: '100%', width: '100%', minHeight: 0, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       <FaRegFile size={64} color="#888" style={{marginBottom: 16}} />
@@ -260,4 +251,4 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
       </EditorProvider>
     </ThemeProvider>
   );
-}; 
+};

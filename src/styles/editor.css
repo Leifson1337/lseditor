@@ -14,16 +14,10 @@
 }
 
 /* Monaco Editor Anpassungen */
-.monaco-editor {
-  padding-top: 8px;
-}
-
-.monaco-editor .margin {
-  background-color: var(--background-color) !important;
-}
-
+.monaco-editor,
+.monaco-editor .margin,
 .monaco-editor .monaco-scrollable-element {
-  box-shadow: none !important;
+  all: unset !important;
 }
 
 /* Editor Theme Anpassungen */
@@ -312,4 +306,4 @@
 
 .cm-multiple-cursors .cm-cursor {
   background-color: var(--multiple-cursor-bg, rgba(255, 255, 255, 0.2));
-} 
+}

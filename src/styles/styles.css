@@ -710,16 +710,10 @@ body {
 }
 
 /* Code Editor Specific */
-.monaco-editor {
-  padding-top: 8px;
-}
-
-.monaco-editor .margin {
-  background-color: var(--bg-primary) !important;
-}
-
+.monaco-editor,
+.monaco-editor .margin,
 .monaco-editor .monaco-scrollable-element {
-  box-shadow: none !important;
+  all: unset !important;
 }
 
 /* AI Suggestions in Editor */
@@ -840,4 +834,4 @@ body {
 .message.ai {
   background-color: var(--bg-tertiary);
   margin-right: auto;
-} 
+}
