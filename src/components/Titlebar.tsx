@@ -60,11 +60,12 @@ const Titlebar: React.FC<TitlebarProps> = ({ children }) => {
   const handleClose = () => window.electron?.windowControls?.close();
 
   return (
-    <div className="titlebar">
+    <div className="titlebar" style={{position: 'relative'}}>
+      {/* Drag-Element ganz oben, deckt die ganze Titlebar ab, pointer-events: none im CSS */}
       <div className="titlebar-drag" />
-      <div className="titlebar-title">lseditor</div>
+      <div className="titlebar-title no-drag">lseditor</div>
       {children}
-      <div className="titlebar-buttons">
+      <div className="titlebar-buttons no-drag">
         <button className="titlebar-btn" title="Minimize" onClick={handleMinimize}>
           <span>&#x2013;</span>
         </button>
@@ -74,7 +75,7 @@ const Titlebar: React.FC<TitlebarProps> = ({ children }) => {
             title="Restore" 
             onClick={handleMaximizeToggle}
           >
-            <span>⧉</span>
+            <span>🗖</span>
           </button>
         ) : (
           <button 
