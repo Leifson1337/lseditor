@@ -235,7 +235,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                     <div className="editor-empty-ui" style={{ flex: 1, height: '100%', width: '100%', minHeight: 0, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       <FaRegFile size={64} color="#888" style={{marginBottom: 16}} />
                       <div className="editor-empty-title">Keine Datei geöffnet</div>
-                      <div className="editor-empty-desc">Wähle links eine Datei aus oder erstelle eine neue Datei, um loszulegen.</div>
+                      <div className="editor-empty-desc">Wähle im Explorer eine Datei oder erstelle eine neue Datei, um loszulegen.</div>
                     </div>
                   )}
                 </div>
