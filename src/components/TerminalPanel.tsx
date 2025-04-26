@@ -122,11 +122,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose }) => {
 
   return (
     <div className="terminal-panel">
-      <div className="terminal-header">
-        <h3>Terminal</h3>
-        <button onClick={onClose}>Close</button>
+      <div className="terminal-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 8px', background: '#23272e', borderBottom: '1px solid #333' }}>
+        <h3 style={{ margin: 0, fontSize: 16 }}>Terminal</h3>
+        <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#fff', fontSize: 18, cursor: 'pointer', padding: '0 8px' }} title="Schließen">×</button>
       </div>
-      <div ref={containerRef} className="terminal-container" />
+      <div ref={containerRef} className="terminal-container" style={{ height: 'calc(100% - 32px)' }} />
     </div>
   );
 }; 

@@ -4,6 +4,7 @@ import { FileExplorer } from './FileExplorer';
 import { TabBar } from './TabBar';
 import Sidebar from './Sidebar';
 import AIChatPanel from './AIChatPanel';
+import { TerminalPanel } from './TerminalPanel'; // Import TerminalPanel
 import { ThemeProvider } from '../contexts/ThemeContext';
 import { EditorProvider } from '../contexts/EditorContext';
 import { AIProvider } from '../contexts/AIContext';
@@ -31,14 +32,11 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   onEditorChange,
   onOpenFile
 }) => {
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const [tabs, setTabs] = useState<Array<{ id: string; title: string; path: string; content: string; dirty: boolean }>>([]);
   const [sidebarTab, setSidebarTab] = useState<string>('explorer');
-  const [sidebarWidth, setSidebarWidth] = useState(260);
-  const minSidebarWidth = 160;
-  const maxSidebarWidth = 480;
+  const [isTerminalPanelOpen, setIsTerminalPanelOpen] = useState(false); // State für Terminal-Panel
 
   // Aktueller Tab-Inhalt für den Editor
   const activeTabContent = tabs.find(t => t.id === activeTab)?.content || '';
@@ -123,129 +121,82 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
     return imageExts.includes(ext) || videoExts.includes(ext);
   };
 
+  // Terminal-Panel ein-/ausblenden, wenn Sidebar-Tab gewechselt wird
+  useEffect(() => {
+    setIsTerminalPanelOpen(sidebarTab === 'terminal');
+  }, [sidebarTab]);
+
   return (
     <ThemeProvider>
       <EditorProvider>
         <AIProvider>
-          <div className="editor-layout-root">
-            <div className="editor-layout-header">
-              <button 
-                className="sidebar-toggle"
-                onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-              >
-                ☰
-              </button>
-              <TabBar
-                tabs={tabs}
-                activeTab={activeTab}
-                onTabClose={handleTabClose}
-                onTabSelect={setActiveTab}
-              />
-              <button 
-                className="ai-panel-toggle"
-                onClick={() => setIsAIPanelOpen(!isAIPanelOpen)}
-              >
-                🤖
-              </button>
-            </div>
-            <div className="editor-layout-main">
-              {isSidebarOpen && (
-                <div style={{ width: sidebarWidth, minWidth: minSidebarWidth, maxWidth: maxSidebarWidth, height: '100%', position: 'relative', display: 'flex', flexDirection: 'column' }}>
-                  <div className="sidebar-container" style={{ width: '100%', minWidth: minSidebarWidth, maxWidth: maxSidebarWidth }}>
-                    <Sidebar 
-                      activeTab={sidebarTab}
-                      onTabChange={setSidebarTab}
-                    />
-                    <div className="sidebar-content-panel">
-                      {sidebarTab === 'explorer' && (
-                        <FileExplorer
-                          fileStructure={fileStructure}
-                          onOpenFile={openFileInTab}
-                          activeFile={tabs.find(t => t.id === activeTab)?.path || ''}
-                          projectPath={projectPath}
-                        />
-                      )}
-                    </div>
-                  </div>
-                  {/* Resizer */}
-                  <div
-                    style={{ width: 6, cursor: 'col-resize', position: 'absolute', right: 0, top: 0, bottom: 0, zIndex: 10, background: '#2224', borderRadius: 3 }}
-                    onMouseDown={e => {
-                      e.preventDefault();
-                      const startX = e.clientX;
-                      const startWidth = sidebarWidth;
-                      const onMouseMove = (moveEvent: MouseEvent) => {
-                        let newWidth = startWidth + (moveEvent.clientX - startX);
-                        newWidth = Math.max(minSidebarWidth, Math.min(maxSidebarWidth, newWidth));
-                        setSidebarWidth(newWidth);
-                      };
-                      const onMouseUp = () => {
-                        window.removeEventListener('mousemove', onMouseMove);
-                        window.removeEventListener('mouseup', onMouseUp);
-                      };
-                      window.addEventListener('mousemove', onMouseMove);
-                      window.addEventListener('mouseup', onMouseUp);
+          <div className="editor-layout-root" style={{ display: 'flex', height: '100vh', width: '100vw' }}>
+            {/* Sidebar immer sichtbar */}
+            <Sidebar activeTab={sidebarTab} onTabChange={setSidebarTab} />
+            {/* Main-Content, Editor bleibt immer gleich groß */}
+            <div className="editor-layout-main" style={{ flex: 1, position: 'relative', height: '100%' }}>
+              {/* Editor-Inhalt (Tabs, Editor, etc.) */}
+              <div style={{ height: '100%', width: '100%', position: 'relative' }}>
+                <TabBar
+                  tabs={tabs}
+                  activeTab={activeTab}
+                  onTabClose={handleTabClose}
+                  onTabSelect={setActiveTab}
+                />
+                {tabs.length > 0 && activeTab ? (
+                  <Editor
+                    height="100%"
+                    defaultLanguage={initialLanguage}
+                    defaultValue={activeTabContent}
+                    value={activeTabContent}
+                    onChange={handleEditorChange}
+                    theme="vs-dark"
+                    options={{
+                      fontSize: 16,
+                      minimap: { enabled: false },
+                      wordWrap: 'on',
+                      scrollBeyondLastLine: false,
+                      automaticLayout: true,
                     }}
                   />
-                </div>
-              )}
-              {/* Editor wächst/shrinkt dynamisch mit Sidebar */}
-              <div style={{ flex: 1, minWidth: 0, minHeight: 0, height: '100%', width: '100%', display: 'flex', flexDirection: 'column' }}>
-                <div className="editor-container" style={{ height: '100%', width: '100%', flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
-                  {tabs.length > 0 && activeTab ? (
-                    <Editor
-                      key={activeTab || 'editor'}
-                      value={activeTabContent}
-                      language={(() => {
-                        const file = tabs.find(t => t.id === activeTab)?.path || '';
-                        const ext = file.split('.').pop()?.toLowerCase();
-                        switch (ext) {
-                          case 'js': return 'javascript';
-                          case 'ts': return 'typescript';
-                          case 'tsx': return 'typescript';
-                          case 'jsx': return 'javascript';
-                          case 'json': return 'json';
-                          case 'css': return 'css';
-                          case 'html': return 'html';
-                          case 'md': return 'markdown';
-                          case 'py': return 'python';
-                          case 'sh': return 'shell';
-                          case 'yml':
-                          case 'yaml': return 'yaml';
-                          case 'txt': return 'plaintext';
-                          default: return 'plaintext';
-                        }
-                      })()}
-                      onChange={handleEditorChange}
-                      theme="vs-dark"
-                      options={{
-                        automaticLayout: true,
-                        quickSuggestions: true,
-                        suggestOnTriggerCharacters: true,
-                        wordBasedSuggestions: true,
-                        tabSize: 2,
-                        fontSize: 15,
-                        minimap: { enabled: true },
-                        scrollBeyondLastLine: false,
-                        renderValidationDecorations: 'on',
-                        renderLineHighlight: 'all',
-                      }}
-                    />
-                  ) : (
-                    <div className="editor-empty-ui" style={{ flex: 1, height: '100%', width: '100%', minHeight: 0, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <FaRegFile size={64} color="#888" style={{marginBottom: 16}} />
-                      <div className="editor-empty-title">Keine Datei geöffnet</div>
-                      <div className="editor-empty-desc">Wähle im Explorer eine Datei oder erstelle eine neue Datei, um loszulegen.</div>
-                    </div>
-                  )}
-                </div>
+                ) : (
+                  <div className="editor-empty-ui" style={{ flex: 1, height: '100%', width: '100%', minHeight: 0, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <FaRegFile size={64} color="#888" style={{marginBottom: 16}} />
+                    <div className="editor-empty-title">Keine Datei geöffnet</div>
+                    <div className="editor-empty-desc">Wähle im Explorer eine Datei aus oder erstelle eine neue Datei, um loszulegen.</div>
+                  </div>
+                )}
               </div>
-              {isAIPanelOpen && (
-                <div style={{ width: 340, minWidth: 260, maxWidth: 600, height: '100%', position: 'relative', display: 'flex' }}>
-                  <AIChatPanel />
+              {/* TerminalPanel als Overlay */}
+              {isTerminalPanelOpen && (
+                <div style={{
+                  position: 'absolute',
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  height: 320,
+                  zIndex: 20,
+                  background: '#181818',
+                  borderTop: '1px solid #333'
+                }}>
+                  <TerminalPanel onClose={() => setIsTerminalPanelOpen(false)} />
                 </div>
               )}
+              {/* FileExplorer */}
+              <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 260, background: '#222', zIndex: 10 }}>
+                <FileExplorer
+                  fileStructure={fileStructure}
+                  onOpenFile={openFileInTab}
+                  activeFile={tabs.find(t => t.id === activeTab)?.path || ''}
+                  projectPath={projectPath}
+                />
+              </div>
             </div>
+            {isAIPanelOpen && (
+              <div style={{ width: 340, minWidth: 260, maxWidth: 600, height: '100%', position: 'relative', display: 'flex' }}>
+                <AIChatPanel />
+              </div>
+            )}
           </div>
         </AIProvider>
       </EditorProvider>
