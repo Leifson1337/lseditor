@@ -16,6 +16,7 @@ import { FileNode } from '../types/FileNode';
 import { EditorLayout } from './EditorLayout';
 import SettingsIcon from './SettingsIcon';
 import { ThemeProvider } from '../contexts/ThemeContext';
+import Titlebar from './Titlebar';
 
 // Update StoreSchema to include all required properties
 declare module '../store/store' {
@@ -382,65 +383,68 @@ const App: React.FC = () => {
       <div className="app">
         {/* SettingsIcon wird jetzt im MenuBar platziert, kein separates Popup mehr */}
         {showProjectDialog ? (
-          <div className="project-dialog">
-            <h2>Open Project</h2>
-            <div className="project-input">
-              <input 
-                type="text" 
-                placeholder="Enter project path..." 
-                value={projectPath}
-                onChange={(e) => setProjectPath(e.target.value)}
-              />
-              <button 
-                onClick={() => openProject(projectPath)} 
-                disabled={!isValidPath}
-                title={!isValidPath ? "Bitte geben Sie einen gültigen Pfad an" : "Projekt öffnen"}
-              >
-                Open
-              </button>
-              <button 
-                onClick={openProjectDialog}
-                disabled={isBrowseDialogOpen}
-                title={isBrowseDialogOpen ? "Dialog ist bereits geöffnet" : "Verzeichnis durchsuchen"}
-              >
-                Browse...
-              </button>
-              <button 
-                onClick={createNewProject}
-                disabled={isBrowseDialogOpen}
-                title={isBrowseDialogOpen ? "Dialog ist bereits geöffnet" : "Neues Projekt erstellen"}
-              >
-                New Project
-              </button>
+          <>
+            <Titlebar minimal />
+            <div className="project-dialog">
+              <h2>Open Project</h2>
+              <div className="project-input">
+                <input 
+                  type="text" 
+                  placeholder="Enter project path..." 
+                  value={projectPath}
+                  onChange={(e) => setProjectPath(e.target.value)}
+                />
+                <button 
+                  onClick={() => openProject(projectPath)} 
+                  disabled={!isValidPath}
+                  title={!isValidPath ? "Bitte geben Sie einen gültigen Pfad an" : "Projekt öffnen"}
+                >
+                  Open
+                </button>
+                <button 
+                  onClick={openProjectDialog}
+                  disabled={isBrowseDialogOpen}
+                  title={isBrowseDialogOpen ? "Dialog ist bereits geöffnet" : "Verzeichnis durchsuchen"}
+                >
+                  Browse...
+                </button>
+                <button 
+                  onClick={createNewProject}
+                  disabled={isBrowseDialogOpen}
+                  title={isBrowseDialogOpen ? "Dialog ist bereits geöffnet" : "Neues Projekt erstellen"}
+                >
+                  New Project
+                </button>
+              </div>
+              <div className="recent-projects">
+                <h3>Recently opened projects</h3>
+                {recentProjects.length > 0 ? (
+                  <ul>
+                    {recentProjects.map((project) => (
+                      <li key={project} style={{display:'flex',alignItems:'center',gap:8}}>
+                        <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis'}}>{project}</span>
+                        <button 
+                          onClick={() => openProject(project)}
+                          title="Projekt öffnen"
+                        >
+                          Open
+                        </button>
+                        <button 
+                          title="Remove from list" 
+                          onClick={() => removeRecentProject(project)} 
+                          style={{color:'red'}}
+                        >
+                          ×
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>Keine kürzlich geöffneten Projekte vorhanden.</p>
+                )}
+              </div>
             </div>
-            <div className="recent-projects">
-              <h3>Recently opened projects</h3>
-              {recentProjects.length > 0 ? (
-                <ul>
-                  {recentProjects.map((project) => (
-                    <li key={project} style={{display:'flex',alignItems:'center',gap:8}}>
-                      <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis'}}>{project}</span>
-                      <button 
-                        onClick={() => openProject(project)}
-                        title="Projekt öffnen"
-                      >
-                        Open
-                      </button>
-                      <button 
-                        title="Remove from list" 
-                        onClick={() => removeRecentProject(project)} 
-                        style={{color:'red'}}
-                      >
-                        ×
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p>Keine kürzlich geöffneten Projekte vorhanden.</p>
-              )}
-            </div>
-          </div>
+          </>
         ) : (
           <Layout
             fileStructure={fileStructure}
