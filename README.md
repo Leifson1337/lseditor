@@ -19,17 +19,9 @@
 ## 📦 Features (bereits implementiert)
 
 - 🔧 **VSCode-ähnlicher Editor** mit Tabs, Sidebar, Dateiexplorer (via Monaco Editor)
-- 💬 **AI-Chat-Panel** mit Markdown-Unterstützung und Codeformatierung
-- 🧠 **Inline AI-Prompts** – z. B. „Erkläre diesen Code“, „Refactore“, „Kommentiere“
-- 🪄 **Code-Injection & Replacement** per Knopfdruck (Accept/Reject/Insert)
-- 🧩 Unterstützung für:
-  - Lokale LLMs über HTTP/REST (OpenAI-kompatibel)
-  - Custom Endpoints (konfigurierbar)
-  - Tokenizer-optimierte Prompts
-- 🧪 Vorschau auf Codevervollständigung
-- 🎨 Themes: Dark, Light, Dracula, Monokai, etc.
+- 🎨 Themes: Dark, Light, Dracula, Monokai, etc. (In Arbeit)
 - 💡 Kontextbezogene Tooltips, Docs & Linting-Overlay
-- ⚙️ Einstellbare Model-Konfiguration, Prompt-Tuning und Rollen
+- ⚙️ Die Anwendung bietet Konfigurationsmöglichkeiten, um sie an individuelle Bedürfnisse anzupassen.
 
 ---
 
@@ -59,7 +51,7 @@
 
 ```bash
 # 1. Repository klonen
-git clone https://github.com/dein-user/open-cursor.git
+git clone https://github.com/Leifson1337/lseditor.git
 cd open-cursor
 
 # 2. Abhängigkeiten installieren
@@ -91,17 +83,9 @@ English:
 ## 📦 Features (already implemented)
 
 - 🔧 **VSCode-like editor** with tabs, sidebar, file explorer (via Monaco Editor)
-- 💬 **AI-Chat-Panel** with Markdown support and code formatting
-- 🧠 **Inline AI-Prompts** - e.g. “Explain this code”. e.g. “Explain this code”, ‘Refactore’, “Comment”
-- 🪄 **Code injection & replacement** at the touch of a button (Accept/Reject/Insert)
-- 🧩 Support for:
-  - Local LLMs via HTTP/REST (OpenAI-compatible)
- - Custom endpoints (configurable)
- - Tokenizer-optimized prompts
-- 🧪 Preview of code completion
-- 🎨 Themes: Dark, Light, Dracula, Monokai, etc.
-- 💡 Context-sensitive tooltips, docs & linting overlay
-- ⚙️ Adjustable model configuration, prompt tuning and roles
+- 🎨 Themes: Dark, Light, Dracula, Monokai, etc. (in progress)
+- 💡 Context-related tooltips, docs & linting overlay
+- ⚙️ The application offers configuration options to customize it to individual needs.
 
 ---
 
@@ -131,7 +115,7 @@ English:
 
 ```bash
 # 1. clone repository
-git clone https://github.com/dein-user/open-cursor.git
+git clone https://github.com/Leifson1337/lseditor.git
 cd open-cursor
 
 # 2. install dependencies
