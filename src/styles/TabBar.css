@@ -1,11 +1,14 @@
 .tab-bar {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   background: #23272e;
   border-bottom: 1px solid #333;
   height: 36px;
   overflow-x: auto;
   white-space: nowrap;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
 }
 
 .tab {
@@ -15,12 +18,13 @@
   border: none;
   color: #ddd;
   padding: 0 16px;
-  height: 100%;
+  height: 36px;
   cursor: pointer;
   font-size: 14px;
   border-right: 1px solid #333;
   position: relative;
   transition: background 0.15s;
+  box-sizing: border-box;
 }
 
 .tab.active {
@@ -32,11 +36,12 @@
   background: none;
   border: none;
   color: #888;
-  margin-left: 8px;
+  margin-left: 0;
   cursor: pointer;
   font-size: 13px;
   padding: 0;
   transition: color 0.15s;
+  box-sizing: border-box;
 }
 
 .tab-close:hover {
@@ -48,4 +53,14 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  box-sizing: border-box;
+}
+
+/* Extra: Zeilennummern in Monaco Editor immer sichtbar */
+.monaco-editor .margin {
+  background: #222 !important;
+  color: #888 !important;
+  width: 48px !important;
+  min-width: 32px !important;
+  border-right: 1px solid #333 !important;
 }

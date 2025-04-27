@@ -46,17 +46,17 @@ const Titlebar: React.FC<TitlebarProps> = ({ children, minimal = false }) => {
   }, []);
 
   // Handle minimize button click
-  const handleMinimize = () => window.electron?.windowControls?.minimize();
+  const handleMinimize = () => window.electron?.ipcRenderer?.invoke('window:minimize');
   // Handle maximize/restore button click
   const handleMaximizeToggle = () => {
     if (isMaximized) {
-      window.electron?.windowControls?.unmaximize();
+      window.electron?.ipcRenderer?.invoke('window:unmaximize');
     } else {
-      window.electron?.windowControls?.maximize();
+      window.electron?.ipcRenderer?.invoke('window:maximize');
     }
   };
   // Handle close button click
-  const handleClose = () => window.electron?.windowControls?.close();
+  const handleClose = () => window.electron?.ipcRenderer?.invoke('window:close');
 
   if (minimal) {
     // Minimal mode: show only window controls, no title

@@ -140,63 +140,103 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
           <div className="editor-layout-root" style={{ display: 'flex', height: '100vh', width: '100vw' }}>
             {/* Sidebar is always visible */}
             <Sidebar activeTab={sidebarTab} onTabChange={setSidebarTab} />
-            {/* Main content area, editor remains the same size */}
-            <div className="editor-layout-main" style={{ flex: 1, position: 'relative', height: '100%' }}>
-              {/* Editor content area (tabs, editor, etc.) */}
-              <div style={{ height: '100%', width: '100%', position: 'relative' }}>
-                <TabBar
-                  tabs={tabs}
-                  activeTab={activeTab}
-                  onTabClose={handleTabClose}
-                  onTabSelect={setActiveTab}
-                />
-                {tabs.length > 0 && activeTab ? (
-                  <Editor
-                    height="100%"
-                    defaultLanguage={initialLanguage}
-                    defaultValue={activeTabContent}
-                    value={activeTabContent}
-                    onChange={handleEditorChange}
-                    theme="vs-dark"
-                    options={{
-                      fontSize: 16,
-                      minimap: { enabled: false },
-                      wordWrap: 'on',
-                      scrollBeyondLastLine: false,
-                      automaticLayout: true,
-                    }}
-                  />
-                ) : (
-                  <div className="editor-empty-ui" style={{ flex: 1, height: '100%', width: '100%', minHeight: 0, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <FaRegFile size={64} color="#888" style={{marginBottom: 16}} />
-                    <div className="editor-empty-title">No file opened</div>
-                    <div className="editor-empty-desc">Select a file in the explorer or create a new file to get started.</div>
-                  </div>
-                )}
-              </div>
-              {/* Terminal panel as an overlay */}
-              {isTerminalPanelOpen && (
-                <div style={{
-                  position: 'absolute',
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  height: 320,
-                  zIndex: 20,
-                  background: '#181818',
-                  borderTop: '1px solid #333'
-                }}>
-                  <TerminalPanel onClose={() => setIsTerminalPanelOpen(false)} />
-                </div>
-              )}
+            {/* Main content area: Explorer und Editor nebeneinander */}
+            <div className="editor-layout-main" style={{ display: 'flex', height: '100%', minHeight: 0 }}>
               {/* File explorer */}
-              <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 260, background: '#222', zIndex: 10 }}>
+              <div style={{
+                width: 260,
+                minWidth: 260,
+                maxWidth: 260,
+                background: '#222',
+                borderRight: '1px solid #333',
+                height: '100%',
+                boxSizing: 'border-box',
+                padding: 0,
+                margin: 0,
+                display: 'flex',
+                flexDirection: 'column'
+              }}>
                 <FileExplorer
                   fileStructure={fileStructure}
                   onOpenFile={openFileInTab}
                   activeFile={tabs.find(t => t.id === activeTab)?.path || ''}
                   projectPath={projectPath}
                 />
+              </div>
+              {/* Editor content area: TabBar und Editor vertikal gestapelt */}
+              <div style={{
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                minWidth: 0,
+                minHeight: 0,
+                height: '100%',
+                boxSizing: 'border-box',
+                padding: 0,
+                margin: 0
+              }}>
+                {/* TabBar direkt oben, bündig mit Explorer */}
+                <div style={{
+                  height: 36,
+                  minHeight: 36,
+                  maxHeight: 36,
+                  margin: 0,
+                  padding: 0,
+                  borderBottom: '1px solid #333',
+                  boxSizing: 'border-box'
+                }}>
+                  <TabBar
+                    tabs={tabs}
+                    activeTab={activeTab}
+                    onTabClose={handleTabClose}
+                    onTabSelect={setActiveTab}
+                  />
+                </div>
+                {/* Editor nimmt restlichen Platz */}
+                <div style={{ flex: 1, minHeight: 0, minWidth: 0, position: 'relative', boxSizing: 'border-box' }}>
+                  {tabs.length > 0 && activeTab ? (
+                    <Editor
+                      height="100%"
+                      defaultLanguage={initialLanguage}
+                      defaultValue={activeTabContent}
+                      value={activeTabContent}
+                      onChange={handleEditorChange}
+                      theme="vs-dark"
+                      options={{
+                        fontSize: 16,
+                        minimap: { enabled: false },
+                        wordWrap: 'on',
+                        scrollBeyondLastLine: false,
+                        automaticLayout: true,
+                        lineNumbers: 'on',
+                        glyphMargin: true,
+                        renderLineHighlight: 'all',
+                        scrollbar: { vertical: 'visible', horizontal: 'visible' },
+                      }}
+                    />
+                  ) : (
+                    <div className="editor-empty-ui" style={{ flex: 1, height: '100%', width: '100%', minHeight: 0, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <FaRegFile size={64} color="#888" style={{marginBottom: 16}} />
+                      <div className="editor-empty-title">No file opened</div>
+                      <div className="editor-empty-desc">Select a file in the explorer or create a new file to get started.</div>
+                    </div>
+                  )}
+                  {/* Terminal panel as an overlay */}
+                  {isTerminalPanelOpen && (
+                    <div style={{
+                      position: 'absolute',
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      height: 320,
+                      zIndex: 20,
+                      background: '#181818',
+                      borderTop: '1px solid #333'
+                    }}>
+                      <TerminalPanel onClose={() => setIsTerminalPanelOpen(false)} />
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
             {isAIPanelOpen && (
