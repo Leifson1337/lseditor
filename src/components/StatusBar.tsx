@@ -56,6 +56,16 @@ const StatusBar: React.FC<StatusBarProps> = ({
   return (
     <div className="status-bar">
       <div className="status-bar-left">
+        {/* Errors, Warnings und Port Forwards GANZ LINKS */}
+        <div className="status-item error-count">
+          <span className={`status-value ${errorCount > 0 ? 'error' : ''}`}>Errors: {errorCount}</span>
+        </div>
+        <div className="status-item warning-count">
+          <span className={`status-value ${problemCount > 0 ? 'warning' : ''}`}>Warnings: {problemCount}</span>
+        </div>
+        <div className="status-item port-count">
+          <span className={`status-value ${portForwardCount > 0 ? 'info' : ''}`}>Port Forwards: {portForwardCount}</span>
+        </div>
         {/* Show active file and detected language */}
         {activeFile && (
           <div className="status-item">
@@ -67,24 +77,7 @@ const StatusBar: React.FC<StatusBarProps> = ({
           </div>
         )}
       </div>
-      <div className="status-bar-center">
-        {/* Show error, warning, and port-forward counts */}
-        <div className="status-item error-count">
-          <span className={`status-value ${errorCount > 0 ? 'error' : ''}`}>
-            Errors: {errorCount}
-          </span>
-        </div>
-        <div className="status-item warning-count">
-          <span className={`status-value ${problemCount > 0 ? 'warning' : ''}`}>
-            Warnings: {problemCount}
-          </span>
-        </div>
-        <div className="status-item port-count">
-          <span className={`status-value ${portForwardCount > 0 ? 'info' : ''}`}>
-            Port Forwards: {portForwardCount}
-          </span>
-        </div>
-      </div>
+      <div className="status-bar-center"></div>
       <div className="status-bar-right">
         {/* Show terminal port and connection status */}
         {terminalPort && (
@@ -95,9 +88,7 @@ const StatusBar: React.FC<StatusBarProps> = ({
         )}
         <div className="status-item">
           <span className="status-label">Terminal:</span>
-          <span className={`status-value ${isTerminalConnected ? 'connected' : 'disconnected'}`}>
-            {isTerminalConnected ? 'Connected' : 'Disconnected'}
-          </span>
+          <span className={`status-value ${isTerminalConnected ? 'connected' : 'disconnected'}`}>{isTerminalConnected ? 'Connected' : 'Disconnected'}</span>
         </div>
       </div>
     </div>
