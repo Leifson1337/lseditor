@@ -3,44 +3,152 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as https from 'https';
 
+/**
+ * Represents a user-installed plugin.
+ */
 interface Plugin {
+  /**
+   * Unique plugin ID.
+   */
   id: string;
+  /**
+   * Plugin name.
+   */
   name: string;
+  /**
+   * Plugin version.
+   */
   version: string;
+  /**
+   * Plugin description.
+   */
   description: string;
+  /**
+   * Plugin author.
+   */
   author: string;
+  /**
+   * Plugin repository URL (optional).
+   */
   repository?: string;
+  /**
+   * Plugin dependencies (optional).
+   */
   dependencies?: Record<string, string>;
+  /**
+   * Main entry point of the plugin.
+   */
   main: string;
+  /**
+   * Whether the plugin is enabled.
+   */
   enabled: boolean;
+  /**
+   * Plugin settings (optional).
+   */
   settings?: Record<string, any>;
 }
 
+/**
+ * Represents a plugin manifest.
+ */
 interface PluginManifest {
+  /**
+   * Plugin name.
+   */
   name: string;
+  /**
+   * Plugin version.
+   */
   version: string;
+  /**
+   * Plugin description.
+   */
   description: string;
+  /**
+   * Plugin author.
+   */
   author: string;
+  /**
+   * Plugin repository URL (optional).
+   */
   repository?: string;
+  /**
+   * Plugin dependencies (optional).
+   */
   dependencies?: Record<string, string>;
+  /**
+   * Main entry point of the plugin.
+   */
   main: string;
 }
 
+/**
+ * Represents the API available to plugins.
+ */
 interface PluginAPI {
+  /**
+   * Registers a command.
+   * @param command Command name
+   * @param callback Command callback function
+   */
   registerCommand: (command: string, callback: (...args: any[]) => void) => void;
+  /**
+   * Registers a view.
+   * @param viewId View ID
+   * @param component View component
+   */
   registerView: (viewId: string, component: React.ComponentType) => void;
+  /**
+   * Registers a provider.
+   * @param providerId Provider ID
+   * @param provider Provider instance
+   */
   registerProvider: (providerId: string, provider: any) => void;
+  /**
+   * Shows a notification.
+   * @param message Notification message
+   * @param type Notification type (optional)
+   */
   showNotification: (message: string, type?: 'info' | 'warning' | 'error') => void;
+  /**
+   * Gets plugin settings.
+   * @returns Plugin settings
+   */
   getSettings: () => Record<string, any>;
+  /**
+   * Updates plugin settings.
+   * @param settings New plugin settings
+   */
   updateSettings: (settings: Record<string, any>) => void;
 }
 
+/**
+ * Manages loading, enabling, disabling, and removing plugins.
+ */
 export class PluginService extends EventEmitter {
+  /**
+   * All loaded plugins.
+   */
   private plugins: Map<string, Plugin> = new Map();
+  /**
+   * Plugin APIs.
+   */
   private pluginAPIs: Map<string, PluginAPI> = new Map();
+  /**
+   * Plugin directory.
+   */
   private pluginDirectory: string;
+  /**
+   * Marketplace URL.
+   */
   private marketplaceUrl: string;
 
+  /**
+   * Initializes the plugin service.
+   * @param pluginDirectory Plugin directory
+   * @param marketplaceUrl Marketplace URL
+   */
   constructor(pluginDirectory: string, marketplaceUrl: string) {
     super();
     this.pluginDirectory = pluginDirectory;
@@ -48,12 +156,18 @@ export class PluginService extends EventEmitter {
     this.initializePluginDirectory();
   }
 
+  /**
+   * Initializes the plugin directory.
+   */
   private initializePluginDirectory(): void {
     if (!fs.existsSync(this.pluginDirectory)) {
       fs.mkdirSync(this.pluginDirectory, { recursive: true });
     }
   }
 
+  /**
+   * Loads all plugins from the plugin directory.
+   */
   public async loadPlugins(): Promise<void> {
     const pluginDirs = fs.readdirSync(this.pluginDirectory);
     
@@ -85,6 +199,10 @@ export class PluginService extends EventEmitter {
     this.emit('pluginsLoaded', Array.from(this.plugins.values()));
   }
 
+  /**
+   * Initializes a plugin.
+   * @param plugin Plugin to initialize
+   */
   private async initializePlugin(plugin: Plugin): Promise<void> {
     try {
       const pluginModule = require(path.join(this.pluginDirectory, plugin.id, plugin.main));
@@ -105,6 +223,10 @@ export class PluginService extends EventEmitter {
     }
   }
 
+  /**
+   * Installs a plugin from the marketplace.
+   * @param pluginId Plugin ID
+   */
   public async installPlugin(pluginId: string): Promise<void> {
     try {
       const response = await this.fetchPlugin(pluginId);
@@ -135,6 +257,10 @@ export class PluginService extends EventEmitter {
     }
   }
 
+  /**
+   * Uninstalls a plugin.
+   * @param pluginId Plugin ID
+   */
   public async uninstallPlugin(pluginId: string): Promise<void> {
     const plugin = this.plugins.get(pluginId);
     if (!plugin) return;
@@ -152,6 +278,10 @@ export class PluginService extends EventEmitter {
     }
   }
 
+  /**
+   * Updates a plugin.
+   * @param pluginId Plugin ID
+   */
   public async updatePlugin(pluginId: string): Promise<void> {
     const plugin = this.plugins.get(pluginId);
     if (!plugin) return;
@@ -171,6 +301,9 @@ export class PluginService extends EventEmitter {
     }
   }
 
+  /**
+   * Updates all plugins.
+   */
   public async updateAllPlugins(): Promise<void> {
     const plugins = Array.from(this.plugins.values());
     for (const plugin of plugins) {
@@ -178,6 +311,10 @@ export class PluginService extends EventEmitter {
     }
   }
 
+  /**
+   * Enables a plugin.
+   * @param pluginId Plugin ID
+   */
   public async enablePlugin(pluginId: string): Promise<void> {
     const plugin = this.plugins.get(pluginId);
     if (!plugin) return;
@@ -187,6 +324,10 @@ export class PluginService extends EventEmitter {
     this.emit('pluginEnabled', pluginId);
   }
 
+  /**
+   * Disables a plugin.
+   * @param pluginId Plugin ID
+   */
   public async disablePlugin(pluginId: string): Promise<void> {
     const plugin = this.plugins.get(pluginId);
     if (!plugin) return;
@@ -196,6 +337,10 @@ export class PluginService extends EventEmitter {
     this.emit('pluginDisabled', pluginId);
   }
 
+  /**
+   * Deactivates a plugin.
+   * @param pluginId Plugin ID
+   */
   private async deactivatePlugin(pluginId: string): Promise<void> {
     try {
       const pluginModule = require(path.join(this.pluginDirectory, pluginId, this.plugins.get(pluginId)!.main));
@@ -207,6 +352,11 @@ export class PluginService extends EventEmitter {
     }
   }
 
+  /**
+   * Fetches a plugin from the marketplace.
+   * @param pluginId Plugin ID
+   * @returns Plugin manifest
+   */
   private async fetchPlugin(pluginId: string): Promise<{ manifest: PluginManifest }> {
     return new Promise((resolve, reject) => {
       https.get(`${this.marketplaceUrl}/plugins/${pluginId}`, (res) => {
@@ -223,26 +373,59 @@ export class PluginService extends EventEmitter {
     });
   }
 
+  /**
+   * Registers a command.
+   * @param pluginId Plugin ID
+   * @param command Command name
+   * @param callback Command callback function
+   */
   private registerCommand(pluginId: string, command: string, callback: (...args: any[]) => void): void {
     this.emit('commandRegistered', { pluginId, command, callback });
   }
 
+  /**
+   * Registers a view.
+   * @param pluginId Plugin ID
+   * @param viewId View ID
+   * @param component View component
+   */
   private registerView(pluginId: string, viewId: string, component: React.ComponentType): void {
     this.emit('viewRegistered', { pluginId, viewId, component });
   }
 
+  /**
+   * Registers a provider.
+   * @param pluginId Plugin ID
+   * @param providerId Provider ID
+   * @param provider Provider instance
+   */
   private registerProvider(pluginId: string, providerId: string, provider: any): void {
     this.emit('providerRegistered', { pluginId, providerId, provider });
   }
 
+  /**
+   * Shows a notification.
+   * @param message Notification message
+   * @param type Notification type (optional)
+   */
   private showNotification(message: string, type?: 'info' | 'warning' | 'error'): void {
     this.emit('notification', { message, type });
   }
 
+  /**
+   * Gets plugin settings.
+   * @param pluginId Plugin ID
+   * @returns Plugin settings
+   */
   private getPluginSettings(pluginId: string): Record<string, any> {
     return this.plugins.get(pluginId)?.settings || {};
   }
 
+  /**
+   * Updates plugin settings.
+   * @param pluginId Plugin ID
+   * @param settings New plugin settings
+   */
   private updatePluginSettings(pluginId: string, settings: Record<string, any>): void {
     const plugin = this.plugins.get(pluginId);
     if (plugin) {
@@ -251,14 +434,26 @@ export class PluginService extends EventEmitter {
     }
   }
 
+  /**
+   * Gets all loaded plugins.
+   * @returns Array of plugins
+   */
   public getPlugins(): Plugin[] {
     return Array.from(this.plugins.values());
   }
 
+  /**
+   * Gets a plugin by its ID.
+   * @param pluginId Plugin ID
+   * @returns Plugin instance
+   */
   public getPlugin(pluginId: string): Plugin | undefined {
     return this.plugins.get(pluginId);
   }
 
+  /**
+   * Disposes of the plugin service.
+   */
   public dispose(): void {
     this.plugins.forEach((plugin) => {
       this.deactivatePlugin(plugin.id);
@@ -267,4 +462,4 @@ export class PluginService extends EventEmitter {
     this.pluginAPIs.clear();
     this.removeAllListeners();
   }
-} 
+}

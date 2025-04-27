@@ -4,54 +4,61 @@ import * as inspector from 'inspector';
 import * as fs from 'fs';
 import * as path from 'path';
 
+// Breakpoint represents a breakpoint in the source code for debugging
 interface Breakpoint {
-  id: string;
-  filePath: string;
-  line: number;
-  column?: number;
-  condition?: string;
-  hitCount?: number;
-  enabled: boolean;
+  id: string;                  // Unique breakpoint ID
+  filePath: string;            // File path where the breakpoint is set
+  line: number;                // Line number for the breakpoint
+  column?: number;             // Optional column number
+  condition?: string;          // Optional condition for conditional breakpoints
+  hitCount?: number;           // Optional hit count for the breakpoint
+  enabled: boolean;            // Whether the breakpoint is enabled
 }
 
+// Variable represents a variable in the current debugging scope
 interface Variable {
-  name: string;
-  value: any;
-  type: string;
-  scope: 'local' | 'closure' | 'global';
+  name: string;                // Variable name
+  value: any;                  // Variable value
+  type: string;                // Type of the variable
+  scope: 'local' | 'closure' | 'global'; // Scope of the variable
 }
 
+// CallFrame represents a single frame in the call stack
 interface CallFrame {
-  id: number;
-  functionName: string;
-  filePath: string;
-  line: number;
-  column: number;
-  scopeChain: Variable[];
-  this: any;
+  id: number;                  // Frame ID
+  functionName: string;        // Name of the function
+  filePath: string;            // File path
+  line: number;                // Line number
+  column: number;              // Column number
+  scopeChain: Variable[];      // Variables in scope
+  this: any;                   // Value of 'this' in the frame
 }
 
+// WatchExpression represents an expression being watched during debugging
 interface WatchExpression {
-  id: string;
-  expression: string;
-  value?: any;
-  error?: string;
+  id: string;                  // Unique ID for the watch expression
+  expression: string;          // The expression being watched
+  value?: any;                 // Last evaluated value
+  error?: string;              // Error if evaluation failed
 }
 
+// Profile represents a performance profile collected during debugging
 interface Profile {
-  id: string;
-  name: string;
-  startTime: number;
-  endTime: number;
-  samples: ProfileSample[];
+  id: string;                  // Unique profile ID
+  name: string;                // Profile name
+  startTime: number;           // Start time of the profile
+  endTime: number;             // End time of the profile
+  samples: ProfileSample[];    // Collected samples
 }
 
+// ProfileSample represents a single sample in a performance profile
 interface ProfileSample {
-  timestamp: number;
-  stack: string[];
-  memoryUsage: NodeJS.MemoryUsage;
+  timestamp: number;           // Timestamp of the sample
+  stack: string[];             // Call stack at the time of the sample
+  memoryUsage: NodeJS.MemoryUsage; // Memory usage at the time of the sample
 }
 
+// InspectorPausedEvent describes a pause event from the inspector
 interface InspectorPausedEvent {
   callFrames: Array<{
     callFrameId: string;
@@ -77,6 +84,7 @@ interface InspectorPausedEvent {
   data?: any;
 }
 
+// InspectorScriptParsedEvent describes a script parsed event from the inspector
 interface InspectorScriptParsedEvent {
   scriptId: string;
   url: string;
@@ -94,6 +102,7 @@ interface InspectorScriptParsedEvent {
   stackTrace?: any;
 }
 
+// InspectorResponse represents a generic inspector protocol response
 interface InspectorResponse<T> {
   id: number;
   result: T;
@@ -104,12 +113,15 @@ interface InspectorResponse<T> {
   };
 }
 
+// InspectorCallback is a callback for inspector protocol events
 type InspectorCallback<T> = (err: Error | null, response?: InspectorResponse<T>) => void;
 
-type InspectorParams = {
+// InspectorParams represents parameters for inspector protocol methods
+interface InspectorParams {
   [key: string]: any;
-};
+}
 
+// DebuggerSetBreakpointResponse describes the response to setting a breakpoint
 interface DebuggerSetBreakpointResponse {
   breakpointId: string;
   actualLocation: {
@@ -119,6 +131,7 @@ interface DebuggerSetBreakpointResponse {
   };
 }
 
+// DebuggerGetScopeChainResponse describes the response for getting the scope chain
 interface DebuggerGetScopeChainResponse {
   scopeChain: Array<{
     type: string;
@@ -129,6 +142,7 @@ interface DebuggerGetScopeChainResponse {
   }>;
 }
 
+// RuntimeGetPropertiesResponse describes the response for getting properties of an object
 interface RuntimeGetPropertiesResponse {
   result: Array<{
     name: string;
@@ -139,6 +153,7 @@ interface RuntimeGetPropertiesResponse {
   }>;
 }
 
+// RuntimeEvaluateResponse describes the response to evaluating an expression
 interface RuntimeEvaluateResponse {
   result: {
     type: string;
@@ -146,6 +161,7 @@ interface RuntimeEvaluateResponse {
   };
 }
 
+// ProfilerStopResponse describes the response to stopping the profiler
 interface ProfilerStopResponse {
   profile: {
     nodes: Array<{
@@ -157,27 +173,35 @@ interface ProfilerStopResponse {
   };
 }
 
+// HeapProfilerTakeHeapSnapshotResponse describes the response to taking a heap snapshot
 interface HeapProfilerTakeHeapSnapshotResponse {
   profile: string;
 }
 
+// DebugService provides debugging capabilities using the Node.js inspector protocol
 export class DebugService extends EventEmitter {
-  private session: inspector.Session;
-  private breakpoints: Map<string, Breakpoint> = new Map();
-  private watchExpressions: Map<string, WatchExpression> = new Map();
-  private callStack: CallFrame[] = [];
-  private currentFrame: CallFrame | null = null;
-  private isDebugging: boolean = false;
-  private profiles: Map<string, Profile> = new Map();
-  private currentProfile: Profile | null = null;
-  private scriptMap: Map<string, string> = new Map();
+  private session: inspector.Session;                   // Inspector session
+  private breakpoints: Map<string, Breakpoint> = new Map(); // All breakpoints
+  private watchExpressions: Map<string, WatchExpression> = new Map(); // All watch expressions
+  private callStack: CallFrame[] = [];                  // Current call stack
+  private currentFrame: CallFrame | null = null;        // Current call frame
+  private isDebugging: boolean = false;                 // Debugging state
+  private profiles: Map<string, Profile> = new Map();   // Collected profiles
+  private currentProfile: Profile | null = null;        // Currently active profile
+  private scriptMap: Map<string, string> = new Map();   // Map of script IDs to file paths
 
+  /**
+   * Initialize the debug service.
+   */
   constructor() {
     super();
     this.session = new inspector.Session();
     this.initializeDebugSession();
   }
 
+  /**
+   * Initialize the debugging session and set up event handlers.
+   */
   private initializeDebugSession(): void {
     try {
       this.session.connect();
@@ -188,6 +212,9 @@ export class DebugService extends EventEmitter {
     }
   }
 
+  /**
+   * Set up event handlers for inspector protocol events.
+   */
   private setupEventHandlers(): void {
     this.session.on('Debugger.paused', (params: InspectorPausedEvent) => {
       this.handlePausedEvent(params);
@@ -210,6 +237,9 @@ export class DebugService extends EventEmitter {
     });
   }
 
+  /**
+   * Start debugging the current process.
+   */
   public async startDebugging(): Promise<void> {
     if (this.isDebugging) return;
 
@@ -225,6 +255,9 @@ export class DebugService extends EventEmitter {
     }
   }
 
+  /**
+   * Stop debugging the current process.
+   */
   public async stopDebugging(): Promise<void> {
     if (!this.isDebugging) return;
 
@@ -244,6 +277,9 @@ export class DebugService extends EventEmitter {
     }
   }
 
+  /**
+   * Send a command to the inspector protocol.
+   */
   private async post<T>(method: string, params?: InspectorParams): Promise<T> {
     return new Promise((resolve, reject) => {
       const callback: InspectorCallback<T> = (err, response) => {
@@ -262,6 +298,9 @@ export class DebugService extends EventEmitter {
     });
   }
 
+  /**
+   * Set a breakpoint in the specified file and line.
+   */
   public async setBreakpoint(
     filePath: string,
     line: number,
@@ -303,6 +342,9 @@ export class DebugService extends EventEmitter {
     }
   }
 
+  /**
+   * Remove a breakpoint by its ID.
+   */
   public async removeBreakpoint(breakpointId: string): Promise<void> {
     if (!this.isDebugging) return;
 
@@ -320,6 +362,9 @@ export class DebugService extends EventEmitter {
     }
   }
 
+  /**
+   * Continue execution after a pause.
+   */
   public async continue(): Promise<void> {
     if (!this.isDebugging) return;
 
@@ -333,6 +378,9 @@ export class DebugService extends EventEmitter {
     }
   }
 
+  /**
+   * Step over the next function call.
+   */
   public async stepOver(): Promise<void> {
     if (!this.isDebugging) return;
 
@@ -346,6 +394,9 @@ export class DebugService extends EventEmitter {
     }
   }
 
+  /**
+   * Step into the next function call.
+   */
   public async stepInto(): Promise<void> {
     if (!this.isDebugging) return;
 
@@ -359,6 +410,9 @@ export class DebugService extends EventEmitter {
     }
   }
 
+  /**
+   * Step out of the current function call.
+   */
   public async stepOut(): Promise<void> {
     if (!this.isDebugging) return;
 
@@ -372,6 +426,9 @@ export class DebugService extends EventEmitter {
     }
   }
 
+  /**
+   * Evaluate an expression in the current context.
+   */
   public async evaluate(expression: string): Promise<any> {
     if (!this.isDebugging) {
       throw new Error('Debugging not started');
@@ -391,6 +448,9 @@ export class DebugService extends EventEmitter {
     }
   }
 
+  /**
+   * Get variables in the specified scope.
+   */
   public async getVariables(scopeNumber: number = 0): Promise<Variable[]> {
     if (!this.isDebugging || !this.currentFrame) {
       throw new Error('Not in debugging state');
@@ -423,6 +483,9 @@ export class DebugService extends EventEmitter {
     }
   }
 
+  /**
+   * Add a new watch expression.
+   */
   public async addWatchExpression(expression: string): Promise<WatchExpression> {
     const id = Math.random().toString(36).substr(2, 9);
     const watchExpression: WatchExpression = {
@@ -435,10 +498,16 @@ export class DebugService extends EventEmitter {
     return watchExpression;
   }
 
+  /**
+   * Remove a watch expression by its ID.
+   */
   public async removeWatchExpression(id: string): Promise<void> {
     this.watchExpressions.delete(id);
   }
 
+  /**
+   * Update all watch expressions.
+   */
   public async updateWatchExpressions(): Promise<void> {
     if (!this.isDebugging) return;
 
@@ -455,6 +524,9 @@ export class DebugService extends EventEmitter {
     this.emit('watchExpressionsUpdated');
   }
 
+  /**
+   * Start a performance profiling session.
+   */
   public async startProfiling(name: string): Promise<void> {
     if (this.currentProfile) {
       throw new Error('Profiling already in progress');
@@ -480,6 +552,9 @@ export class DebugService extends EventEmitter {
     }
   }
 
+  /**
+   * Stop the current performance profiling session.
+   */
   public async stopProfiling(): Promise<Profile> {
     if (!this.currentProfile) {
       throw new Error('No profiling in progress');
@@ -509,6 +584,9 @@ export class DebugService extends EventEmitter {
     }
   }
 
+  /**
+   * Take a heap snapshot.
+   */
   public async takeHeapSnapshot(): Promise<Buffer> {
     try {
       const response = await this.post<HeapProfilerTakeHeapSnapshotResponse>('HeapProfiler.takeHeapSnapshot');
@@ -520,6 +598,9 @@ export class DebugService extends EventEmitter {
     }
   }
 
+  /**
+   * Get the script ID for a given file path.
+   */
   private async getScriptId(filePath: string): Promise<string> {
     const scriptId = this.scriptMap.get(filePath);
     if (scriptId) {
@@ -528,6 +609,9 @@ export class DebugService extends EventEmitter {
     throw new Error(`Script not found: ${filePath}`);
   }
 
+  /**
+   * Handle a pause event from the inspector.
+   */
   private handlePausedEvent(params: InspectorPausedEvent): void {
     this.callStack = params.callFrames.map(frame => ({
       id: parseInt(frame.callFrameId),
@@ -547,12 +631,18 @@ export class DebugService extends EventEmitter {
     });
   }
 
+  /**
+   * Handle a resume event from the inspector.
+   */
   private handleResumedEvent(): void {
     this.callStack = [];
     this.currentFrame = null;
     this.emit('resumed');
   }
 
+  /**
+   * Handle a script parsed event from the inspector.
+   */
   private handleScriptParsedEvent(params: InspectorScriptParsedEvent): void {
     this.scriptMap.set(params.url, params.scriptId);
     this.emit('scriptParsed', {
@@ -561,26 +651,44 @@ export class DebugService extends EventEmitter {
     });
   }
 
+  /**
+   * Get all breakpoints.
+   */
   public getBreakpoints(): Breakpoint[] {
     return Array.from(this.breakpoints.values());
   }
 
+  /**
+   * Get all watch expressions.
+   */
   public getWatchExpressions(): WatchExpression[] {
     return Array.from(this.watchExpressions.values());
   }
 
+  /**
+   * Get the current call stack.
+   */
   public getCallStack(): CallFrame[] {
     return [...this.callStack];
   }
 
+  /**
+   * Get the current call frame.
+   */
   public getCurrentFrame(): CallFrame | null {
     return this.currentFrame;
   }
 
+  /**
+   * Get all collected profiles.
+   */
   public getProfiles(): Profile[] {
     return Array.from(this.profiles.values());
   }
 
+  /**
+   * Dispose of the debug service.
+   */
   public dispose(): void {
     if (this.isDebugging) {
       this.stopDebugging().catch(console.error);
@@ -588,4 +696,4 @@ export class DebugService extends EventEmitter {
     this.session.disconnect();
     this.removeAllListeners();
   }
-} 
+}

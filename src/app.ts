@@ -1,3 +1,12 @@
+// app.ts
+// Main application entry point for lseditor. Sets up the app, routing, and core logic.
+
+/**
+ * The main application module initializes and manages the core logic, routing,
+ * and integration for the LS Editor application. This includes bootstrapping
+ * the UI, handling global state, and wiring up services.
+ */
+
 import { EventEmitter } from 'events';
 import { EditorService } from './services/EditorService';
 import { AIService } from './services/AIService';
@@ -27,6 +36,9 @@ import { EditorIntegrationService } from './services/EditorIntegrationService';
 import { CodeContext } from './types/AITypes';
 import { Position } from 'monaco-editor/esm/vs/editor/editor.api';
 
+/**
+ * Project settings interface.
+ */
 interface ProjectSettings {
   workspacePath: string;
   name: string;
@@ -34,10 +46,16 @@ interface ProjectSettings {
   settings: Record<string, any>;
 }
 
+/**
+ * Store schema interface.
+ */
 interface StoreSchema {
   ai: AIConfig;
 }
 
+/**
+ * The main application class, responsible for initializing and managing the core logic.
+ */
 export class App extends EventEmitter {
   private editorService: EditorService;
   private aiService: AIService;
@@ -57,6 +75,10 @@ export class App extends EventEmitter {
   private mainWindow: BrowserWindow | null = null;
   private editorIntegrationService: EditorIntegrationService;
 
+  /**
+   * Constructor for the App class.
+   * @param workspacePath The path to the workspace.
+   */
   constructor(workspacePath: string) {
     super();
     
@@ -163,6 +185,9 @@ export class App extends EventEmitter {
     this.initializeTerminalSession();
   }
 
+  /**
+   * Initializes the terminal session.
+   */
   private async initializeTerminalSession(): Promise<void> {
     const defaultConfig: TerminalConfig = {
       profile: 'default',
@@ -178,6 +203,9 @@ export class App extends EventEmitter {
     }
   }
 
+  /**
+   * Sets up event listeners for the application.
+   */
   private setupEventListeners(): void {
     // Project Service Events
     this.projectService.on('projectChanged', (projectPath: string) => {
@@ -241,6 +269,9 @@ export class App extends EventEmitter {
     this.setupIpcHandlers();
   }
 
+  /**
+   * Sets up IPC handlers for the application.
+   */
   private setupIpcHandlers(): void {
     // AI Operations
     ipcMain.handle('ai:getCompletion', async (event, filePath: string, position: monaco.Position) => {
@@ -324,6 +355,9 @@ export class App extends EventEmitter {
     });
   }
 
+  /**
+   * Initializes the application.
+   */
   public async initialize() {
     try {
       // Initialize services
@@ -372,6 +406,10 @@ export class App extends EventEmitter {
     }
   }
 
+  /**
+   * Handles errors in the application.
+   * @param error The error to handle.
+   */
   private handleError(error: Error): void {
     const notification: Notification = {
       type: 'error',
@@ -383,6 +421,10 @@ export class App extends EventEmitter {
     console.error(error);
   }
 
+  /**
+   * Opens a file in the editor.
+   * @param filePath The path to the file to open.
+   */
   public async openFile(filePath: string): Promise<void> {
     try {
       const content = await this.projectService.getFileContent(filePath);
@@ -404,6 +446,11 @@ export class App extends EventEmitter {
     }
   }
 
+  /**
+   * Gets the language from a file path.
+   * @param filePath The file path to get the language from.
+   * @returns The language of the file.
+   */
   private getLanguageFromPath(filePath: string): string {
     const extension = path.extname(filePath).toLowerCase();
     switch (extension) {
@@ -424,6 +471,10 @@ export class App extends EventEmitter {
     }
   }
 
+  /**
+   * Updates the editor configuration.
+   * @param config The new configuration.
+   */
   public updateEditorConfig(config: Partial<EditorConfig>): void {
     try {
       this.editorService.updateConfig(config);
@@ -440,6 +491,9 @@ export class App extends EventEmitter {
     }
   }
 
+  /**
+   * Disposes of the application resources.
+   */
   public dispose(): void {
     this.editorService.dispose();
     this.gitService.dispose();
@@ -454,34 +508,66 @@ export class App extends EventEmitter {
     this.removeAllListeners();
   }
 
+  /**
+   * Gets the project service.
+   * @returns The project service.
+   */
   public getProjectService(): ProjectService {
     return this.projectService;
   }
 
+  /**
+   * Gets the terminal service.
+   * @returns The terminal service.
+   */
   public getTerminalService(): TerminalService {
     return this.terminalService;
   }
 
+  /**
+   * Gets the editor service.
+   * @returns The editor service.
+   */
   public getEditorService(): EditorService {
     return this.editorService;
   }
 
+  /**
+   * Gets the AI service.
+   * @returns The AI service.
+   */
   public getAIService(): AIService {
     return this.aiService;
   }
 
+  /**
+   * Gets the Git service.
+   * @returns The Git service.
+   */
   public getGitService(): GitService {
     return this.gitService;
   }
 
+  /**
+   * Gets the performance service.
+   * @returns The performance service.
+   */
   public getPerformanceService(): PerformanceService {
     return this.performanceService;
   }
 
+  /**
+   * Gets the security service.
+   * @returns The security service.
+   */
   public getSecurityService(): SecurityService {
     return this.securityService;
   }
 
+  /**
+   * Gets the code context.
+   * @returns The code context.
+   */
   public async getCodeContext(): Promise<CodeContext> {
     const activeEditor = this.editorService.getActiveEditor();
     if (!activeEditor) {
@@ -521,16 +607,35 @@ export class App extends EventEmitter {
     return context;
   }
 
+  /**
+   * Gets the code completion.
+   * @param filePath The file path to get the completion for.
+   * @param position The position to get the completion for.
+   * @returns The code completion.
+   */
   public async getCodeCompletion(filePath: string, position: Position): Promise<string> {
     const response = await this.aiService.getCodeCompletion(filePath, position);
     return response.text;
   }
 
+  /**
+   * Explains the code.
+   * @param filePath The file path to explain the code for.
+   * @param selection The selection to explain the code for.
+   * @returns The explanation of the code.
+   */
   public async explainCode(filePath: string, selection: monaco.Selection): Promise<string> {
     const response = await this.aiService.explainCode(filePath, selection);
     return response.text;
   }
 
+  /**
+   * Refactors the code.
+   * @param filePath The file path to refactor the code for.
+   * @param selection The selection to refactor the code for.
+   * @param refactorType The type of refactoring to perform.
+   * @returns The refactored code.
+   */
   public async refactorCode(filePath: string, selection: monaco.Selection, refactorType: string): Promise<string> {
     const response = await this.aiService.refactorCode(filePath, selection, refactorType);
     return response.text;

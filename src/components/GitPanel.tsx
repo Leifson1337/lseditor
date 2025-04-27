@@ -23,16 +23,22 @@ import {
 import './GitPanel.css';
 import { GitBranch, GitStatus } from '../types/GitTypes';
 
+// Props for the GitPanel component
 interface GitPanelProps {
-  workspacePath: string;
+  workspacePath: string; // Path to the current workspace directory
 }
 
-// Tabs für die verschiedenen GitHub-Funktionen
+// Tabs for different GitHub features
+// 'overview' | 'issues' | 'pullRequests' | 'repositories'
 type GitHubTab = 'overview' | 'issues' | 'pullRequests' | 'repositories';
 
+// GitPanel provides a UI for Git and GitHub operations within the editor
 export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
+  // Git service instance for interacting with git commands and state
   const [gitService] = useState(() => GitService.getInstance(workspacePath));
+  // List of local branches
   const [branches, setBranches] = useState<GitBranch[]>([]);
+  // Current git status (staged, modified, etc.)
   const [status, setStatus] = useState<GitStatus>({
     current: '',
     staged: [],
@@ -42,20 +48,23 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
     renamed: [],
     untracked: []
   });
+  // Name of the current branch
   const [currentBranch, setCurrentBranch] = useState<string>('');
+  // State for new branch creation
   const [newBranchName, setNewBranchName] = useState<string>('');
   const [showNewBranch, setShowNewBranch] = useState<boolean>(false);
+  // Loading state for async git operations
   const [isLoading, setIsLoading] = useState(true);
   
-  // GitHub-spezifische States
-  const [isGitHubRepo, setIsGitHubRepo] = useState<boolean>(false);
-  const [githubTab, setGithubTab] = useState<GitHubTab>('overview');
-  const [githubToken, setGithubToken] = useState<string>('');
-  const [issues, setIssues] = useState<GitHubIssue[]>([]);
-  const [pullRequests, setPullRequests] = useState<GitHubPullRequest[]>([]);
-  const [showTokenInput, setShowTokenInput] = useState<boolean>(false);
+  // GitHub-specific states
+  const [isGitHubRepo, setIsGitHubRepo] = useState<boolean>(false); // True if repo is hosted on GitHub
+  const [githubTab, setGithubTab] = useState<GitHubTab>('overview'); // Current selected GitHub tab
+  const [githubToken, setGithubToken] = useState<string>(''); // GitHub personal access token
+  const [issues, setIssues] = useState<GitHubIssue[]>([]); // List of GitHub issues
+  const [pullRequests, setPullRequests] = useState<GitHubPullRequest[]>([]); // List of pull requests
+  const [showTokenInput, setShowTokenInput] = useState<boolean>(false); // Show token input dialog
   
-  // States für neue GitHub-Elemente
+  // States for new GitHub items
   const [newIssueTitle, setNewIssueTitle] = useState<string>('');
   const [newIssueBody, setNewIssueBody] = useState<string>('');
   const [showNewIssue, setShowNewIssue] = useState<boolean>(false);
@@ -76,6 +85,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
   const [showLinkRepo, setShowLinkRepo] = useState<boolean>(false);
 
   useEffect(() => {
+    // Update git information on mount and when dependencies change
     const updateGitInfo = async () => {
       try {
         setIsLoading(true);
@@ -96,16 +106,16 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
         const current = gitService.getCurrentBranch();
         setCurrentBranch(current || '');
         
-        // Überprüfen, ob es sich um ein GitHub-Repository handelt
+        // Check if this is a GitHub repository
         const isGH = await gitService.isGitHubRepo();
         setIsGitHubRepo(isGH);
         
-        // GitHub-Token aus dem lokalen Speicher laden
+        // Load GitHub token from local storage
         const savedToken = localStorage.getItem('github_token');
         if (savedToken) {
           setGithubToken(savedToken);
           
-          // Wenn es ein GitHub-Repository ist und ein Token vorhanden ist, lade Issues und PRs
+          // If this is a GitHub repository and a token is available, load issues and PRs
           if (isGH) {
             try {
               const [ghIssues, ghPRs] = await Promise.all([
@@ -140,11 +150,11 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
     updateGitInfo();
     const interval = setInterval(updateGitInfo, 5000);
     
-    // Event-Listener für GitHub-Aktionen
+    // Event listener for GitHub actions
     const handleGithubAction = (event: CustomEvent) => {
       const { action } = event.detail;
       
-      // GitHub-Tab entsprechend der Aktion setzen
+      // Set GitHub tab based on the action
       if (action === 'issues') {
         setGithubTab('issues');
       } else if (action === 'pullRequests') {
@@ -157,7 +167,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
       }
     };
     
-    // Event-Listener registrieren
+    // Register event listener
     document.addEventListener('github-action', handleGithubAction as EventListener);
     
     return () => {
@@ -166,6 +176,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
     };
   }, [gitService]);
 
+  // Handle branch switching
   const handleBranchSwitch = async (branchName: string) => {
     try {
       await gitService.checkout(branchName);
@@ -188,6 +199,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
     }
   };
 
+  // Handle branch deletion
   const handleBranchDelete = async (branchName: string) => {
     try {
       await gitService.deleteBranch(branchName);
@@ -196,6 +208,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
     }
   };
 
+  // Handle new branch creation
   const handleCreateBranch = async () => {
     if (!newBranchName) return;
 
@@ -208,14 +221,15 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
     }
   };
   
-  // GitHub-spezifische Handler
+  // GitHub-specific handlers
   
+  // Save GitHub token
   const handleSaveToken = () => {
     if (githubToken) {
       localStorage.setItem('github_token', githubToken);
       setShowTokenInput(false);
       
-      // Nach dem Speichern des Tokens, lade GitHub-Daten
+      // Load GitHub data after saving the token
       if (isGitHubRepo) {
         Promise.all([
           gitService.getGitHubIssues(githubToken),
@@ -230,6 +244,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
     }
   };
   
+  // Create new GitHub issue
   const handleCreateIssue = async () => {
     if (!newIssueTitle || !githubToken) return;
     
@@ -251,6 +266,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
     }
   };
   
+  // Create new GitHub pull request
   const handleCreatePR = async () => {
     if (!newPRTitle || !newPRBase || !newPRHead || !githubToken) return;
     
@@ -276,6 +292,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
     }
   };
   
+  // Create new GitHub repository
   const handleCreateRepo = async () => {
     if (!newRepoName || !githubToken) return;
     
@@ -293,9 +310,9 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
         setNewRepoPrivate(false);
         setShowNewRepo(false);
         
-        // Frage, ob das lokale Repository mit dem neuen GitHub-Repository verknüpft werden soll
+        // Ask if the local repository should be linked to the new GitHub repository
         const shouldLink = window.confirm(
-          `Repository "${repo.name}" wurde erfolgreich erstellt.\n\nMöchten Sie das lokale Repository mit dem neuen GitHub-Repository verknüpfen?`
+          `Repository "${repo.name}" was successfully created.\n\nDo you want to link the local repository to the new GitHub repository?`
         );
         
         if (shouldLink) {
@@ -308,13 +325,14 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
     }
   };
   
+  // Clone GitHub repository
   const handleCloneRepo = async () => {
     if (!repoUrl) return;
     
     try {
-      // Zielverzeichnis abfragen
+      // Ask for target directory
       const targetDir = await window.electron?.ipcRenderer.invoke('dialog:openDirectory', {
-        title: 'Zielverzeichnis für das Repository auswählen'
+        title: 'Select target directory for the repository'
       });
       
       if (!targetDir) return;
@@ -324,16 +342,17 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
       if (success) {
         setRepoUrl('');
         setShowCloneRepo(false);
-        alert(`Repository wurde erfolgreich nach ${targetDir} geklont.`);
+        alert(`Repository was successfully cloned to ${targetDir}.`);
       } else {
-        alert('Fehler beim Klonen des Repositories.');
+        alert('Failed to clone repository.');
       }
     } catch (error) {
       console.error('Failed to clone repository:', error);
-      alert(`Fehler beim Klonen des Repositories: ${error instanceof Error ? error.message : String(error)}`);
+      alert(`Failed to clone repository: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
   
+  // Link repository to GitHub
   const handleLinkRepo = async () => {
     if (!repoUrl) return;
     
@@ -344,13 +363,13 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
         setRepoUrl('');
         setShowLinkRepo(false);
         setIsGitHubRepo(true);
-        alert('Repository wurde erfolgreich verknüpft.');
+        alert('Repository was successfully linked.');
       } else {
-        alert('Fehler beim Verknüpfen des Repositories.');
+        alert('Failed to link repository.');
       }
     } catch (error) {
       console.error('Failed to link repository:', error);
-      alert(`Fehler beim Verknüpfen des Repositories: ${error instanceof Error ? error.message : String(error)}`);
+      alert(`Failed to link repository: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -372,7 +391,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
       </div>
 
       <div className="git-content">
-        {/* Git-Bereich */}
+        {/* Git section */}
         <div className="git-section">
           <h3>
             <FaCodeBranch />
@@ -454,7 +473,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
           </div>
         </div>
 
-        {/* GitHub-Bereich */}
+        {/* GitHub section */}
         <div className="github-section">
           <h3>
             <FaGithub />
@@ -463,7 +482,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
               <button 
                 className="token-button"
                 onClick={() => setShowTokenInput(true)}
-                title="GitHub Token konfigurieren"
+                title="Configure GitHub token"
               >
                 <FaLock />
               </button>
@@ -483,7 +502,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
             </div>
           ) : (
             <>
-              {/* GitHub-Tabs */}
+              {/* GitHub tabs */}
               <div className="github-tabs">
                 <button 
                   className={`github-tab ${githubTab === 'overview' ? 'active' : ''}`}
@@ -511,7 +530,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
                 </button>
               </div>
               
-              {/* Tab-Inhalte */}
+              {/* Tab contents */}
               <div className="github-tab-content">
                 {githubTab === 'overview' && (
                   <div className="github-overview">
@@ -530,19 +549,19 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
                       </>
                     ) : (
                       <div className="not-github-repo">
-                        <p>Dieses Repository ist nicht mit GitHub verknüpft.</p>
+                        <p>This repository is not linked to GitHub.</p>
                         <div className="github-actions">
                           <button onClick={() => setShowLinkRepo(true)}>
                             <FaLink />
-                            <span>Mit GitHub verknüpfen</span>
+                            <span>Link to GitHub</span>
                           </button>
                           <button onClick={() => setShowNewRepo(true)}>
                             <FaGithub />
-                            <span>Neues Repository erstellen</span>
+                            <span>Create new repository</span>
                           </button>
                           <button onClick={() => setShowCloneRepo(true)}>
                             <FaClone />
-                            <span>Repository klonen</span>
+                            <span>Clone repository</span>
                           </button>
                         </div>
                       </div>
@@ -553,9 +572,9 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
                 {githubTab === 'issues' && (
                   <div className="github-issues">
                     {!githubToken ? (
-                      <p>GitHub-Token erforderlich, um Issues anzuzeigen.</p>
+                      <p>GitHub token required to display issues.</p>
                     ) : !isGitHubRepo ? (
-                      <p>Dieses Repository ist nicht mit GitHub verknüpft.</p>
+                      <p>This repository is not linked to GitHub.</p>
                     ) : (
                       <>
                         <button 
@@ -563,7 +582,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
                           onClick={() => setShowNewIssue(true)}
                         >
                           <FaPlus />
-                          <span>Neues Issue</span>
+                          <span>New Issue</span>
                         </button>
                         
                         {showNewIssue && (
@@ -572,25 +591,25 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
                               type="text"
                               value={newIssueTitle}
                               onChange={e => setNewIssueTitle(e.target.value)}
-                              placeholder="Titel"
+                              placeholder="Title"
                               className="issue-title-input"
                             />
                             <textarea
                               value={newIssueBody}
                               onChange={e => setNewIssueBody(e.target.value)}
-                              placeholder="Beschreibung"
+                              placeholder="Description"
                               className="issue-body-input"
                             />
                             <div className="issue-form-actions">
-                              <button onClick={handleCreateIssue}>Erstellen</button>
-                              <button onClick={() => setShowNewIssue(false)}>Abbrechen</button>
+                              <button onClick={handleCreateIssue}>Create</button>
+                              <button onClick={() => setShowNewIssue(false)}>Cancel</button>
                             </div>
                           </div>
                         )}
                         
                         <div className="issues-list">
                           {issues.length === 0 ? (
-                            <p>Keine Issues gefunden.</p>
+                            <p>No issues found.</p>
                           ) : (
                             issues.map(issue => (
                               <div key={issue.id} className="issue-item">
@@ -617,9 +636,9 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
                 {githubTab === 'pullRequests' && (
                   <div className="github-prs">
                     {!githubToken ? (
-                      <p>GitHub-Token erforderlich, um Pull Requests anzuzeigen.</p>
+                      <p>GitHub token required to display pull requests.</p>
                     ) : !isGitHubRepo ? (
-                      <p>Dieses Repository ist nicht mit GitHub verknüpft.</p>
+                      <p>This repository is not linked to GitHub.</p>
                     ) : (
                       <>
                         <button 
@@ -627,7 +646,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
                           onClick={() => setShowNewPR(true)}
                         >
                           <FaPlus />
-                          <span>Neuer Pull Request</span>
+                          <span>New Pull Request</span>
                         </button>
                         
                         {showNewPR && (
@@ -636,13 +655,13 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
                               type="text"
                               value={newPRTitle}
                               onChange={e => setNewPRTitle(e.target.value)}
-                              placeholder="Titel"
+                              placeholder="Title"
                               className="pr-title-input"
                             />
                             <textarea
                               value={newPRBody}
                               onChange={e => setNewPRBody(e.target.value)}
-                              placeholder="Beschreibung"
+                              placeholder="Description"
                               className="pr-body-input"
                             />
                             <div className="pr-branches">
@@ -652,7 +671,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
                                   value={newPRBase}
                                   onChange={e => setNewPRBase(e.target.value)}
                                 >
-                                  <option value="">Basis-Branch auswählen</option>
+                                  <option value="">Select base branch</option>
                                   {branches.map(branch => (
                                     <option key={branch.name} value={branch.name}>
                                       {branch.name}
@@ -666,7 +685,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
                                   value={newPRHead}
                                   onChange={e => setNewPRHead(e.target.value)}
                                 >
-                                  <option value="">Feature-Branch auswählen</option>
+                                  <option value="">Select feature branch</option>
                                   {branches.map(branch => (
                                     <option key={branch.name} value={branch.name}>
                                       {branch.name}
@@ -676,15 +695,15 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
                               </div>
                             </div>
                             <div className="pr-form-actions">
-                              <button onClick={handleCreatePR}>Erstellen</button>
-                              <button onClick={() => setShowNewPR(false)}>Abbrechen</button>
+                              <button onClick={handleCreatePR}>Create</button>
+                              <button onClick={() => setShowNewPR(false)}>Cancel</button>
                             </div>
                           </div>
                         )}
                         
                         <div className="prs-list">
                           {pullRequests.length === 0 ? (
-                            <p>Keine Pull Requests gefunden.</p>
+                            <p>No pull requests found.</p>
                           ) : (
                             pullRequests.map(pr => (
                               <div key={pr.id} className="pr-item">
@@ -714,38 +733,38 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
                 {githubTab === 'repositories' && (
                   <div className="github-repos">
                     {!githubToken ? (
-                      <p>GitHub-Token erforderlich, um Repository-Funktionen zu nutzen.</p>
+                      <p>GitHub token required to use repository features.</p>
                     ) : (
                       <>
                         <div className="repo-actions">
                           <button onClick={() => setShowNewRepo(true)}>
                             <FaPlus />
-                            <span>Neues Repository</span>
+                            <span>New Repository</span>
                           </button>
                           <button onClick={() => setShowCloneRepo(true)}>
                             <FaClone />
-                            <span>Repository klonen</span>
+                            <span>Clone Repository</span>
                           </button>
                           <button onClick={() => setShowLinkRepo(true)}>
                             <FaLink />
-                            <span>Repository verknüpfen</span>
+                            <span>Link Repository</span>
                           </button>
                         </div>
                         
                         {showNewRepo && (
                           <div className="new-repo-form">
-                            <h4>Neues Repository erstellen</h4>
+                            <h4>Create new repository</h4>
                             <input
                               type="text"
                               value={newRepoName}
                               onChange={e => setNewRepoName(e.target.value)}
-                              placeholder="Repository-Name"
+                              placeholder="Repository name"
                               className="repo-name-input"
                             />
                             <textarea
                               value={newRepoDescription}
                               onChange={e => setNewRepoDescription(e.target.value)}
-                              placeholder="Beschreibung (optional)"
+                              placeholder="Description (optional)"
                               className="repo-description-input"
                             />
                             <div className="repo-privacy">
@@ -755,46 +774,46 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
                                   checked={newRepoPrivate}
                                   onChange={e => setNewRepoPrivate(e.target.checked)}
                                 />
-                                Privates Repository
+                                Private repository
                               </label>
                             </div>
                             <div className="repo-form-actions">
-                              <button onClick={handleCreateRepo}>Erstellen</button>
-                              <button onClick={() => setShowNewRepo(false)}>Abbrechen</button>
+                              <button onClick={handleCreateRepo}>Create</button>
+                              <button onClick={() => setShowNewRepo(false)}>Cancel</button>
                             </div>
                           </div>
                         )}
                         
                         {showCloneRepo && (
                           <div className="clone-repo-form">
-                            <h4>Repository klonen</h4>
+                            <h4>Clone repository</h4>
                             <input
                               type="text"
                               value={repoUrl}
                               onChange={e => setRepoUrl(e.target.value)}
-                              placeholder="Repository-URL (https://github.com/username/repo.git)"
+                              placeholder="Repository URL (https://github.com/username/repo.git)"
                               className="repo-url-input"
                             />
                             <div className="repo-form-actions">
-                              <button onClick={handleCloneRepo}>Klonen</button>
-                              <button onClick={() => setShowCloneRepo(false)}>Abbrechen</button>
+                              <button onClick={handleCloneRepo}>Clone</button>
+                              <button onClick={() => setShowCloneRepo(false)}>Cancel</button>
                             </div>
                           </div>
                         )}
                         
                         {showLinkRepo && (
                           <div className="link-repo-form">
-                            <h4>Repository verknüpfen</h4>
+                            <h4>Link repository</h4>
                             <input
                               type="text"
                               value={repoUrl}
                               onChange={e => setRepoUrl(e.target.value)}
-                              placeholder="Repository-URL (https://github.com/username/repo.git)"
+                              placeholder="Repository URL (https://github.com/username/repo.git)"
                               className="repo-url-input"
                             />
                             <div className="repo-form-actions">
-                              <button onClick={handleLinkRepo}>Verknüpfen</button>
-                              <button onClick={() => setShowLinkRepo(false)}>Abbrechen</button>
+                              <button onClick={handleLinkRepo}>Link</button>
+                              <button onClick={() => setShowLinkRepo(false)}>Cancel</button>
                             </div>
                           </div>
                         )}

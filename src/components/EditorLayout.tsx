@@ -11,6 +11,7 @@ import { AIProvider } from '../contexts/AIContext';
 import '../styles/EditorLayout.css';
 import { FaRegFile } from 'react-icons/fa';
 
+// Props for the EditorLayout component
 interface EditorLayoutProps {
   initialContent?: string;
   initialLanguage?: string;
@@ -32,16 +33,21 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   onEditorChange,
   onOpenFile
 }) => {
+  // State for AI panel visibility
   const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
+  // State for currently active tab
   const [activeTab, setActiveTab] = useState<string | null>(null);
+  // State for all open tabs
   const [tabs, setTabs] = useState<Array<{ id: string; title: string; path: string; content: string; dirty: boolean }>>([]);
+  // State for selected sidebar tab
   const [sidebarTab, setSidebarTab] = useState<string>('explorer');
+  // State for terminal panel visibility
   const [isTerminalPanelOpen, setIsTerminalPanelOpen] = useState(false); // State für Terminal-Panel
 
-  // Aktueller Tab-Inhalt für den Editor
+  // Get the content of the currently active tab
   const activeTabContent = tabs.find(t => t.id === activeTab)?.content || '';
 
-  // Datei in Tab öffnen und Inhalt laden
+  // Open a file in a new or existing tab and load its content
   const openFileInTab = async (filePath: string) => {
     if (!filePath) return;
     let tab = tabs.find(tab => tab.path === filePath);
@@ -66,13 +72,13 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
     }
   };
 
-  // Wenn activeFile sich ändert, öffne Datei im Tab
+  // When activeFile changes, open the file in a tab
   useEffect(() => {
     if (activeFile) openFileInTab(activeFile);
     // eslint-disable-next-line
   }, [activeFile]);
 
-  // Editor-Inhalt ändern
+  // Handle editor content change
   const handleEditorChange = (val: string | undefined) => {
     if (!activeTab) return;
     setTabs(tabs.map(tab =>
@@ -81,7 +87,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
     if (onEditorChange) onEditorChange(val ?? '');
   };
 
-  // Datei speichern
+  // Save the currently active tab
   const saveActiveTab = async () => {
     const tab = tabs.find(t => t.id === activeTab);
     if (!tab) return;
@@ -92,7 +98,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
     if (onSave && tab) onSave(tab.content);
   };
 
-  // STRG+S Listener
+  // Listen for CTRL+S (or CMD+S) to trigger save
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
@@ -105,6 +111,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
     // eslint-disable-next-line
   }, [activeTab, tabs]);
 
+  // Handle closing a tab
   const handleTabClose = (tabId: string) => {
     setTabs(tabs.filter(tab => tab.id !== tabId));
     if (activeTab === tabId) {
@@ -112,7 +119,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
     }
   };
 
-  // Hilfsfunktion: Prüfen ob Datei ein Bild/Video ist
+  // Helper function to check if a file is a media file
   const isMediaFile = (filename: string) => {
     const ext = filename.split('.').pop()?.toLowerCase();
     if (!ext) return false;
@@ -121,7 +128,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
     return imageExts.includes(ext) || videoExts.includes(ext);
   };
 
-  // Terminal-Panel ein-/ausblenden, wenn Sidebar-Tab gewechselt wird
+  // Toggle terminal panel visibility when sidebar tab changes
   useEffect(() => {
     setIsTerminalPanelOpen(sidebarTab === 'terminal');
   }, [sidebarTab]);
@@ -131,11 +138,11 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
       <EditorProvider>
         <AIProvider>
           <div className="editor-layout-root" style={{ display: 'flex', height: '100vh', width: '100vw' }}>
-            {/* Sidebar immer sichtbar */}
+            {/* Sidebar is always visible */}
             <Sidebar activeTab={sidebarTab} onTabChange={setSidebarTab} />
-            {/* Main-Content, Editor bleibt immer gleich groß */}
+            {/* Main content area, editor remains the same size */}
             <div className="editor-layout-main" style={{ flex: 1, position: 'relative', height: '100%' }}>
-              {/* Editor-Inhalt (Tabs, Editor, etc.) */}
+              {/* Editor content area (tabs, editor, etc.) */}
               <div style={{ height: '100%', width: '100%', position: 'relative' }}>
                 <TabBar
                   tabs={tabs}
@@ -162,12 +169,12 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                 ) : (
                   <div className="editor-empty-ui" style={{ flex: 1, height: '100%', width: '100%', minHeight: 0, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <FaRegFile size={64} color="#888" style={{marginBottom: 16}} />
-                    <div className="editor-empty-title">Keine Datei geöffnet</div>
-                    <div className="editor-empty-desc">Wähle im Explorer eine Datei aus oder erstelle eine neue Datei, um loszulegen.</div>
+                    <div className="editor-empty-title">No file opened</div>
+                    <div className="editor-empty-desc">Select a file in the explorer or create a new file to get started.</div>
                   </div>
                 )}
               </div>
-              {/* TerminalPanel als Overlay */}
+              {/* Terminal panel as an overlay */}
               {isTerminalPanelOpen && (
                 <div style={{
                   position: 'absolute',
@@ -182,7 +189,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                   <TerminalPanel onClose={() => setIsTerminalPanelOpen(false)} />
                 </div>
               )}
-              {/* FileExplorer */}
+              {/* File explorer */}
               <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 260, background: '#222', zIndex: 10 }}>
                 <FileExplorer
                   fileStructure={fileStructure}

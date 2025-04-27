@@ -4,33 +4,42 @@ import { GitService } from './GitService';
 import { PerformanceService } from './PerformanceService';
 import { GitDiff, GitDiffChange, GitStatus } from '../types/GitTypes';
 
+// EditorConfig defines configuration options for the code editor
 export interface EditorConfig extends Omit<monaco.editor.IStandaloneEditorConstructionOptions, 'autoSave' | 'cursorSmoothCaretAnimation' | 'hover' | 'parameterHints' | 'quickSuggestions'> {
-  formatOnSave?: boolean;
-  autoSave?: 'off' | 'afterDelay';
-  autoSaveDelay?: number;
-  cursorSmoothCaretAnimation?: 'on' | 'off' | 'explicit';
-  hover?: { enabled: boolean };
-  parameterHints?: { enabled: boolean };
-  quickSuggestions?: { other: boolean; comments: boolean; strings: boolean } | boolean;
+  formatOnSave?: boolean;       // Whether to format on save
+  autoSave?: 'off' | 'afterDelay'; // Auto-save mode
+  autoSaveDelay?: number;       // Delay before auto-saving (ms)
+  cursorSmoothCaretAnimation?: 'on' | 'off' | 'explicit'; // Caret animation
+  hover?: { enabled: boolean }; // Hover tooltip settings
+  parameterHints?: { enabled: boolean }; // Parameter hints settings
+  quickSuggestions?: { other: boolean; comments: boolean; strings: boolean } | boolean; // Quick suggestions
 }
 
+// EditorState represents the state of an editor instance
 export interface EditorState {
-  id: string;
-  content: string;
-  language: string;
-  isDirty: boolean;
+  id: string;                  // Unique editor ID
+  content: string;             // Editor content
+  language: string;            // Language mode
+  isDirty: boolean;            // Whether the content has unsaved changes
 }
 
+// EditorService manages editor instances, state, configuration, and git integration
 export class EditorService extends EventEmitter {
-  private editors: Map<string, monaco.editor.IStandaloneCodeEditor> = new Map();
-  private states: Map<string, EditorState> = new Map();
-  private config: EditorConfig;
-  private gitDiffs: Map<string, GitDiff> = new Map();
-  private activeEditor: string | null = null;
-  private disposables: monaco.IDisposable[] = [];
-  private gitService: GitService;
-  private performanceService: PerformanceService;
+  private editors: Map<string, monaco.editor.IStandaloneCodeEditor> = new Map(); // All editor instances
+  private states: Map<string, EditorState> = new Map();                          // State for each editor
+  private config: EditorConfig;                                                  // Editor configuration
+  private gitDiffs: Map<string, GitDiff> = new Map();                            // Git diffs for files
+  private activeEditor: string | null = null;                                    // Currently active editor ID
+  private disposables: monaco.IDisposable[] = [];                                // Disposables for cleanup
+  private gitService: GitService;                                                // Git service instance
+  private performanceService: PerformanceService;                                // Performance service instance
 
+  /**
+   * Constructor for the EditorService class.
+   * @param config Editor configuration options
+   * @param gitService Git service instance
+   * @param performanceService Performance service instance
+   */
   constructor(config: Partial<EditorConfig>, gitService: GitService, performanceService: PerformanceService) {
     super();
     this.config = { ...this.getDefaultConfig(), ...config };
@@ -39,31 +48,33 @@ export class EditorService extends EventEmitter {
     this.initialize();
   }
 
+  // Initialize the editor service
   private initialize(): void {
     this.setupEventListeners();
     this.setupGitIntegration();
   }
 
+  // Set up listeners for editor-related events
   private setupEventListeners(): void {
     this.on('editorCreated', (editorId: string) => {
       this.performanceService.startBackgroundTask('editorCreated');
     });
-
     this.on('editorClosed', (editorId: string) => {
       this.performanceService.startBackgroundTask('editorClosed');
     });
-
     this.on('contentChanged', (editorId: string) => {
       this.performanceService.startBackgroundTask('contentChanged');
     });
   }
 
+  // Set up git integration and listen for git status changes
   private setupGitIntegration(): void {
     this.gitService.on('statusChanged', () => {
       this.updateGitDecorations();
     });
   }
 
+  // Get the default editor configuration
   private getDefaultConfig(): EditorConfig {
     return {
       language: 'plaintext',
@@ -152,6 +163,12 @@ export class EditorService extends EventEmitter {
     };
   }
 
+  /**
+   * Create a new editor instance.
+   * @param container The container element for the editor
+   * @param options Editor configuration options
+   * @returns The ID of the created editor instance
+   */
   public createEditor(container: HTMLElement, options: Partial<EditorConfig> = {}): string {
     const editorId = Math.random().toString(36).substr(2, 9);
     const config = { ...this.config, ...options };
@@ -176,6 +193,7 @@ export class EditorService extends EventEmitter {
     return editorId;
   }
 
+  // Set up listeners for a specific editor instance
   private setupEditorListeners(editorId: string, editor: monaco.editor.IStandaloneCodeEditor): void {
     const model = editor.getModel();
     if (!model) return;
@@ -192,15 +210,28 @@ export class EditorService extends EventEmitter {
     this.disposables.push(disposable);
   }
 
+  /**
+   * Get an editor instance by its ID.
+   * @param editorId The ID of the editor instance
+   * @returns The editor instance, or undefined if not found
+   */
   public getEditor(editorId: string): monaco.editor.IStandaloneCodeEditor | undefined {
     return this.editors.get(editorId);
   }
 
+  /**
+   * Get the currently active editor instance.
+   * @returns The active editor instance, or undefined if not found
+   */
   public getActiveEditor(): monaco.editor.IStandaloneCodeEditor | undefined {
     if (!this.activeEditor) return undefined;
     return this.editors.get(this.activeEditor);
   }
 
+  /**
+   * Set the active editor instance.
+   * @param editorId The ID of the editor instance to set as active
+   */
   public setActiveEditor(editorId: string): void {
     if (this.editors.has(editorId)) {
       this.activeEditor = editorId;
@@ -208,6 +239,10 @@ export class EditorService extends EventEmitter {
     }
   }
 
+  /**
+   * Close an editor instance.
+   * @param editorId The ID of the editor instance to close
+   */
   public closeEditor(editorId: string): void {
     const editor = this.editors.get(editorId);
     if (editor) {
@@ -218,6 +253,10 @@ export class EditorService extends EventEmitter {
     }
   }
 
+  /**
+   * Update the editor configuration.
+   * @param config The updated configuration options
+   */
   public updateConfig(config: Partial<EditorConfig>): void {
     this.config = { ...this.config, ...config };
     this.editors.forEach(editor => {
@@ -225,6 +264,8 @@ export class EditorService extends EventEmitter {
     });
     this.emit('configChanged', this.config);
   }
+
+  // Update git decorations for all editors
   private async updateGitDecorations(): Promise<void> {
     const status = await this.gitService.getStatus();
     if (!status) return;
@@ -262,6 +303,9 @@ export class EditorService extends EventEmitter {
     });
   }
 
+  /**
+   * Dispose of all editor instances and resources.
+   */
   public dispose(): void {
     this.editors.forEach(editor => editor.dispose());
     this.editors.clear();
@@ -272,6 +316,10 @@ export class EditorService extends EventEmitter {
     this.removeAllListeners();
   }
 
+  /**
+   * Get the current git status.
+   * @returns The current git status
+   */
   public async getGitStatus(): Promise<GitStatus> {
     const status = await this.gitService.getStatus();
     return {
@@ -284,4 +332,4 @@ export class EditorService extends EventEmitter {
       untracked: status.untracked
     };
   }
-} 
+}

@@ -1,18 +1,24 @@
+// Import necessary dependencies
 import React, { useState, useRef, useEffect } from 'react';
 import './MenuBar.css';
 import SettingsIcon from './SettingsIcon'; // Import the SettingsIcon component
 
+// Props for the MenuBar component
 interface MenuBarProps {
-  onHelpAction?: (action: string) => void;
-  onFileAction?: (action: string, data?: any) => void;
-  onEditAction?: (action: string, data?: any) => void;
-  recentProjects?: string[];
+  onHelpAction?: (action: string) => void;         // Callback for Help menu actions
+  onFileAction?: (action: string, data?: any) => void; // Callback for File menu actions
+  onEditAction?: (action: string, data?: any) => void; // Callback for Edit menu actions
+  recentProjects?: string[];                      // List of recent projects
 }
 
+// MenuBar renders the main application menu bar with File, Edit, View, etc.
 const MenuBar: React.FC<MenuBarProps> = ({ onHelpAction, onFileAction, onEditAction, recentProjects = [] }) => {
-  const [activeMenu, setActiveMenu] = useState<string | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
+  // State for the currently active/open menu
+  const [activeMenu, setActiveMenu] = useState<string | null>(null); // State to track the currently active menu
+  // Ref for detecting clicks outside the menu
+  const menuRef = useRef<HTMLDivElement>(null); // Ref to detect clicks outside the menu
 
+  // Top-level menu items
   const menuItems = [
     'File',
     'Edit',
@@ -22,7 +28,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onHelpAction, onFileAction, onEditAct
     'Run',
     'Terminal',
     'Help'
-  ];
+  ]; // Array of top-level menu items
 
   // File menu items with their corresponding actions
   const fileMenuItems = [
@@ -50,7 +56,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onHelpAction, onFileAction, onEditAct
     { id: 'closeWindow', label: 'Close Window', shortcut: 'Alt+F4' },
     { id: 'divider5', isDivider: true },
     { id: 'exit', label: 'Exit' }
-  ];
+  ]; // Array of File menu items
 
   // Edit menu items with their corresponding actions
   const editMenuItems = [
@@ -68,7 +74,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onHelpAction, onFileAction, onEditAct
     { id: 'divider3', isDivider: true },
     { id: 'toggleLineComment', label: 'Toggle Line Comment', shortcut: 'Ctrl+/' },
     { id: 'toggleBlockComment', label: 'Toggle Block Comment', shortcut: 'Ctrl+Shift+/' }
-  ];
+  ]; // Array of Edit menu items
 
   // Run menu items with their corresponding actions
   const runMenuItems = [
@@ -88,7 +94,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onHelpAction, onFileAction, onEditAct
     { id: 'disableAllBreakpoints', label: 'Disable All Breakpoints' },
     { id: 'removeAllBreakpoints', label: 'Remove All Breakpoints' },
     { id: 'installAdditionalDebuggers', label: 'Install Additional Debuggers...' },
-  ];
+  ]; // Array of Run menu items
 
   // Terminal menu items with their corresponding actions
   const terminalMenuItems = [
@@ -103,7 +109,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onHelpAction, onFileAction, onEditAct
     { id: 'terminateTask', label: 'Terminate Task' },
     { id: 'configureTasks', label: 'Configure Tasks...' },
     { id: 'configureDefaultBuildTask', label: 'Configure Default Build Task...' },
-  ];
+  ]; // Array of Terminal menu items
 
   // Selection menu items with their corresponding actions
   const selectionMenuItems = [
@@ -123,7 +129,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onHelpAction, onFileAction, onEditAct
     { id: 'selectAllOccurrences', label: 'Select All Occurrences' },
     { id: 'switchToCtrlClickMultiCursor', label: 'Switch to Ctrl+Click for Multi-Cursor' },
     { id: 'columnSelectionMode', label: 'Column Selection Mode' },
-  ];
+  ]; // Array of Selection menu items
 
   // Go menu items with their corresponding actions
   const goMenuItems = [
@@ -148,7 +154,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onHelpAction, onFileAction, onEditAct
     { id: 'previousProblem', label: 'Previous Problem' },
     { id: 'nextChange', label: 'Next Change' },
     { id: 'previousChange', label: 'Previous Change' },
-  ];
+  ]; // Array of Go menu items
 
   // Help menu items with their corresponding actions
   const helpMenuItems = [
@@ -160,7 +166,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onHelpAction, onFileAction, onEditAct
     { id: 'processExplorer', label: 'Open Process Explorer' },
     { id: 'checkUpdates', label: 'Check for Updates' },
     { id: 'about', label: 'About' }
-  ];
+  ]; // Array of Help menu items
 
   // View menu items with their corresponding actions
   const viewMenuItems = [
@@ -178,8 +184,9 @@ const MenuBar: React.FC<MenuBarProps> = ({ onHelpAction, onFileAction, onEditAct
     { id: 'debugConsole', label: 'Debug Console' },
     { id: 'terminal', label: 'Terminal' },
     { id: 'wordWrap', label: 'Word Wrap' },
-  ];
+  ]; // Array of View menu items
 
+  // Function to get menu items for a specific menu
   const getMenuItemsForMenu = (menu: string) => {
     switch (menu) {
       case 'File':
@@ -201,8 +208,9 @@ const MenuBar: React.FC<MenuBarProps> = ({ onHelpAction, onFileAction, onEditAct
       default:
         return [];
     }
-  };
+  }; // Function to get menu items for a specific menu
 
+  // Function to render a menu item
   const renderMenuItem = (menuItem: any, menu: string) => {
     if (menuItem.isDivider) {
       return <div key={menuItem.id} className="menu-divider" />;
@@ -241,8 +249,9 @@ const MenuBar: React.FC<MenuBarProps> = ({ onHelpAction, onFileAction, onEditAct
         )}
       </div>
     );
-  };
+  }; // Function to render a menu item
 
+  // Effect to handle clicks outside the menu
   useEffect(() => {
     // Close dropdown when clicking outside or ESC
     const handleClickOutside = (event: MouseEvent) => {
@@ -261,43 +270,49 @@ const MenuBar: React.FC<MenuBarProps> = ({ onHelpAction, onFileAction, onEditAct
       document.removeEventListener('mousedown', handleClickOutside);
       document.removeEventListener('keydown', handleEsc);
     };
-  }, []);
+  }, []); // Effect to handle clicks outside the menu
 
+  // Function to handle menu click
   const handleMenuClick = (item: string) => {
     if (activeMenu === item) {
       setActiveMenu(null);
     } else {
       setActiveMenu(item);
     }
-  };
+  }; // Function to handle menu click
 
+  // Function to handle Help menu item click
   const handleHelpItemClick = (actionId: string) => {
     setActiveMenu(null);
     if (onHelpAction) {
       onHelpAction(actionId);
     }
-  };
+  }; // Function to handle Help menu item click
 
+  // Function to handle File menu item click
   const handleFileItemClick = (actionId: string, data?: any) => {
     setActiveMenu(null);
     if (onFileAction) {
       onFileAction(actionId, data);
     }
-  };
+  }; // Function to handle File menu item click
 
+  // Function to handle Edit menu item click
   const handleEditItemClick = (actionId: string, data?: any) => {
     setActiveMenu(null);
     if (onEditAction) {
       onEditAction(actionId, data);
     }
-  };
+  }; // Function to handle Edit menu item click
 
+  // Function to handle toggle item
   const handleToggleItem = (actionId: string, currentState: boolean) => {
     if (onFileAction) {
       onFileAction(actionId, { isChecked: !currentState });
     }
-  };
+  }; // Function to handle toggle item
 
+  // Render the menu bar
   return (
     <div className="menu-bar" ref={menuRef}>
       <div className="menu-bar-menus">

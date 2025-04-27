@@ -2,20 +2,23 @@ import React from 'react';
 import { CloseIcon } from './Icons';
 import '../styles/TabBar.css';
 
+// Tab represents a single tab in the TabBar
 interface Tab {
-  id: string;
-  title: string;
-  path: string;
-  dirty?: boolean;
+  id: string;         // Unique identifier for the tab
+  title: string;      // Display title of the tab
+  path: string;       // Path to the file represented by the tab
+  dirty?: boolean;    // True if the tab has unsaved changes
 }
 
+// Props for the TabBar component
 interface TabBarProps {
-  tabs: Tab[];
-  activeTab: string | null;
-  onTabClose: (tabId: string) => void;
-  onTabSelect: (tabId: string) => void;
+  tabs: Tab[];                        // Array of tabs to display
+  activeTab: string | null;           // ID of the currently active tab
+  onTabClose: (tabId: string) => void; // Callback when a tab is closed
+  onTabSelect: (tabId: string) => void; // Callback when a tab is selected
 }
 
+// TabBar displays a horizontal list of tabs for open files
 export const TabBar: React.FC<TabBarProps> = ({
   tabs,
   activeTab,
@@ -24,6 +27,7 @@ export const TabBar: React.FC<TabBarProps> = ({
 }) => {
   return (
     <div className="tab-bar">
+      {/* Render each tab */}
       {tabs.map(tab => (
         <div
           key={tab.id}
@@ -33,6 +37,7 @@ export const TabBar: React.FC<TabBarProps> = ({
           <span className="tab-title">
             {tab.title}{tab.dirty ? ' *' : ''}
           </span>
+          {/* Close button for the tab */}
           <button
             className="tab-close"
             onClick={(e) => {
@@ -47,4 +52,4 @@ export const TabBar: React.FC<TabBarProps> = ({
       ))}
     </div>
   );
-}; 
+};

@@ -1,18 +1,21 @@
 import React, { useState } from 'react';
 import './SearchBar.css';
 
+// SearchBar provides a simple input for searching within the app
 const SearchBar: React.FC = () => {
+  // State for the current search query
   const [searchQuery, setSearchQuery] = useState('');
 
   return (
     <div className="search-bar">
       <input
         type="text"
-        placeholder="Suchen..."
+        placeholder="Search..."
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
         className="search-input"
       />
+      {/* Search button with magnifying glass icon */}
       <button className="search-button">
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -33,4 +36,4 @@ const SearchBar: React.FC = () => {
   );
 };
 
-export default SearchBar; 
+export default SearchBar;

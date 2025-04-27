@@ -2,19 +2,23 @@ import React, { useState } from 'react';
 import './SettingsIcon.css';
 import { useTheme } from '../contexts/ThemeContext';
 
+// Props for the SettingsIcon component
 interface SettingsIconProps {
-  onClick?: () => void;
+  onClick?: () => void; // Optional callback for when the icon is clicked
 }
 
+// SettingsIcon renders a gear icon that opens a dropdown for settings
 const SettingsIcon: React.FC<SettingsIconProps> = ({ onClick }) => {
-  const [isOpen, setIsOpen] = useState(false);
-  const { theme, toggleTheme } = useTheme();
+  const [isOpen, setIsOpen] = useState(false); // State for dropdown visibility
+  const { theme, toggleTheme } = useTheme();   // Theme context for toggling theme
 
+  // Handle click on the settings icon
   const handleClick = (e: React.MouseEvent) => {
     if (onClick) onClick();
     setIsOpen(!isOpen);
   };
 
+  // Toggle the settings dropdown open/closed
   const toggleSettings = () => {
     setIsOpen(!isOpen);
   };
@@ -24,8 +28,9 @@ const SettingsIcon: React.FC<SettingsIconProps> = ({ onClick }) => {
       <button 
         className="settings-button"
         onClick={handleClick}
-        title="Einstellungen"
+        title="Settings"
       >
+        {/* Gear icon (SVG) */}
         <svg 
           xmlns="http://www.w3.org/2000/svg" 
           width="18" 
@@ -41,11 +46,11 @@ const SettingsIcon: React.FC<SettingsIconProps> = ({ onClick }) => {
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09c0 .66.38 1.26 1 1.51a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09c0 .66.38 1.26 1 1.51a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09c-.66 0-1.26.38-1.51 1z" />
         </svg>
       </button>
-      
+      {/* Settings dropdown menu */}
       {isOpen && (
         <div className="settings-dropdown">
           <div className="settings-header">
-            <h3>Einstellungen</h3>
+            <h3>Settings</h3>
             <button className="close-button" onClick={toggleSettings}>×</button>
           </div>
           <div className="settings-content">
@@ -59,14 +64,14 @@ const SettingsIcon: React.FC<SettingsIconProps> = ({ onClick }) => {
                 </select>
               </div>
               <div className="setting-item">
-                <label>Schriftgröße</label>
+                <label>Font Size</label>
                 <input type="range" min="10" max="20" defaultValue="14" />
               </div>
             </div>
             <div className="settings-section">
               <h4>AI</h4>
               <div className="setting-item">
-                <label>Modell</label>
+                <label>Model</label>
                 <select defaultValue="gpt-4">
                   <option value="gpt-4">GPT-4</option>
                   <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>

@@ -3,6 +3,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import '../styles/Editor.css';
 
+// Props for the Editor component
 interface EditorProps {
   filePath?: string;
   content: string;
@@ -10,14 +11,19 @@ interface EditorProps {
   onChange?: (value: string) => void;
 }
 
+// Editor provides a simple text/code editing area with syntax highlighting preview
 export const Editor: React.FC<EditorProps> = ({ filePath, content, isLoading, onChange }) => {
+  // State for detected language (for syntax highlighting)
   const [language, setLanguage] = useState<string>('plaintext');
+  // State for the current editor value
   const [value, setValue] = useState<string>(content);
 
+  // Update editor value when content prop changes
   useEffect(() => {
     setValue(content);
   }, [content]);
 
+  // Detect language based on file extension when filePath changes
   useEffect(() => {
     if (filePath && typeof filePath === 'string') {
       const extension = filePath.split('.').pop()?.toLowerCase();
@@ -42,6 +48,7 @@ export const Editor: React.FC<EditorProps> = ({ filePath, content, isLoading, on
     }
   }, [filePath]);
 
+  // Handle textarea value change
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setValue(e.target.value);
     if (onChange) onChange(e.target.value);
@@ -50,12 +57,15 @@ export const Editor: React.FC<EditorProps> = ({ filePath, content, isLoading, on
   return (
     <div className="editor-root">
       <div className="editor-header">
+        {/* Display file name if available */}
         {filePath && <span className="file-name">{filePath}</span>}
       </div>
       <div className="editor-content" style={{ position: 'relative', height: '100%' }}>
         {isLoading ? (
-          <div className="editor-loading">Lädt...</div>
+          // Show loading indicator while content is loading
+          <div className="editor-loading">Loading...</div>
         ) : (
+          // Main editable textarea for code/content
           <textarea
             value={value}
             onChange={handleChange}
@@ -75,6 +85,7 @@ export const Editor: React.FC<EditorProps> = ({ filePath, content, isLoading, on
             }}
           />
         )}
+        {/* Syntax preview (hidden by default, can be enabled if needed) */}
         <div className="editor-syntax-preview" style={{ display: 'none' }}>
           <SyntaxHighlighter
             language={language}

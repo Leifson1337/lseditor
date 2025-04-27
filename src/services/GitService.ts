@@ -8,103 +8,117 @@ import * as fs from 'fs';
 import { exec, ExecException } from 'child_process';
 import { promisify } from 'util';
 import { Readable } from 'stream';
+import { execAsync } from './AIService';
 
+// ExecResult represents the result of executing a shell command
 interface ExecResult {
-  stdout: string;
-  stderr: string;
+  stdout: string;                // Standard output from the command
+  stderr: string;                // Standard error from the command
 }
 
+// ExecAsyncResult is a promise that resolves to an ExecResult
+// (used for async shell command execution)
 type ExecAsyncResult = Promise<ExecResult>;
 
-const execAsync = promisify(exec) as (command: string, options?: any) => ExecAsyncResult;
-
+// GitRemote represents a remote repository configuration
 interface GitRemote {
-  name: string;
-  url: string;
+  name: string;                  // Name of the remote (e.g., 'origin')
+  url: string;                   // URL of the remote repository
 }
 
+// GitDiffChange represents a single line change in a diff
 interface GitDiffChange {
-  lineNumber: number;
-  type: 'added' | 'removed' | 'modified';
-  content: string;
+  lineNumber: number;            // Line number of the change
+  type: 'added' | 'removed' | 'modified'; // Type of change
+  content: string;               // Content of the changed line
 }
 
+// DiffResult represents the result of a git diff operation
 export interface DiffResult {
-  files: string[];
-  insertions: number;
-  deletions: number;
-  changed: GitDiffChange[];
-  raw: string;
+  files: string[];               // List of changed files
+  insertions: number;            // Number of lines inserted
+  deletions: number;             // Number of lines deleted
+  changed: GitDiffChange[];      // List of line changes
+  raw: string;                   // Raw diff output
 }
 
+// GitStatus represents the current status of the git repository
 export interface GitStatus {
-  branch: string;
-  ahead: number;
-  behind: number;
-  modified: string[];
-  untracked: string[];
-  deleted: string[];
-  staged: string[];
-  conflicts: string[];
+  branch: string;                // Current branch name
+  ahead: number;                 // Number of commits ahead of remote
+  behind: number;                // Number of commits behind remote
+  modified: string[];            // Modified files
+  untracked: string[];           // Untracked files
+  deleted: string[];             // Deleted files
+  staged: string[];              // Staged files
+  conflicts: string[];           // Files with merge conflicts
 }
 
-// Renamed to avoid conflict with imported GitBranch
+// LocalGitBranch represents a local git branch
 export interface LocalGitBranch {
-  name: string;
-  current: boolean;
-  remote: boolean;
-  ahead: number;
-  behind: number;
+  name: string;                  // Branch name
+  current: boolean;              // Whether this is the current branch
+  remote: boolean;               // Whether this branch tracks a remote
+  ahead: number;                 // Commits ahead of remote
+  behind: number;                // Commits behind remote
 }
 
-// GitHub-spezifische Typen
+// GitHubRepo represents a GitHub repository
 export interface GitHubRepo {
-  name: string;
-  fullName: string;
-  description: string;
-  url: string;
-  private: boolean;
-  owner: string;
+  name: string;                  // Repository name
+  fullName: string;              // Full repository name (owner/name)
+  description: string;           // Repository description
+  url: string;                   // Repository URL
+  private: boolean;              // Whether the repository is private
+  owner: string;                 // Owner of the repository
 }
 
+// GitHubIssue represents an issue in a GitHub repository
 export interface GitHubIssue {
-  id: number;
-  number: number;
-  title: string;
-  body: string;
-  state: 'open' | 'closed';
-  created_at: string;
-  updated_at: string;
-  user: string;
-  labels: string[];
+  id: number;                    // Unique issue ID
+  number: number;                // Issue number
+  title: string;                 // Issue title
+  body: string;                  // Issue body/content
+  state: 'open' | 'closed';      // Issue state
+  created_at: string;            // Creation date
+  updated_at: string;            // Last update date
+  user: string;                  // User who created the issue
+  labels: string[];              // Labels for the issue
 }
 
+// GitHubPullRequest represents a pull request in a GitHub repository
 export interface GitHubPullRequest {
-  id: number;
-  number: number;
-  title: string;
-  body: string;
-  state: 'open' | 'closed' | 'merged';
-  created_at: string;
-  updated_at: string;
-  user: string;
-  base: string;
-  head: string;
+  id: number;                    // Unique pull request ID
+  number: number;                // Pull request number
+  title: string;                 // Pull request title
+  body: string;                  // Pull request body/content
+  state: 'open' | 'closed' | 'merged'; // Pull request state
+  created_at: string;            // Creation date
+  updated_at: string;            // Last update date
+  user: string;                  // User who created the pull request
+  base: string;                  // Base branch
+  head: string;                  // Head branch
 }
 
+// GitService manages git operations, repository state, and integration with the editor
 export class GitService extends EventEmitter {
-  private static instance: GitService;
-  private git: SimpleGit;
-  private status: GitStatus;
-  private branches: GitBranch[] = [];
-  private remotes: GitRemote[] = [];
-  private commits: GitCommit[] = [];
-  private currentBranch: string | null = null;
-  private isInitialized: boolean = false;
-  private workspacePath: string;
-  private diffs: Map<string, GitDiff> = new Map();
-  private isGitRepo: boolean;
+  private static instance: GitService;                   // Singleton instance
+  private git: SimpleGit;                                // SimpleGit instance for git operations
+  private status: GitStatus;                             // Current git status
+  private branches: GitBranch[] = [];                    // List of branches
+  private remotes: GitRemote[] = [];                     // List of remotes
+  private commits: GitCommit[] = [];                     // List of commits
+  private currentBranch: string | null = null;           // Current branch name
+  private isInitialized: boolean = false;                // Whether the service is initialized
+  private workspacePath: string;                         // Path to the workspace
+  private diffs: Map<string, GitDiff> = new Map();       // Map of file diffs
+  private isGitRepo: boolean;                            // Whether the workspace is a git repository
 
+  /**
+   * Constructor for the GitService class.
+   * Initializes the service with the given workspace path.
+   * @param workspacePath Path to the workspace
+   */
   public constructor(workspacePath: string) {
     super();
     this.workspacePath = workspacePath;
@@ -126,6 +140,11 @@ export class GitService extends EventEmitter {
     });
   }
 
+  /**
+   * Gets the singleton instance of the GitService class.
+   * @param workspacePath Path to the workspace
+   * @returns The singleton instance of the GitService class
+   */
   public static getInstance(workspacePath: string): GitService {
     if (!GitService.instance) {
       GitService.instance = new GitService(workspacePath);
@@ -133,6 +152,10 @@ export class GitService extends EventEmitter {
     return GitService.instance;
   }
 
+  /**
+   * Checks if the given directory is a git repository.
+   * @returns Whether the directory is a git repository
+   */
   private checkIfGitRepo(): boolean {
     try {
       const gitDir = path.join(this.workspacePath, '.git');
@@ -143,6 +166,11 @@ export class GitService extends EventEmitter {
     }
   }
 
+  /**
+   * Initializes the GitService instance.
+   * Refreshes the branches, remotes, and commits.
+   * @returns A promise that resolves when the initialization is complete
+   */
   private async initialize(): Promise<void> {
     try {
       const isRepo = await this.git.checkIsRepo();
@@ -168,12 +196,20 @@ export class GitService extends EventEmitter {
     }
   }
 
+  /**
+   * Checks if the GitService instance is initialized.
+   * Throws an error if the instance is not initialized.
+   */
   private checkInitialized(): void {
     if (!this.isInitialized) {
       throw new Error('Git service not initialized');
     }
   }
 
+  /**
+   * Gets the current git status.
+   * @returns A promise that resolves with the current git status
+   */
   public async getStatus(): Promise<GitStatus> {
     if (!this.isGitRepo) {
       return {
@@ -188,7 +224,7 @@ export class GitService extends EventEmitter {
       };
     }
     try {
-      const result = await execAsync('git status --porcelain', { cwd: this.workspacePath });
+      const result = await execAsync('git status --porcelain');
       const changes: string[] = [];
       const untracked: string[] = [];
       const staged: string[] = [];
@@ -214,7 +250,7 @@ export class GitService extends EventEmitter {
         }
       });
 
-      const branchResult = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: this.workspacePath });
+      const branchResult = await execAsync('git rev-parse --abbrev-ref HEAD');
       const branch = branchResult.stdout.trim();
 
       return {
@@ -242,14 +278,22 @@ export class GitService extends EventEmitter {
     }
   }
 
+  /**
+   * Refreshes the current git status.
+   * @returns A promise that resolves with the refreshed git status
+   */
   public async refreshStatus(): Promise<GitStatus> {
     return this.getStatus();
   }
 
+  /**
+   * Refreshes the list of branches.
+   * @returns A promise that resolves with the list of branches
+   */
   public async refreshBranches(): Promise<GitBranch[]> {
     this.checkInitialized();
     try {
-      const result = await execAsync('git branch -vv', { cwd: this.workspacePath });
+      const result = await execAsync('git branch -vv');
       const branchLines = result.stdout.split('\n').filter((line: string) => line.trim());
       
       this.branches = branchLines.map((line: string) => {
@@ -274,12 +318,16 @@ export class GitService extends EventEmitter {
     }
   }
 
+  /**
+   * Gets the list of branches.
+   * @returns A promise that resolves with the list of branches
+   */
   public async getBranches(): Promise<GitBranch[]> {
     if (!this.isGitRepo) {
       return [];
     }
     try {
-      const result = await execAsync('git branch -a', { cwd: this.workspacePath });
+      const result = await execAsync('git branch -a');
       const branchLines = result.stdout.split('\n');
       return branchLines
         .filter((line: string) => line.trim())
@@ -302,6 +350,10 @@ export class GitService extends EventEmitter {
     }
   }
 
+  /**
+   * Refreshes the list of remotes.
+   * @returns A promise that resolves with the list of remotes
+   */
   public async refreshRemotes(): Promise<GitRemote[]> {
     this.checkInitialized();
     try {
@@ -324,6 +376,10 @@ export class GitService extends EventEmitter {
     }
   }
 
+  /**
+   * Refreshes the list of commits.
+   * @returns A promise that resolves with the list of commits
+   */
   public async refreshCommits(): Promise<GitCommit[]> {
     this.checkInitialized();
     try {
@@ -349,6 +405,11 @@ export class GitService extends EventEmitter {
     }
   }
 
+  /**
+   * Stages the given files.
+   * @param files List of files to stage
+   * @returns A promise that resolves when the files are staged
+   */
   public async stage(files: string[]): Promise<void> {
     this.checkInitialized();
     try {
@@ -361,6 +422,11 @@ export class GitService extends EventEmitter {
     }
   }
 
+  /**
+   * Unstages the given files.
+   * @param files List of files to unstage
+   * @returns A promise that resolves when the files are unstaged
+   */
   public async unstage(files: string[]): Promise<void> {
     this.checkInitialized();
     try {
@@ -374,6 +440,11 @@ export class GitService extends EventEmitter {
     }
   }
 
+  /**
+   * Commits the given message.
+   * @param message Commit message
+   * @returns A promise that resolves when the commit is complete
+   */
   public async commit(message: string): Promise<void> {
     this.checkInitialized();
     try {
@@ -386,6 +457,11 @@ export class GitService extends EventEmitter {
     }
   }
 
+  /**
+   * Creates a new branch with the given name.
+   * @param name Name of the new branch
+   * @returns A promise that resolves when the branch is created
+   */
   public async createBranch(name: string): Promise<void> {
     this.checkInitialized();
     try {
@@ -398,6 +474,11 @@ export class GitService extends EventEmitter {
     }
   }
 
+  /**
+   * Checks out the given branch.
+   * @param branch Name of the branch to check out
+   * @returns A promise that resolves when the branch is checked out
+   */
   public async checkout(branch: string): Promise<void> {
     this.checkInitialized();
     try {
@@ -411,6 +492,11 @@ export class GitService extends EventEmitter {
     }
   }
 
+  /**
+   * Gets the diff for the given file.
+   * @param filePath Path to the file
+   * @returns A promise that resolves with the diff result
+   */
   public async getDiff(filePath: string): Promise<DiffResult> {
     this.checkInitialized();
     try {
@@ -456,6 +542,11 @@ export class GitService extends EventEmitter {
     }
   }
 
+  /**
+   * Gets the file history for the given file.
+   * @param filePath Path to the file
+   * @returns A promise that resolves with the file history
+   */
   public async getFileHistory(filePath: string): Promise<GitCommit[]> {
     this.checkInitialized();
     try {
@@ -473,6 +564,11 @@ export class GitService extends EventEmitter {
     }
   }
 
+  /**
+   * Stashes the current changes.
+   * @param message Optional stash message
+   * @returns A promise that resolves when the stash is complete
+   */
   public async stash(message?: string): Promise<void> {
     this.checkInitialized();
     try {
@@ -489,6 +585,10 @@ export class GitService extends EventEmitter {
     }
   }
 
+  /**
+   * Pops the latest stash.
+   * @returns A promise that resolves when the stash is popped
+   */
   public async popStash(): Promise<void> {
     this.checkInitialized();
     try {
@@ -501,14 +601,27 @@ export class GitService extends EventEmitter {
     }
   }
 
+  /**
+   * Gets the list of remotes.
+   * @returns The list of remotes
+   */
   public getRemotes(): GitRemote[] {
     return [...this.remotes];
   }
 
+  /**
+   * Gets the list of commits.
+   * @returns The list of commits
+   */
   public getCommits(): GitCommit[] {
     return [...this.commits];
   }
 
+  /**
+   * Deletes the given branch.
+   * @param name Name of the branch to delete
+   * @returns A promise that resolves when the branch is deleted
+   */
   public async deleteBranch(name: string): Promise<void> {
     this.checkInitialized();
     try {
@@ -521,18 +634,24 @@ export class GitService extends EventEmitter {
     }
   }
 
+  /**
+   * Gets the current branch name.
+   * @returns The current branch name
+   */
   public getCurrentBranch(): string | null {
     return this.currentBranch;
   }
 
+  /**
+   * Disposes of the GitService instance.
+   */
   public dispose(): void {
     this.removeAllListeners();
   }
 
-  // GitHub-spezifische Methoden
-  
   /**
-   * Überprüft, ob das aktuelle Repository mit GitHub verbunden ist
+   * Checks if the current repository is a GitHub repository.
+   * @returns A promise that resolves with whether the repository is a GitHub repository
    */
   public async isGitHubRepo(): Promise<boolean> {
     try {
@@ -553,7 +672,8 @@ export class GitService extends EventEmitter {
   }
 
   /**
-   * Extrahiert den GitHub-Benutzernamen und Repository-Namen aus der Remote-URL
+   * Gets the GitHub repository information.
+   * @returns A promise that resolves with the GitHub repository information
    */
   public async getGitHubRepoInfo(): Promise<{ owner: string; repo: string } | null> {
     try {
@@ -591,7 +711,12 @@ export class GitService extends EventEmitter {
   }
 
   /**
-   * Erstellt ein neues GitHub-Repository
+   * Creates a new GitHub repository.
+   * @param name Repository name
+   * @param description Repository description
+   * @param isPrivate Whether the repository is private
+   * @param token GitHub token
+   * @returns A promise that resolves with the created repository information
    */
   public async createGitHubRepo(
     name: string, 
@@ -608,7 +733,7 @@ export class GitService extends EventEmitter {
         -d '{"name":"${name}","description":"${description}","private":${isPrivate}}'
       `;
       
-      const result = await execAsync(command, { cwd: this.workspacePath });
+      const result = await execAsync(command);
       const repo = JSON.parse(result.stdout);
       
       return {
@@ -626,7 +751,9 @@ export class GitService extends EventEmitter {
   }
 
   /**
-   * Verknüpft das lokale Repository mit einem GitHub-Repository
+   * Links the local repository to a GitHub repository.
+   * @param repoUrl URL of the GitHub repository
+   * @returns A promise that resolves with whether the link was successful
    */
   public async linkToGitHubRepo(repoUrl: string): Promise<boolean> {
     try {
@@ -639,7 +766,10 @@ export class GitService extends EventEmitter {
   }
 
   /**
-   * Klont ein GitHub-Repository
+   * Clones a GitHub repository.
+   * @param repoUrl URL of the GitHub repository
+   * @param targetPath Path to clone the repository to
+   * @returns A promise that resolves with whether the clone was successful
    */
   public static async cloneGitHubRepo(repoUrl: string, targetPath: string): Promise<boolean> {
     try {
@@ -653,7 +783,9 @@ export class GitService extends EventEmitter {
   }
 
   /**
-   * Ruft die Issues eines GitHub-Repositories ab
+   * Gets the issues for a GitHub repository.
+   * @param token GitHub token
+   * @returns A promise that resolves with the list of issues
    */
   public async getGitHubIssues(token: string): Promise<GitHubIssue[]> {
     try {
@@ -667,7 +799,7 @@ export class GitService extends EventEmitter {
         https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}/issues
       `;
       
-      const result = await execAsync(command, { cwd: this.workspacePath });
+      const result = await execAsync(command);
       const issues = JSON.parse(result.stdout);
       
       return issues.map((issue: any) => ({
@@ -688,7 +820,11 @@ export class GitService extends EventEmitter {
   }
 
   /**
-   * Erstellt ein neues Issue im GitHub-Repository
+   * Creates a new issue in a GitHub repository.
+   * @param title Issue title
+   * @param body Issue body
+   * @param token GitHub token
+   * @returns A promise that resolves with the created issue information
    */
   public async createGitHubIssue(
     title: string, 
@@ -707,7 +843,7 @@ export class GitService extends EventEmitter {
         -d '{"title":"${title}","body":"${body}"}'
       `;
       
-      const result = await execAsync(command, { cwd: this.workspacePath });
+      const result = await execAsync(command);
       const issue = JSON.parse(result.stdout);
       
       return {
@@ -728,7 +864,9 @@ export class GitService extends EventEmitter {
   }
 
   /**
-   * Ruft die Pull Requests eines GitHub-Repositories ab
+   * Gets the pull requests for a GitHub repository.
+   * @param token GitHub token
+   * @returns A promise that resolves with the list of pull requests
    */
   public async getGitHubPullRequests(token: string): Promise<GitHubPullRequest[]> {
     try {
@@ -742,7 +880,7 @@ export class GitService extends EventEmitter {
         https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}/pulls
       `;
       
-      const result = await execAsync(command, { cwd: this.workspacePath });
+      const result = await execAsync(command);
       const prs = JSON.parse(result.stdout);
       
       return prs.map((pr: any) => ({
@@ -764,7 +902,13 @@ export class GitService extends EventEmitter {
   }
 
   /**
-   * Erstellt einen neuen Pull Request im GitHub-Repository
+   * Creates a new pull request in a GitHub repository.
+   * @param title Pull request title
+   * @param body Pull request body
+   * @param head Head branch
+   * @param base Base branch
+   * @param token GitHub token
+   * @returns A promise that resolves with the created pull request information
    */
   public async createGitHubPullRequest(
     title: string, 
@@ -785,7 +929,7 @@ export class GitService extends EventEmitter {
         -d '{"title":"${title}","body":"${body}","head":"${head}","base":"${base}"}'
       `;
       
-      const result = await execAsync(command, { cwd: this.workspacePath });
+      const result = await execAsync(command);
       const pr = JSON.parse(result.stdout);
       
       return {

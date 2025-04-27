@@ -1,6 +1,7 @@
 import { EventEmitter } from '../utils/EventEmitter';
 
 // Sichere ipcRenderer-Initialisierung
+// ipcRenderer wird verwendet, um IPC-Aufrufe an den Hauptprozess zu senden
 let ipcRenderer: any = null;
 // Prüfe, ob wir im Renderer-Prozess sind (window existiert)
 const isRenderer = typeof window !== 'undefined';
@@ -13,6 +14,7 @@ try {
 }
 
 // Hilfsfunktion für sichere IPC-Aufrufe
+// Diese Funktion prüft, ob ipcRenderer verfügbar ist, bevor ein IPC-Aufruf durchgeführt wird
 async function safeIpcInvoke(channel: string, ...args: any[]): Promise<any> {
   if (!ipcRenderer) {
     console.error(`IPC channel ${channel} called but ipcRenderer is not available`);
@@ -21,19 +23,27 @@ async function safeIpcInvoke(channel: string, ...args: any[]): Promise<any> {
   return ipcRenderer.invoke(channel, ...args);
 }
 
+// Interface für Verzeichniseinträge
+// Ein Verzeichniseintrag kann ein Datei- oder Verzeichnisobjekt sein
 export interface DirectoryEntry {
-  name: string;
-  path: string;
-  isDirectory: boolean;
-  children?: DirectoryEntry[];
-  size?: number;
-  modified?: Date;
+  name: string;            // Name des Eintrags
+  path: string;            // Pfad des Eintrags
+  isDirectory: boolean;    // Gibt an, ob der Eintrag ein Verzeichnis ist
+  children?: DirectoryEntry[]; // Unterordnete Einträge (nur für Verzeichnisse)
+  size?: number;           // Größe des Eintrags (nur für Dateien)
+  modified?: Date;         // Letztes Änderungsdatum des Eintrags
 }
 
+// ProjectService-Klasse
+// Diese Klasse verwaltet den Zugriff auf Projekte und Dateien im Workspace
 export class ProjectService extends EventEmitter {
-  private workspacePath: string;
-  private currentProject: string | null = null;
+  private workspacePath: string; // Pfad zum Workspace
+  private currentProject: string | null = null; // Aktuelles Projekt
   
+  /**
+   * Konstruktor für die ProjectService-Klasse
+   * @param workspacePath Pfad zum Workspace
+   */
   constructor(workspacePath: string) {
     super();
     this.workspacePath = workspacePath;
@@ -42,11 +52,13 @@ export class ProjectService extends EventEmitter {
     });
   }
   
+  // Initialisiert den ProjectService
   private async initialize() {
     // Lade Projekteinstellungen
     await this.loadSettings();
   }
   
+  // Lädt die Projekteinstellungen
   private async loadSettings() {
     try {
       // Lade Verzeichnisstruktur
@@ -57,6 +69,11 @@ export class ProjectService extends EventEmitter {
     }
   }
   
+  /**
+   * Gibt die Verzeichniseinträge für den angegebenen Pfad zurück
+   * @param dirPath Pfad zum Verzeichnis
+   * @returns Array von Verzeichniseinträgen
+   */
   public async getDirectoryEntries(dirPath: string): Promise<DirectoryEntry[]> {
     if (!ipcRenderer) {
       throw new Error('ipcRenderer not available');
@@ -70,6 +87,7 @@ export class ProjectService extends EventEmitter {
     }
   }
   
+  // Gibt die Verzeichniseinträge für den angegebenen Pfad zurück, mit Fehlertoleranz
   private async safeGetDirectoryEntries(dirPath: string): Promise<DirectoryEntry[]> {
     try {
       return await this.getDirectoryEntries(dirPath);
@@ -83,6 +101,11 @@ export class ProjectService extends EventEmitter {
     }
   }
 
+  /**
+   * Liest den Inhalt einer Datei
+   * @param filePath Pfad zur Datei
+   * @returns Inhalt der Datei als String
+   */
   public async getFileContent(filePath: string): Promise<string> {
     try {
       return await safeIpcInvoke('readFile', filePath);
@@ -92,6 +115,11 @@ export class ProjectService extends EventEmitter {
     }
   }
   
+  /**
+   * Speichert den Inhalt einer Datei
+   * @param filePath Pfad zur Datei
+   * @param content Inhalt der Datei als String
+   */
   public async saveFile(filePath: string, content: string): Promise<void> {
     try {
       await safeIpcInvoke('writeFile', filePath, content);
@@ -101,6 +129,11 @@ export class ProjectService extends EventEmitter {
     }
   }
   
+  /**
+   * Erstellt eine neue Datei
+   * @param filePath Pfad zur Datei
+   * @param content Inhalt der Datei als String (optional)
+   */
   public async createFile(filePath: string, content: string = ''): Promise<void> {
     try {
       await safeIpcInvoke('writeFile', filePath, content);
@@ -110,6 +143,10 @@ export class ProjectService extends EventEmitter {
     }
   }
   
+  /**
+   * Erstellt ein neues Verzeichnis
+   * @param dirPath Pfad zum Verzeichnis
+   */
   public async createDirectory(dirPath: string): Promise<void> {
     try {
       await safeIpcInvoke('createDirectory', dirPath);
@@ -119,6 +156,10 @@ export class ProjectService extends EventEmitter {
     }
   }
   
+  /**
+   * Löscht eine Datei
+   * @param filePath Pfad zur Datei
+   */
   public async deleteFile(filePath: string): Promise<void> {
     try {
       await safeIpcInvoke('deleteFile', filePath);
@@ -128,6 +169,10 @@ export class ProjectService extends EventEmitter {
     }
   }
   
+  /**
+   * Löscht ein Verzeichnis
+   * @param dirPath Pfad zum Verzeichnis
+   */
   public async deleteDirectory(dirPath: string): Promise<void> {
     try {
       await safeIpcInvoke('deleteDirectory', dirPath);
@@ -137,6 +182,11 @@ export class ProjectService extends EventEmitter {
     }
   }
   
+  /**
+   * Umbenennung einer Datei
+   * @param oldPath Alter Pfad zur Datei
+   * @param newPath Neuer Pfad zur Datei
+   */
   public async renameFile(oldPath: string, newPath: string): Promise<void> {
     try {
       await safeIpcInvoke('renameFile', oldPath, newPath);
@@ -146,10 +196,12 @@ export class ProjectService extends EventEmitter {
     }
   }
   
+  // Gibt den Workspace-Pfad zurück
   public getWorkspacePath(): string {
     return this.workspacePath;
   }
   
+  // Setzt den Workspace-Pfad
   public setWorkspacePath(path: string): void {
     this.workspacePath = path;
     this.emit('workspaceChanged', path);
@@ -159,16 +211,28 @@ export class ProjectService extends EventEmitter {
   }
 
   // Fehlende Methoden hinzufügen, die in app.ts und App.tsx verwendet werden
+  /**
+   * Setzt das aktuelle Projekt
+   * @param projectPath Pfad zum Projekt
+   */
   public setProject(projectPath: string): void {
     this.currentProject = projectPath;
     this.emit('projectChanged', projectPath);
   }
 
+  /**
+   * Schließt das aktuelle Projekt
+   */
   public closeProject(): void {
     this.currentProject = null;
     this.emit('projectClosed');
   }
 
+  /**
+   * Gibt die Dateistruktur für den angegebenen Pfad zurück
+   * @param dirPath Pfad zum Verzeichnis
+   * @returns Array von Dateieinträgen
+   */
   public async getFileStructure(dirPath: string): Promise<any[]> {
     try {
       const entries = await this.safeGetDirectoryEntries(dirPath);

@@ -18,23 +18,27 @@ import { TerminalSession } from '../types/terminal';
 import { AIConfig } from '../types/AITypes';
 import './TerminalPanel.css';
 
+// Props for the TerminalPanel component
 interface TerminalPanelProps {
-  onClose: () => void;
+  onClose: () => void; // Callback to close the terminal panel
 }
 
+// TerminalPanel manages terminal sessions and renders the terminal UI
 export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const terminalServiceRef = useRef<TerminalService | null>(null);
-  const [sessions, setSessions] = useState<string[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null); // Ref for the terminal container
+  const terminalServiceRef = useRef<TerminalService | null>(null); // Ref for the terminal service instance
+  const [sessions, setSessions] = useState<string[]>([]); // List of session IDs
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null); // ID of the active session
 
   useEffect(() => {
     let mounted = true;
 
+    // Initialize terminal services and UI
     const initializeTerminal = async () => {
       try {
         if (!containerRef.current) return;
 
+        // Set up backend services and dependencies
         const terminalServer = new TerminalServer(3001);
         const store = new Store();
         const uiService = new UIService();
@@ -55,6 +59,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose }) => {
           }
         });
 
+        // Create the terminal service and manager
         const terminalService = new TerminalService(
           null,
           aiService,
@@ -64,6 +69,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose }) => {
           store
         );
 
+        // Create and set the terminal manager
         const [terminalManager] = useState(() => new TerminalManager(
           3001,
           terminalService,
@@ -77,6 +83,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose }) => {
         await terminalService.initialize();
         terminalServiceRef.current = terminalService;
 
+        // Append the terminal element to the container
         const element = terminalService.getElement();
         containerRef.current.appendChild(element);
 
@@ -86,7 +93,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose }) => {
         const session = await terminalManager.createSession({});
         setActiveSessionId(session.id);
 
-        // Set up event listeners
+        // Listen for session creation/removal events
         terminalManager.on('sessionCreated', (session: TerminalSession) => {
           if (mounted) {
             setSessions(prev => [...prev, session.id]);
@@ -106,6 +113,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose }) => {
           console.error('Terminal error:', error);
         });
       } catch (error) {
+        // Handle initialization errors
         console.error('Failed to initialize terminal:', error);
       }
     };
@@ -113,6 +121,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose }) => {
     initializeTerminal();
 
     return () => {
+      // Cleanup on unmount
       mounted = false;
       if (terminalServiceRef.current) {
         terminalServiceRef.current.dispose();
@@ -122,11 +131,13 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose }) => {
 
   return (
     <div className="terminal-panel">
+      {/* Terminal panel header with close button */}
       <div className="terminal-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 8px', background: '#23272e', borderBottom: '1px solid #333' }}>
         <h3 style={{ margin: 0, fontSize: 16 }}>Terminal</h3>
-        <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#fff', fontSize: 18, cursor: 'pointer', padding: '0 8px' }} title="Schließen">×</button>
+        <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#fff', fontSize: 18, cursor: 'pointer', padding: '0 8px' }} title="Close">×</button>
       </div>
+      {/* Container for the terminal UI */}
       <div ref={containerRef} className="terminal-container" style={{ height: 'calc(100% - 32px)' }} />
     </div>
   );
-}; 
+};

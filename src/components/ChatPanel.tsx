@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import './ChatPanel.css';
 
+// Message interface describes a single chat message
 interface Message {
   id: string;
   content: string;
@@ -8,12 +9,18 @@ interface Message {
   timestamp: Date;
 }
 
+// ChatPanel renders an AI chat interface for user/AI conversation
 const ChatPanel: React.FC = () => {
+  // State for all chat messages
   const [messages, setMessages] = useState<Message[]>([]);
+  // State for the current input value
   const [inputValue, setInputValue] = useState('');
+  // State to show loading/AI typing indicator
   const [isLoading, setIsLoading] = useState(false);
+  // Ref to scroll to the bottom of the chat
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Scroll chat to the bottom when messages change
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -22,6 +29,7 @@ const ChatPanel: React.FC = () => {
     scrollToBottom();
   }, [messages]);
 
+  // Handle sending a message (user input)
   const handleSendMessage = async () => {
     if (!inputValue.trim()) return;
 
@@ -36,12 +44,12 @@ const ChatPanel: React.FC = () => {
     setInputValue('');
     setIsLoading(true);
 
-    // Hier würde normalerweise die Anfrage an den AI-Service gesendet werden
-    // Für dieses Beispiel simulieren wir eine Verzögerung und eine Antwort
+    // Normally, here you would send the request to the AI service
+    // For this example, we simulate a delay and a response
     setTimeout(() => {
       const aiMessage: Message = {
         id: (Date.now() + 1).toString(),
-        content: `Ich habe Ihre Nachricht erhalten: "${inputValue}". Wie kann ich Ihnen weiterhelfen?`,
+        content: `I received your message: "${inputValue}". How can I assist you further?`,
         sender: 'ai',
         timestamp: new Date()
       };
@@ -50,6 +58,7 @@ const ChatPanel: React.FC = () => {
     }, 1000);
   };
 
+  // Handle Enter key to send message (Shift+Enter for newline)
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -66,7 +75,7 @@ const ChatPanel: React.FC = () => {
       <div className="messages-container">
         {messages.length === 0 ? (
           <div className="empty-chat">
-            <p>Willkommen! Wie kann ich Ihnen helfen?</p>
+            <p>Welcome! How can I help you?</p>
           </div>
         ) : (
           messages.map(message => (
@@ -102,7 +111,7 @@ const ChatPanel: React.FC = () => {
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Nachricht eingeben..."
+          placeholder="Type a message..."
           rows={1}
         />
         <button 
@@ -110,11 +119,11 @@ const ChatPanel: React.FC = () => {
           disabled={!inputValue.trim() || isLoading}
           className="send-button"
         >
-          Senden
+          Send
         </button>
       </div>
     </div>
   );
 };
 
-export default ChatPanel; 
+export default ChatPanel;

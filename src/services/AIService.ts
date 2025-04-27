@@ -9,9 +9,10 @@ import { AIConfig, AIResponse, AIConversation, AIMessage, CodeContext, CodeBlock
 import { promisify } from 'util';
 import { marked } from 'marked';
 
-// Sichere ipcRenderer-Initialisierung, funktioniert nur im Renderer
+// Safe ipcRenderer initialization for Electron renderer process
+// ipcRenderer is used for inter-process communication in Electron
 let ipcRenderer: any = null;
-// Prüfe, ob wir im Renderer-Prozess sind (window existiert)
+// Check if running in Electron renderer process (window exists)
 const isRenderer = typeof window !== 'undefined';
 try {
   if (isRenderer && window && window.electron) {
@@ -21,7 +22,7 @@ try {
   console.error('Failed to initialize ipcRenderer in AIService', e);
 }
 
-// Hilfsfunktion für sichere IPC-Aufrufe
+// Helper function for safe IPC calls
 async function safeIpcInvoke(channel: string, ...args: any[]): Promise<any> {
   if (!ipcRenderer) {
     console.error(`IPC channel ${channel} called but ipcRenderer is not available`);
@@ -30,16 +31,19 @@ async function safeIpcInvoke(channel: string, ...args: any[]): Promise<any> {
   return ipcRenderer.invoke(channel, ...args);
 }
 
-const execAsync = async (command: string) => {
+// Helper to execute shell commands asynchronously via IPC
+export const execAsync = async (command: string) => {
   return safeIpcInvoke('exec', command);
 };
 
+// Interface for AI error details
 export interface AIError {
-  code: string;
-  message: string;
-  details?: any;
+  code: string;         // Error code
+  message: string;      // Error message
+  details?: any;        // Optional additional error details
 }
 
+// Custom error class for AIService errors
 class AIServiceError extends Error implements AIError {
   constructor(
     message: string,
@@ -51,17 +55,19 @@ class AIServiceError extends Error implements AIError {
   }
 }
 
+// Interface for editor selection range
 export interface Selection {
-  startLineNumber: number;
-  startColumn: number;
-  endLineNumber: number;
-  endColumn: number;
+  startLineNumber: number; // Start line number
+  startColumn: number;     // Start column number
+  endLineNumber: number;   // End line number
+  endColumn: number;       // End column number
 }
 
+// AIService provides AI-powered code assistance and chat functionality
 export class AIService extends EventEmitter {
-  private static instance: AIService;
-  private config: AIConfig;
-  private conversation: AIConversation = { 
+  private static instance: AIService;                 // Singleton instance
+  private config: AIConfig;                           // AI configuration
+  private conversation: AIConversation = {            // Current conversation state
     id: '',
     messages: [],
     context: {
@@ -72,22 +78,24 @@ export class AIService extends EventEmitter {
     },
     timestamp: new Date()
   };
-  private conversations: Map<string, AIConversation> = new Map();
-  private activeConversation: string | null = null;
-  private codeContext: Map<string, CodeContext> = new Map();
-  private modelCache: Map<string, any> = new Map();
-  private openai: OpenAI | null = null;
-  private isInitialized: boolean = false;
-  private tokenizer: AITokenizer | null = null;
-  private prompts: Map<string, AIPrompt> = new Map();
-  private customEndpoints: Map<string, any> = new Map();
+  private conversations: Map<string, AIConversation> = new Map(); // All conversations
+  private activeConversation: string | null = null;   // Active conversation ID
+  private codeContext: Map<string, CodeContext> = new Map();      // Context for code suggestions
+  private modelCache: Map<string, any> = new Map();   // Cache for AI models
+  private openai: OpenAI | null = null;               // OpenAI API client
+  private isInitialized: boolean = false;             // Initialization state
+  private tokenizer: AITokenizer | null = null;       // Tokenizer for prompt length
+  private prompts: Map<string, AIPrompt> = new Map(); // Custom prompts
+  private customEndpoints: Map<string, any> = new Map(); // Custom API endpoints
 
+  // Private constructor to enforce singleton pattern
   private constructor(config: AIConfig) {
     super();
     this.config = config;
     this.loadPrompts();
   }
 
+  // Get the singleton instance of AIService
   public static getInstance(config: AIConfig): AIService {
     if (!AIService.instance) {
       AIService.instance = new AIService(config);
@@ -95,29 +103,33 @@ export class AIService extends EventEmitter {
     return AIService.instance;
   }
 
+  // Initialize the AI service (loads models, sets up API clients, etc.)
   public async initialize(): Promise<void> {
     if (this.isInitialized) {
       return;
     }
 
     try {
+      // Initialize local model if configured
       if (this.config.useLocalModel) {
         await this.loadLocalModel();
-      } else if (this.config.openAIConfig?.apiKey) {
+      } 
+      // Initialize OpenAI API client if configured
+      else if (this.config.openAIConfig?.apiKey) {
         this.openai = new OpenAI({
           apiKey: this.config.openAIConfig.apiKey,
           dangerouslyAllowBrowser: true
         });
       }
 
-      // Initialize custom endpoints
+      // Initialize custom endpoints if configured
       if (this.config.customEndpoints) {
         for (const endpoint of this.config.customEndpoints) {
           this.customEndpoints.set(endpoint.name, endpoint);
         }
       }
 
-      // Initialize tokenizer
+      // Initialize tokenizer for prompt length optimization
       await this.initializeTokenizer();
 
       this.isInitialized = true;
@@ -130,6 +142,7 @@ export class AIService extends EventEmitter {
     }
   }
 
+  // Load local model from configured endpoint
   private async loadLocalModel(): Promise<void> {
     try {
       // Implementation for loading local model
@@ -152,6 +165,7 @@ export class AIService extends EventEmitter {
     }
   }
 
+  // Initialize tokenizer for prompt length optimization
   private async initializeTokenizer(): Promise<void> {
     try {
       // Simple tokenizer implementation
@@ -184,9 +198,9 @@ export class AIService extends EventEmitter {
     }
   }
 
+  // Load predefined prompts
   private loadPrompts(): void {
     try {
-      // Load predefined prompts
       const defaultPrompts: AIPrompt[] = [
         {
           id: 'explain-code',
@@ -238,6 +252,7 @@ export class AIService extends EventEmitter {
     }
   }
 
+  // Get code context for the given file path and position
   public async getCodeContext(filePath: string, position?: monaco.Position): Promise<CodeContext> {
     try {
       // Check if we already have the context cached
@@ -292,6 +307,7 @@ export class AIService extends EventEmitter {
     }
   }
 
+  // Get the current word at the given position in the code
   private getCurrentWord(code: string, position: monaco.Position): string | undefined {
     const lines = code.split('\n');
     const line = lines[position.lineNumber - 1] || '';
@@ -310,6 +326,7 @@ export class AIService extends EventEmitter {
     return undefined;
   }
 
+  // Get code completion suggestions for the given file path and position
   public async getCodeCompletion(filePath: string, position: monaco.Position): Promise<AIResponse> {
     try {
       this.checkInitialized();
@@ -327,6 +344,7 @@ export class AIService extends EventEmitter {
     }
   }
 
+  // Complete code at the given file path and position
   public async completeCode(filePath: string, position: monaco.Position): Promise<AIResponse> {
     try {
       this.checkInitialized();
@@ -344,6 +362,7 @@ export class AIService extends EventEmitter {
     }
   }
 
+  // Explain code at the given file path and selection
   public async explainCode(
     filePath: string,
     selection: monaco.Selection
@@ -367,6 +386,7 @@ export class AIService extends EventEmitter {
     }
   }
 
+  // Refactor code at the given file path and selection
   public async refactorCode(
     filePath: string,
     selection: monaco.Selection,
@@ -391,6 +411,7 @@ export class AIService extends EventEmitter {
     }
   }
 
+  // Generate tests for the given file path
   public async generateTests(
     filePath: string,
     testFramework: string = 'jest'
@@ -411,6 +432,7 @@ export class AIService extends EventEmitter {
     }
   }
 
+  // Translate code at the given file path to the target language
   public async translateCode(
     filePath: string,
     targetLanguage: string
@@ -431,6 +453,7 @@ export class AIService extends EventEmitter {
     }
   }
 
+  // Generate documentation for the given file path
   public async generateDocumentation(
     filePath: string,
     format: string = 'markdown'
@@ -451,6 +474,7 @@ export class AIService extends EventEmitter {
     }
   }
 
+  // Start a new conversation with the given initial context and model
   public async startConversation(
     initialContext?: CodeContext,
     model?: string,
@@ -507,6 +531,7 @@ export class AIService extends EventEmitter {
     }
   }
 
+  // Send a message in the given conversation
   public async sendMessage(
     conversationId: string,
     message: string
@@ -555,6 +580,7 @@ export class AIService extends EventEmitter {
     }
   }
 
+  // End the given conversation
   public async endConversation(conversationId: string): Promise<void> {
     try {
       // Remove the conversation
@@ -573,6 +599,7 @@ export class AIService extends EventEmitter {
     }
   }
 
+  // Extract imports from the given code
   private extractImports(code: string): string[] {
     // Simple import extraction - in a real implementation, you would use a parser
     const importRegex = /import\s+(?:{[^}]*}|\*\s+as\s+\w+|\w+)\s+from\s+['"]([^'"]+)['"]/g;
@@ -586,6 +613,7 @@ export class AIService extends EventEmitter {
     return imports;
   }
 
+  // Get dependencies for the given file path
   private async getDependencies(filePath: string): Promise<string[]> {
     try {
       // Read package.json if it exists
@@ -602,6 +630,7 @@ export class AIService extends EventEmitter {
     }
   }
 
+  // Get project structure for the given file path
   private async getProjectStructure(filePath: string): Promise<string[]> {
     try {
       // Get the project root
@@ -620,6 +649,7 @@ export class AIService extends EventEmitter {
     }
   }
 
+  // Get all files in the given directory
   private async getAllFiles(dir: string): Promise<string[]> {
     const files: string[] = [];
     
@@ -644,10 +674,12 @@ export class AIService extends EventEmitter {
     return files;
   }
 
+  // Generate completion prompt for the given context
   private generateCompletionPrompt(context: CodeContext): string {
     return `Complete the following code in ${context.language}:\n\n${context.code}\n\nProvide only the code completion, no explanations.`;
   }
 
+  // Generate explanation prompt for the given context and selection
   private generateExplanationPrompt(
     context: CodeContext,
     selection: { start: monaco.Position; end: monaco.Position }
@@ -659,6 +691,7 @@ export class AIService extends EventEmitter {
     return `Explain the following code in detail:\n\n\`\`\`${context.language}\n${selectedCode}\n\`\`\`\n\nProvide a comprehensive explanation of what this code does, how it works, and any important considerations.`;
   }
 
+  // Generate refactor prompt for the given context, selection, and refactor type
   private generateRefactorPrompt(
     context: CodeContext,
     selection: { start: monaco.Position; end: monaco.Position },
@@ -671,6 +704,7 @@ export class AIService extends EventEmitter {
     return `Refactor the following code to ${refactorType}:\n\n\`\`\`${context.language}\n${selectedCode}\n\`\`\`\n\nProvide the refactored code with explanations of the changes made.`;
   }
 
+  // Get offset at the given line and column in the code
   private getOffsetAt(content: string, line: number, column: number): number {
     const lines = content.split('\n');
     let offset = 0;
@@ -684,6 +718,7 @@ export class AIService extends EventEmitter {
     return offset;
   }
 
+  // Generate test prompt for the given context and test framework
   private generateTestPrompt(
     context: CodeContext,
     testFramework: string
@@ -691,6 +726,7 @@ export class AIService extends EventEmitter {
     return `Generate comprehensive unit tests for the following code using ${testFramework}:\n\n\`\`\`${context.language}\n${context.code}\n\`\`\`\n\nProvide the test code with explanations of what each test covers.`;
   }
 
+  // Generate translation prompt for the given context and target language
   private generateTranslationPrompt(
     context: CodeContext,
     targetLanguage: string
@@ -698,6 +734,7 @@ export class AIService extends EventEmitter {
     return `Translate the following code from ${context.language} to ${targetLanguage}:\n\n\`\`\`${context.language}\n${context.code}\n\`\`\`\n\nProvide the translated code with explanations of any language-specific considerations.`;
   }
 
+  // Generate documentation prompt for the given context and format
   private generateDocumentationPrompt(
     context: CodeContext,
     format: string
@@ -705,6 +742,7 @@ export class AIService extends EventEmitter {
     return `Generate comprehensive documentation for the following code in ${format} format:\n\n\`\`\`${context.language}\n${context.code}\n\`\`\`\n\nInclude function descriptions, parameters, return values, and examples.`;
   }
 
+  // Generate conversation prompt for the given conversation
   private generateConversationPrompt(conversation: AIConversation): string {
     // In a real implementation, you would format the conversation history
     // For simplicity, we'll just return the last message
@@ -712,6 +750,7 @@ export class AIService extends EventEmitter {
     return lastMessage.content;
   }
 
+  // Query the AI with the given prompt and context
   private async queryAI(prompt: string, context: CodeContext): Promise<AIResponse> {
     try {
       // Optimize the prompt using the tokenizer if available
@@ -742,6 +781,7 @@ export class AIService extends EventEmitter {
     }
   }
 
+  // Truncate the prompt to the given length
   private truncatePrompt(prompt: string, maxTokens: number): string {
     if (!this.tokenizer) {
       // Simple truncation if no tokenizer is available
@@ -758,6 +798,7 @@ export class AIService extends EventEmitter {
     return this.tokenizer.decode(truncatedTokens);
   }
 
+  // Query the local model with the given prompt and context
   private async queryLocalModel(prompt: string, context: CodeContext): Promise<AIResponse> {
     try {
       if (!this.config.localModelConfig?.endpoint) {
@@ -781,6 +822,7 @@ export class AIService extends EventEmitter {
     }
   }
 
+  // Query OpenAI with the given prompt and context
   private async queryOpenAI(prompt: string, context: CodeContext): Promise<AIResponse> {
     try {
       if (!this.openai) {
@@ -809,6 +851,7 @@ export class AIService extends EventEmitter {
     }
   }
 
+  // Query the custom endpoint with the given prompt and context
   private async queryCustomEndpoint(prompt: string, context: CodeContext): Promise<AIResponse> {
     try {
       if (!this.config.customEndpoints || this.config.customEndpoints.length === 0) {
@@ -844,6 +887,7 @@ export class AIService extends EventEmitter {
     }
   }
 
+  // Parse OpenAI response
   private parseOpenAIResponse(response: any): AIResponse {
     const content = response.choices[0].message.content;
     const codeBlocks = this.extractCodeBlocks(content);
@@ -857,6 +901,7 @@ export class AIService extends EventEmitter {
     };
   }
 
+  // Parse AI response
   private parseAIResponse(response: any): AIResponse {
     // This is a generic parser that should work with most OpenAI-compatible APIs
     const content = response.choices?.[0]?.message?.content || response.text || response.content || '';
@@ -871,6 +916,7 @@ export class AIService extends EventEmitter {
     };
   }
 
+  // Extract code blocks from the given content
   private extractCodeBlocks(content: string): CodeBlock[] {
     const codeBlocks: CodeBlock[] = [];
     const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
@@ -889,36 +935,44 @@ export class AIService extends EventEmitter {
     return codeBlocks;
   }
 
+  // Get all prompts
   public getPrompts(): AIPrompt[] {
     return Array.from(this.prompts.values());
   }
 
+  // Add a prompt
   public addPrompt(prompt: AIPrompt): void {
     this.prompts.set(prompt.id, prompt);
   }
 
+  // Remove a prompt
   public removePrompt(promptId: string): void {
     this.prompts.delete(promptId);
   }
 
+  // Get a prompt by ID
   public getPrompt(promptId: string): AIPrompt | undefined {
     return this.prompts.get(promptId);
   }
 
+  // Get all conversations
   public getConversations(): AIConversation[] {
     return Array.from(this.conversations.values());
   }
 
+  // Get the active conversation ID
   public getActiveConversation(): string | null {
     return this.activeConversation;
   }
 
+  // Set the active conversation ID
   public setActiveConversation(conversationId: string): void {
     if (this.conversations.has(conversationId)) {
       this.activeConversation = conversationId;
     }
   }
 
+  // Dispose of the AI service
   public dispose(): void {
     // Clean up resources
     this.conversations.clear();
@@ -928,6 +982,7 @@ export class AIService extends EventEmitter {
     this.isInitialized = false;
   }
 
+  // Check if the AI service is initialized
   private checkInitialized(): void {
     if (!this.isInitialized) {
       throw new AIServiceError(

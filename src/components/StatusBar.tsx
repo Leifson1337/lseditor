@@ -1,15 +1,17 @@
 import React from 'react';
 import '../styles/StatusBar.css';
 
+// Props for the StatusBar component
 interface StatusBarProps {
-  activeFile?: string | null;
-  terminalPort?: number;
-  isTerminalConnected?: boolean;
-  errorCount?: number;
-  problemCount?: number;
-  portForwardCount?: number;
+  activeFile?: string | null; // Path of the currently active file
+  terminalPort?: number; // Port number of the terminal connection
+  isTerminalConnected?: boolean; // Terminal connection status
+  errorCount?: number; // Number of errors in the current file/project
+  problemCount?: number; // Number of problems/warnings
+  portForwardCount?: number; // Number of active port forwards
 }
 
+// StatusBar displays file info, error/warning counts, port status, and terminal connection status
 const StatusBar: React.FC<StatusBarProps> = ({
   activeFile,
   terminalPort,
@@ -18,7 +20,7 @@ const StatusBar: React.FC<StatusBarProps> = ({
   problemCount = 0,
   portForwardCount = 0
 }) => {
-  // Programmiersprache aus Dateiendung bestimmen
+  // Determine programming language from file extension
   let language = '';
   if (activeFile) {
     const ext = activeFile.split('.').pop()?.toLowerCase();
@@ -54,6 +56,7 @@ const StatusBar: React.FC<StatusBarProps> = ({
   return (
     <div className="status-bar">
       <div className="status-bar-left">
+        {/* Show active file and detected language */}
         {activeFile && (
           <div className="status-item">
             <span className="status-label">File:</span>
@@ -65,23 +68,25 @@ const StatusBar: React.FC<StatusBarProps> = ({
         )}
       </div>
       <div className="status-bar-center">
+        {/* Show error, warning, and port-forward counts */}
         <div className="status-item error-count">
           <span className={`status-value ${errorCount > 0 ? 'error' : ''}`}>
-            Fehler: {errorCount}
+            Errors: {errorCount}
           </span>
         </div>
         <div className="status-item warning-count">
           <span className={`status-value ${problemCount > 0 ? 'warning' : ''}`}>
-            Probleme: {problemCount}
+            Warnings: {problemCount}
           </span>
         </div>
         <div className="status-item port-count">
           <span className={`status-value ${portForwardCount > 0 ? 'info' : ''}`}>
-            Port-Forwards: {portForwardCount}
+            Port Forwards: {portForwardCount}
           </span>
         </div>
       </div>
       <div className="status-bar-right">
+        {/* Show terminal port and connection status */}
         {terminalPort && (
           <div className="status-item">
             <span className="status-label">Terminal Port:</span>

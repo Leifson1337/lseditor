@@ -3,6 +3,7 @@ import { FaCheck, FaTimes, FaCode, FaQuestion } from 'react-icons/fa';
 import { useAI } from '../contexts/AIContext';
 import '../styles/ai-chat-modern.css';
 
+// Message represents a single chat message in the AI chat panel
 interface Message {
   id: string;
   content: string;
@@ -10,15 +11,17 @@ interface Message {
   timestamp: Date;
 }
 
+// Props for the AIChat component
 interface AIChatProps {
-  messages: Message[];
-  onSendMessage: (message: string) => void;
-  isOpen: boolean;
-  onClose: () => void;
-  onInsertCode: (code: string) => void;
-  onExplain: (code: string) => void;
+  messages: Message[]; // List of chat messages
+  onSendMessage: (message: string) => void; // Callback to send a message
+  isOpen: boolean; // Whether the chat panel is open
+  onClose: () => void; // Callback to close the chat panel
+  onInsertCode: (code: string) => void; // Callback to insert code into editor
+  onExplain: (code: string) => void; // Callback to explain code
 }
 
+// AIChat provides a modern chat interface for interacting with an AI assistant
 export const AIChat: React.FC<AIChatProps> = ({
   messages,
   onSendMessage,
@@ -27,14 +30,20 @@ export const AIChat: React.FC<AIChatProps> = ({
   onInsertCode,
   onExplain
 }) => {
+  // State for the current input value
   const [input, setInput] = useState('');
+  // Access AI context for sending messages
   const { sendMessage } = useAI();
+  // Ref to scroll to the end of the messages list
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Effect to scroll to the latest message when messages change
   useEffect(() => {
+    // Scroll to the latest message when messages change
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Handle sending a message via the input form
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (input.trim()) {
@@ -43,6 +52,7 @@ export const AIChat: React.FC<AIChatProps> = ({
     }
   };
 
+  // If the chat panel is not open, return null
   if (!isOpen) return null;
 
   return (
@@ -54,9 +64,11 @@ export const AIChat: React.FC<AIChatProps> = ({
         </button>
       </div>
       <div className="ai-chat-modern-messages">
+        {/* Show placeholder if there are no messages */}
         {messages.length === 0 && (
           <div className="ai-chat-modern-empty">Start a conversation with your AI assistant…</div>
         )}
+        {/* Render each chat message */}
         {messages.map((message) => (
           <div
             key={message.id}

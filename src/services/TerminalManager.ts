@@ -1,8 +1,10 @@
 import { EventEmitter } from '../utils/EventEmitter';
 
 // Sichere ipcRenderer-Initialisierung - mit Prozess-Check
+// ipcRenderer is used for inter-process communication between the main process and renderer process
 let ipcRenderer: any = null;
 // Prüfe, ob wir im Renderer-Prozess sind
+// Check if we're in the renderer process
 const isRenderer = typeof window !== 'undefined' && typeof process !== 'undefined' && process.type === 'renderer';
 try {
   if (isRenderer && window && window.electron) {
@@ -13,6 +15,7 @@ try {
 }
 
 // Hilfsfunktion für sichere IPC-Aufrufe
+// Helper function for safe IPC calls
 async function safeIpcInvoke(channel: string, ...args: any[]): Promise<any> {
   if (!ipcRenderer) {
     console.error(`IPC channel ${channel} called but ipcRenderer is not available`);
@@ -37,35 +40,59 @@ import { ProjectService } from '../services/ProjectService';
 import { UIService } from '../services/UIService';
 import { store } from '../store/store';
 
+// SplitViewConfig represents the configuration for a split view
 export interface SplitViewConfig {
   orientation: 'horizontal' | 'vertical';
   sizes: number[];
   sessions: string[];
 }
 
+// TerminalManager manages multiple terminal sessions and provides functionality for creating, removing, and managing sessions
 export class TerminalManager extends EventEmitter {
+  // terminals stores all the terminal instances
   private terminals: Map<string, XTerm> = new Map();
+  // profiles stores all the terminal profiles
   private profiles: Map<string, TerminalProfile> = new Map();
+  // themes stores all the terminal themes
   private themes: Map<string, TerminalTheme> = new Map();
+  // customThemes stores all the custom terminal themes
   private customThemes: Map<string, CustomTheme> = new Map();
+  // splitViews stores all the split view configurations
   private splitViews: Map<string, SplitViewConfig> = new Map();
+  // history stores the command history
   private history: string[] = [];
+  // maxHistorySize is the maximum number of commands to store in the history
   private maxHistorySize: number = 1000;
+  // terminalServer is the server that manages the terminal connections
   private terminalServer: TerminalServer;
+  // sessions stores all the terminal sessions
   private sessions: Map<string, TerminalSession> = new Map();
+  // activeSession is the currently active session
   private activeSession: TerminalSession | null = null;
+  // isInitialized indicates whether the terminal manager has been initialized
   private isInitialized: boolean = false;
+  // container is the HTML element that contains the terminal
   private container: HTMLElement | null = null;
+  // ws is the WebSocket connection to the terminal server
   private ws: any | null = null;
+  // reconnectAttempts is the number of reconnect attempts
   private reconnectAttempts = 0;
+  // maxReconnectAttempts is the maximum number of reconnect attempts
   private maxReconnectAttempts = 5;
+  // reconnectTimeout is the timeout for reconnecting to the terminal server
   private reconnectTimeout: any | null = null;
+  // terminalService is the service that provides terminal functionality
   private terminalService: TerminalService;
+  // aiService is the service that provides AI functionality
   private aiService: AIService;
+  // projectService is the service that provides project functionality
   private projectService?: ProjectService;
+  // uiService is the service that provides UI functionality
   private uiService?: UIService;
+  // isConnected indicates whether the terminal manager is connected to the terminal server
   private isConnected: boolean = false;
 
+  // Constructor initializes the terminal manager with the given parameters
   constructor(
     private initialPort: number,
     terminalService: TerminalService,
@@ -88,6 +115,7 @@ export class TerminalManager extends EventEmitter {
     });
   }
 
+  // Initialize the terminal manager
   public async initialize(): Promise<void> {
     if (this.isInitialized) {
       return;
@@ -114,11 +142,13 @@ export class TerminalManager extends EventEmitter {
     }
   }
 
+  // Generate a unique session ID
   private generateSessionId(): string {
     return Math.random().toString(36).substring(2);
   }
 
   // Session Management
+  // Create a new terminal session
   public async createSession(options: {
     title?: string;
     cwd?: string;
@@ -167,6 +197,7 @@ export class TerminalManager extends EventEmitter {
     return session;
   }
 
+  // Remove a terminal session
   public removeSession(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -181,6 +212,7 @@ export class TerminalManager extends EventEmitter {
     this.emit('sessionRemoved', sessionId);
   }
 
+  // Activate a terminal session
   public activateSession(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -196,6 +228,7 @@ export class TerminalManager extends EventEmitter {
     this.emit('sessionActivated', sessionId);
   }
 
+  // Deactivate a terminal session
   private deactivateSession(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -211,18 +244,22 @@ export class TerminalManager extends EventEmitter {
     this.emit('sessionDeactivated', sessionId);
   }
 
+  // Get a terminal session
   public getSession(sessionId: string): TerminalSession | undefined {
     return this.sessions.get(sessionId);
   }
 
+  // Get the active terminal session
   public getActiveSession(): TerminalSession | null {
     return this.activeSession;
   }
 
+  // Get all terminal sessions
   public getAllSessions(): TerminalSession[] {
     return Array.from(this.sessions.values());
   }
 
+  // Check if the terminal manager is initialized
   private checkInitialized(): void {
     if (!this.isInitialized) {
       throw new Error('Terminal manager not initialized');
@@ -230,6 +267,7 @@ export class TerminalManager extends EventEmitter {
   }
 
   // Split View Management
+  // Create a new split view
   public async createSplitView(parentId: string, direction: 'horizontal' | 'vertical'): Promise<TerminalSession> {
     const parentSession = this.sessions.get(parentId);
     if (!parentSession) {
@@ -251,10 +289,12 @@ export class TerminalManager extends EventEmitter {
     });
   }
 
+  // Get a split view configuration
   public getSplitView(id: string): SplitViewConfig | undefined {
     return this.splitViews.get(id);
   }
 
+  // Update a split view configuration
   public updateSplitView(id: string, config: Partial<SplitViewConfig>): void {
     const currentConfig = this.splitViews.get(id);
     if (currentConfig) {
@@ -264,6 +304,7 @@ export class TerminalManager extends EventEmitter {
     }
   }
 
+  // Remove a split view configuration
   public removeSplitView(id: string): void {
     const config = this.splitViews.get(id);
     if (config) {
@@ -273,6 +314,7 @@ export class TerminalManager extends EventEmitter {
   }
 
   // Profile Management
+  // Initialize the default profiles
   private initializeDefaultProfiles(): void {
     const defaultProfile: TerminalProfile = {
       name: 'default',
@@ -323,25 +365,30 @@ export class TerminalManager extends EventEmitter {
     });
   }
 
+  // Add a new profile
   public addProfile(profile: TerminalProfile): void {
     this.profiles.set(profile.name, profile);
     this.emit('profileAdded', profile);
   }
 
+  // Get a profile
   public getProfile(name: string): TerminalProfile | undefined {
     return this.profiles.get(name);
   }
 
+  // Get all profiles
   public getProfiles(): TerminalProfile[] {
     return Array.from(this.profiles.values());
   }
 
+  // Remove a profile
   public removeProfile(name: string): void {
     this.profiles.delete(name);
     this.emit('profileRemoved', name);
   }
 
   // Theme Management
+  // Initialize the default themes
   private initializeDefaultThemes(): void {
     const defaultTheme: TerminalTheme = {
       name: 'default',
@@ -393,25 +440,30 @@ export class TerminalManager extends EventEmitter {
     });
   }
 
+  // Add a new theme
   public addTheme(theme: TerminalTheme): void {
     this.themes.set(theme.name, theme);
     this.emit('themeAdded', theme);
   }
 
+  // Get a theme
   public getTheme(name: string): TerminalTheme | undefined {
     return this.themes.get(name);
   }
 
+  // Get all themes
   public getThemes(): TerminalTheme[] {
     return Array.from(this.themes.values());
   }
 
+  // Remove a theme
   public removeTheme(name: string): void {
     this.themes.delete(name);
     this.emit('themeRemoved', name);
   }
 
   // History Management
+  // Add a command to the history
   public addToHistory(command: string): void {
     this.history.push(command);
     if (this.history.length > this.maxHistorySize) {
@@ -420,16 +472,19 @@ export class TerminalManager extends EventEmitter {
     this.emit('historyUpdated', this.history);
   }
 
+  // Get the command history
   public getHistory(): string[] {
     return [...this.history];
   }
 
+  // Clear the command history
   public clearHistory(): void {
     this.history = [];
     this.emit('historyCleared');
   }
 
   // Cleanup
+  // Dispose of the terminal manager
   public dispose(): void {
     this.sessions.forEach(session => {
       this.removeSession(session.id);
@@ -447,6 +502,7 @@ export class TerminalManager extends EventEmitter {
     this.terminalServer.dispose();
   }
 
+  // Setup event listeners for the terminal server
   private setupEventListeners(): void {
     this.terminalServer.on('connection', () => {
       console.log('Terminal connected');
@@ -466,6 +522,7 @@ export class TerminalManager extends EventEmitter {
     });
   }
 
+  // Resize a terminal session
   public async resizeSession(sessionId: string, cols: number, rows: number): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -477,6 +534,7 @@ export class TerminalManager extends EventEmitter {
     }
   }
 
+  // Write to a terminal session
   public async writeToSession(sessionId: string, data: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -488,36 +546,44 @@ export class TerminalManager extends EventEmitter {
     }
   }
 
+  // Get the terminal container element
   public getElement(): HTMLElement | null {
     return this.container;
   }
 
+  // Get the current input
   public getCurrentInput(): string {
     return '';
   }
 
+  // Search for a query
   public search(query: string): void {
     // TODO: Implement search functionality
   }
 
+  // Add a custom theme
   public addCustomTheme(theme: CustomTheme): void {
     this.customThemes.set(theme.id, theme);
     this.emit('customThemeAdded', theme);
   }
 
+  // Get a custom theme
   public getCustomTheme(id: string): CustomTheme | undefined {
     return this.customThemes.get(id);
   }
 
+  // Get all custom themes
   public getAllCustomThemes(): CustomTheme[] {
     return Array.from(this.customThemes.values());
   }
 
+  // Connect to the terminal server
   public connect() {
     console.log('Connecting to terminal server on port:', this.terminalServer.getPort());
     this.emit('connecting');
   }
 
+  // Disconnect from the terminal server
   public disconnect() {
     console.log('Disconnecting from terminal server');
     this.terminalServer.close();
@@ -525,6 +591,7 @@ export class TerminalManager extends EventEmitter {
     this.emit('disconnected');
   }
 
+  // Send data to the terminal server
   public send(data: string) {
     if (this.isConnected) {
       this.terminalServer.send(data);
@@ -533,6 +600,7 @@ export class TerminalManager extends EventEmitter {
     }
   }
 
+  // Get the terminal server port
   public getPort(): number {
     return this.terminalServer.getPort();
   }

@@ -2,20 +2,24 @@ import React, { useEffect, useState, useRef } from 'react';
 import './Sidebar.css';
 import { FaFolder, FaCode, FaBrain, FaGitAlt, FaTerminal, FaPuzzlePiece, FaGithub, FaPlus, FaExclamationCircle, FaCodeBranch, FaArrowRight } from 'react-icons/fa';
 
+// Props for the Sidebar component
 interface SidebarProps {
   onTabChange?: (tab: string) => void;
   activeTab?: string;
 }
 
+// Sidebar provides navigation tabs for main app areas (Explorer, Git, GitHub, AI, Terminal, Extensions)
 const Sidebar: React.FC<SidebarProps> = ({ onTabChange, activeTab }) => {
+  // State to control the visibility of the GitHub dropdown menu
   const [showGithubDropdown, setShowGithubDropdown] = useState(false);
+  // Ref to the GitHub dropdown for outside click detection
   const githubDropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     console.log('Sidebar component mounted');
     console.log('Sidebar activeTab:', activeTab);
 
-    // Close dropdown when clicking outside
+    // Close GitHub dropdown when clicking outside the dropdown element
     const handleClickOutside = (event: MouseEvent) => {
       if (githubDropdownRef.current && !githubDropdownRef.current.contains(event.target as Node)) {
         setShowGithubDropdown(false);
@@ -28,6 +32,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onTabChange, activeTab }) => {
     };
   }, [activeTab]);
 
+  // List of sidebar tabs with their icons, labels, and actions
   const tabs = [
     { id: 'explorer', icon: <FaFolder />, label: 'Explorer', action: () => onTabChange?.('explorer') },
     { id: 'git', icon: <FaGitAlt />, label: 'Git', action: () => onTabChange?.('git') },
@@ -37,10 +42,10 @@ const Sidebar: React.FC<SidebarProps> = ({ onTabChange, activeTab }) => {
     { id: 'extensions', icon: <FaPuzzlePiece />, label: 'Extensions', action: () => onTabChange?.('extensions') },
   ];
 
+  // Handle a GitHub dropdown action (e.g., Issues, PRs, Repos)
   const handleGithubAction = (action: string) => {
     setShowGithubDropdown(false);
     onTabChange?.('git');
-    
     // Dispatch a custom event that GitPanel can listen for
     const event = new CustomEvent('github-action', { 
       detail: { action } 
@@ -53,6 +58,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onTabChange, activeTab }) => {
   return (
     <div className="sidebar">
       <div className="sidebar-tabs">
+        {/* Render navigation button for each tab */}
         {tabs.map((tab) => (
           <button
             key={tab.id}
@@ -65,6 +71,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onTabChange, activeTab }) => {
         ))}
       </div>
       
+      {/* GitHub dropdown menu for advanced GitHub actions */}
       {showGithubDropdown && (
         <div className="github-dropdown" ref={githubDropdownRef}>
           <div className="github-dropdown-header">

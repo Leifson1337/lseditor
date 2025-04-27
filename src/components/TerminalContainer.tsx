@@ -7,28 +7,31 @@ import { store } from '../store/store';
 import { TerminalServer } from '../server/terminalServer';
 import '../styles/Terminal.css';
 
+// Props for the TerminalContainer component
 interface TerminalContainerProps {
-  activeFile?: string;
-  port: number;
+  activeFile?: string; // Path of the currently active file (optional)
+  port: number;        // Port number for the terminal server
 }
 
+// TerminalContainer manages the lifecycle and connection of the terminal UI and backend
 export const TerminalContainer: React.FC<TerminalContainerProps> = ({ activeFile, port }) => {
   console.log('TerminalContainer rendering with initial port:', port);
-  const [isConnected, setIsConnected] = useState(false);
-  const [currentPort, setCurrentPort] = useState(port);
-  const [terminalManager, setTerminalManager] = useState<TerminalManager | null>(null);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [isConnected, setIsConnected] = useState(false); // Terminal connection state
+  const [currentPort, setCurrentPort] = useState(port);  // Track the current port
+  const [terminalManager, setTerminalManager] = useState<TerminalManager | null>(null); // Terminal manager instance
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null); // Active terminal session ID
 
   useEffect(() => {
+    // Initialize terminal-related services and managers on mount
     console.log('TerminalContainer mounted, initializing services');
     
     // Use services from the store
     const { projectService, uiService, aiService } = store;
     
-    // Create terminal server
+    // Create a new terminal server instance
     const terminalServer = new TerminalServer(port);
     
-    // Get terminal service instance
+    // Get the singleton terminal service
     const terminalService = TerminalService.getInstance(
       null,
       aiService,
@@ -38,7 +41,7 @@ export const TerminalContainer: React.FC<TerminalContainerProps> = ({ activeFile
       store
     );
     
-    // Create terminal manager
+    // Create a new terminal manager
     const manager = new TerminalManager(
       port,
       terminalService,
@@ -51,6 +54,7 @@ export const TerminalContainer: React.FC<TerminalContainerProps> = ({ activeFile
     console.log('TerminalManager initialized');
     
     return () => {
+      // Clean up and disconnect terminal manager on unmount
       console.log('TerminalContainer unmounting, cleaning up');
       if (manager) {
         manager.disconnect();
@@ -59,6 +63,7 @@ export const TerminalContainer: React.FC<TerminalContainerProps> = ({ activeFile
   }, [port]);
 
   useEffect(() => {
+    // Connect to the terminal and create a session when the manager is ready
     if (terminalManager) {
       console.log('Connecting to terminal');
       terminalManager.connect();
@@ -73,6 +78,7 @@ export const TerminalContainer: React.FC<TerminalContainerProps> = ({ activeFile
       });
       
       return () => {
+        // Disconnect terminal manager on cleanup
         console.log('Disconnecting from terminal');
         terminalManager.disconnect();
         setIsConnected(false);
@@ -80,12 +86,14 @@ export const TerminalContainer: React.FC<TerminalContainerProps> = ({ activeFile
     }
   }, [terminalManager]);
 
+  // Handle data sent from the terminal UI to the backend
   const handleTerminalData = (data: string) => {
     if (terminalManager && isConnected) {
       terminalManager.send(data);
     }
   };
 
+  // Handle terminal resize events
   const handleTerminalResize = (cols: number, rows: number) => {
     if (terminalManager && isConnected && activeSessionId) {
       terminalManager.resizeSession(activeSessionId, cols, rows);
@@ -99,6 +107,7 @@ export const TerminalContainer: React.FC<TerminalContainerProps> = ({ activeFile
         <StatusBar />
       </div>
       <div className="terminal-content">
+        {/* Render the Terminal component with handlers */}
         <Terminal 
           onData={handleTerminalData} 
           onResize={handleTerminalResize} 

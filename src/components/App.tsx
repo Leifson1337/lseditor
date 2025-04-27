@@ -18,7 +18,7 @@ import SettingsIcon from './SettingsIcon';
 import { ThemeProvider } from '../contexts/ThemeContext';
 import Titlebar from './Titlebar';
 
-// Update StoreSchema to include all required properties
+// Extend StoreSchema to include all required properties for the editor and terminal
 declare module '../store/store' {
   interface StoreSchema {
     theme: string;
@@ -43,7 +43,7 @@ declare module '../store/store' {
   }
 }
 
-// Erweitern der Electron-Schnittstelle für den checkPathExists-Handler
+// Extend the Electron interface for custom IPC handlers and window controls
 declare global {
   interface Window {
     electron?: {
@@ -69,21 +69,35 @@ declare global {
 }
 
 const App: React.FC = () => {
+  // State for editor content
   const [editorContent, setEditorContent] = useState<string>('');
+  // State for currently open files
   const [openFiles, setOpenFiles] = useState<string[]>([]);
+  // State for the active (focused) file
   const [activeFile, setActiveFile] = useState<string>('');
+  // State for the current project path
   const [projectPath, setProjectPath] = useState<string>('');
+  // State to show/hide the project selection dialog
   const [showProjectDialog, setShowProjectDialog] = useState<boolean>(false);
+  // State for the file structure tree
   const [fileStructure, setFileStructure] = useState<FileNode[]>([]);
+  // State for the terminal port
   const [terminalPort, setTerminalPort] = useState<number>(3001);
+  // State to show/hide the terminal panel
   const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(false);
+  // State for the terminal manager instance
   const [terminalManager, setTerminalManager] = useState<TerminalManager | null>(null);
+  // State to signal app initialization
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
+  // State for path validity
   const [isValidPath, setIsValidPath] = useState<boolean>(false);
+  // State to prevent multiple dialogs
   const [isBrowseDialogOpen, setIsBrowseDialogOpen] = useState<boolean>(false);
+  // State for recent projects list
   const [recentProjects, setRecentProjects] = useState<string[]>(() => {
     return store.get('recentProjects') || [];
   });
+  // State for showing settings
   const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
@@ -95,10 +109,9 @@ const App: React.FC = () => {
     const savedProjectPath = store.get('lastProjectPath');
     const editor = store.get('editor') || { wordWrap: true, minimap: true, lineNumbers: true };
 
-    // Apply theme
+    // Apply theme to root element
     document.documentElement.setAttribute('data-theme', theme);
-    
-    // Apply font settings
+    // Apply font settings to root element
     document.documentElement.style.fontSize = `${fontSize}px`;
     document.documentElement.style.fontFamily = fontFamily;
 
@@ -107,11 +120,11 @@ const App: React.FC = () => {
       setEditorContent(editor.content);
     }
 
-    // If there's a saved project path, open it automatically
+    // Automatically open last project if available
     if (savedProjectPath) {
       openProject(savedProjectPath);
     } else {
-      // If no project is open, show the project dialog
+      // Show project dialog if no project is open
       setShowProjectDialog(true);
     }
 
@@ -120,35 +133,35 @@ const App: React.FC = () => {
     console.log('App initialization complete');
   }, []);
 
+  // Open a project at the given path
   const openProject = async (path: string) => {
     if (!path) return;
-    
-    // Überprüfen, ob der Pfad gültig ist
     try {
+      // Check if the provided path is valid
       const isValid = await window.electron?.ipcRenderer.invoke('fs:checkPathExists', path);
       if (!isValid) {
-        alert('Der angegebene Pfad existiert nicht oder ist kein Verzeichnis.');
+        alert('The specified path does not exist or is not a directory.');
         return;
       }
     } catch (error) {
-      console.error('Fehler beim Überprüfen des Pfades:', error);
-      alert('Fehler beim Überprüfen des Pfades.');
+      console.error('Error checking path validity:', error);
+      alert('Error checking path validity.');
       return;
     }
-    
+
     console.log('Opening project:', path);
     setProjectPath(path);
     setShowProjectDialog(false);
     store.set('lastProjectPath', path);
 
-    // Recent Projects aktualisieren
+    // Update recent projects list
     let updated = [path, ...recentProjects.filter(p => p !== path)];
     if (updated.length > 8) updated = updated.slice(0, 8);
     setRecentProjects(updated);
     store.set('recentProjects', updated);
 
     try {
-      // Initialize services
+      // Initialize core services for the project
       const projectService = new ProjectService(path);
       const uiService = new UIService();
       const aiService = AIService.getInstance({
@@ -167,10 +180,8 @@ const App: React.FC = () => {
         }
       });
 
-      // Initialize terminal server
+      // Initialize terminal server and services
       const terminalServer = new TerminalServer(terminalPort);
-
-      // Initialize terminal service
       const terminalService = TerminalService.getInstance(
         null,
         aiService,
@@ -179,7 +190,6 @@ const App: React.FC = () => {
         terminalServer,
         store
       );
-
       // Initialize terminal manager
       const manager = new TerminalManager(
         terminalPort,
@@ -190,7 +200,7 @@ const App: React.FC = () => {
       );
       setTerminalManager(manager);
 
-      // Load file structure
+      // Load file structure for the project
       try {
         const structure = await projectService.getFileStructure(path);
         console.log('File structure loaded:', structure);
@@ -207,10 +217,9 @@ const App: React.FC = () => {
     }
   };
 
+  // Open the project selection dialog
   const openProjectDialog = async () => {
-    // Verhindern, dass mehrere Dialoge geöffnet werden
     if (isBrowseDialogOpen) return;
-    
     setIsBrowseDialogOpen(true);
     try {
       const dir = await window.electron?.ipcRenderer.invoke('dialog:openDirectory');
@@ -223,107 +232,97 @@ const App: React.FC = () => {
     }
   };
 
-  // Funktion zum Erstellen eines neuen Projekts
+  // Create a new project with a selected directory and name
   const createNewProject = async () => {
-    // Verhindern, dass mehrere Dialoge geöffnet werden
     if (isBrowseDialogOpen) return;
-    
     setIsBrowseDialogOpen(true);
     try {
-      // Dialog zum Auswählen des Verzeichnisses für das neue Projekt
+      // Dialog to select directory for new project
       const dir = await window.electron?.ipcRenderer.invoke('dialog:openDirectory', {
-        title: 'Verzeichnis für neues Projekt auswählen'
+        title: 'Select directory for new project'
       });
-      
       if (!dir) return;
-      
-      // Dialog zum Eingeben des Projektnamens
+
+      // Dialog to enter project name
       const projectName = await window.electron?.ipcRenderer.invoke('dialog:inputBox', {
-        title: 'Neues Projekt',
-        prompt: 'Bitte geben Sie einen Namen für das neue Projekt ein:',
-        defaultValue: 'MeinProjekt'
+        title: 'New Project',
+        prompt: 'Please enter a name for the new project:',
+        defaultValue: 'MyProject'
       });
-      
       if (!projectName) return;
-      
-      // Pfad für das neue Projekt erstellen
+
+      // Construct new project path
       const newProjectPath = `${dir}/${projectName}`;
-      
       try {
-        // Überprüfen, ob das Verzeichnis bereits existiert
+        // Check if the directory already exists
         const exists = await window.electron?.ipcRenderer.invoke('fs:checkPathExists', newProjectPath);
-        
         if (exists) {
           const overwrite = await window.electron?.ipcRenderer.invoke('dialog:showMessageBox', {
             type: 'question',
-            buttons: ['Abbrechen', 'Überschreiben'],
-            title: 'Verzeichnis existiert bereits',
-            message: `Das Verzeichnis "${newProjectPath}" existiert bereits. Möchten Sie es überschreiben?`
+            buttons: ['Cancel', 'Overwrite'],
+            title: 'Directory already exists',
+            message: `The directory "${newProjectPath}" already exists. Do you want to overwrite it?`
           });
-          
           if (!overwrite || overwrite.response !== 1) return;
         }
-        
-        // Verzeichnis erstellen
+        // Create directory and basic structure
         await window.electron?.ipcRenderer.invoke('fs:createDirectory', newProjectPath);
-        
-        // Grundlegende Projektstruktur erstellen
         await window.electron?.ipcRenderer.invoke('fs:createDirectory', `${newProjectPath}/src`);
         await window.electron?.ipcRenderer.invoke('fs:createDirectory', `${newProjectPath}/assets`);
-        await window.electron?.ipcRenderer.invoke('fs:writeFile', `${newProjectPath}/README.md`, `# ${projectName}\n\nEin neues Projekt erstellt mit LSEditor.`);
-        
-        // Projekt öffnen
+        await window.electron?.ipcRenderer.invoke('fs:writeFile', `${newProjectPath}/README.md`, `# ${projectName}\n\nA new project created with LSEditor.`);
+        // Open the new project
         setProjectPath(newProjectPath);
         setIsValidPath(true);
         openProject(newProjectPath);
       } catch (error) {
-        console.error('Fehler beim Erstellen des Projekts:', error);
-        alert(`Fehler beim Erstellen des Projekts: ${error instanceof Error ? error.message : String(error)}`);
+        console.error('Error creating project:', error);
+        alert(`Error creating project: ${error instanceof Error ? error.message : String(error)}`);
       }
     } finally {
       setIsBrowseDialogOpen(false);
     }
   };
 
+  // Check if a given path is valid (exists and is a directory)
   const checkPathValidity = async (path: string) => {
     if (!path) {
       setIsValidPath(false);
       return;
     }
-    
     try {
       const isValid = await window.electron?.ipcRenderer.invoke('fs:checkPathExists', path);
       setIsValidPath(!!isValid);
     } catch (error) {
-      console.error('Fehler beim Überprüfen des Pfades:', error);
+      console.error('Error checking path validity:', error);
       setIsValidPath(false);
     }
   };
 
-  // Überprüfe Pfadgültigkeit, wenn sich der Pfad ändert
+  // Check path validity whenever the project path changes
   useEffect(() => {
     checkPathValidity(projectPath);
   }, [projectPath]);
 
+  // Load file content from the given file path
   const loadFileContent = async (filePath: string) => {
     if (!filePath) return;
     try {
-      // Versuche zuerst neuen Handler
+      // Try to read file content using the new IPC handler
       let content;
       if (window.electron?.ipcRenderer.invoke) {
-        // Erst mit neuem Namensraum versuchen
         content = await window.electron.ipcRenderer.invoke('fs:readFile', filePath);
         if (!content) {
-          // Fallback auf alten Handler
+          // Fallback to the old IPC handler
           content = await window.electron.ipcRenderer.invoke('readFile', filePath);
         }
       }
       setEditorContent(content ?? '');
     } catch (error) {
-      setEditorContent('Fehler beim Laden der Datei.');
+      setEditorContent('Error loading file.');
     }
   };
 
+  // Save file content to the given file path
   const saveFileContent = async (filePath: string, content: string) => {
     if (!filePath) return;
     try {
@@ -331,15 +330,16 @@ const App: React.FC = () => {
       if (window.electron?.ipcRenderer.invoke) {
         ok = await window.electron.ipcRenderer.invoke('fs:writeFile', filePath, content);
         if (!ok) {
-          // Fallback auf alten Handler
+          // Fallback to the old IPC handler
           ok = await window.electron.ipcRenderer.invoke('saveFile', filePath, content);
         }
       }
     } catch (error) {
-      alert('Fehler beim Speichern der Datei!');
+      alert('Error saving file!');
     }
   };
 
+  // Handle file open event
   const handleFileOpen = (path: string) => {
     console.log('Opening file:', path);
     setActiveFile(path);
@@ -349,6 +349,7 @@ const App: React.FC = () => {
     loadFileContent(path);
   };
 
+  // Handle editor content change
   const handleEditorChange = (value: string) => {
     setEditorContent(value);
     if (activeFile) {
@@ -356,6 +357,7 @@ const App: React.FC = () => {
     }
   };
 
+  // Handle terminal open event
   const handleTerminalOpen = () => {
     if (terminalManager) {
       terminalManager.connect();
@@ -363,6 +365,7 @@ const App: React.FC = () => {
     }
   };
 
+  // Handle terminal close event
   const handleTerminalClose = () => {
     if (terminalManager) {
       terminalManager.disconnect();
@@ -370,6 +373,7 @@ const App: React.FC = () => {
     }
   };
 
+  // Remove a project from the recent projects list
   const removeRecentProject = (path: string) => {
     const updated = recentProjects.filter(p => p !== path);
     setRecentProjects(updated);
@@ -377,11 +381,11 @@ const App: React.FC = () => {
   };
 
   console.log('App rendering, showProjectDialog:', showProjectDialog);
-  
+
   return (
     <ThemeProvider>
       <div className="app">
-        {/* SettingsIcon wird jetzt im MenuBar platziert, kein separates Popup mehr */}
+        {/* SettingsIcon is now placed in the MenuBar, no separate popup */}
         {showProjectDialog ? (
           <>
             <Titlebar minimal />
@@ -397,21 +401,21 @@ const App: React.FC = () => {
                 <button 
                   onClick={() => openProject(projectPath)} 
                   disabled={!isValidPath}
-                  title={!isValidPath ? "Bitte geben Sie einen gültigen Pfad an" : "Projekt öffnen"}
+                  title={!isValidPath ? "Please enter a valid path" : "Open project"}
                 >
                   Open
                 </button>
                 <button 
                   onClick={openProjectDialog}
                   disabled={isBrowseDialogOpen}
-                  title={isBrowseDialogOpen ? "Dialog ist bereits geöffnet" : "Verzeichnis durchsuchen"}
+                  title={isBrowseDialogOpen ? "Dialog is already open" : "Browse directory"}
                 >
                   Browse...
                 </button>
                 <button 
                   onClick={createNewProject}
                   disabled={isBrowseDialogOpen}
-                  title={isBrowseDialogOpen ? "Dialog ist bereits geöffnet" : "Neues Projekt erstellen"}
+                  title={isBrowseDialogOpen ? "Dialog is already open" : "Create new project"}
                 >
                   New Project
                 </button>
@@ -425,7 +429,7 @@ const App: React.FC = () => {
                         <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis'}}>{project}</span>
                         <button 
                           onClick={() => openProject(project)}
-                          title="Projekt öffnen"
+                          title="Open project"
                         >
                           Open
                         </button>
@@ -440,7 +444,7 @@ const App: React.FC = () => {
                     ))}
                   </ul>
                 ) : (
-                  <p>Keine kürzlich geöffneten Projekte vorhanden.</p>
+                  <p>No recently opened projects.</p>
                 )}
               </div>
             </div>
@@ -463,4 +467,4 @@ const App: React.FC = () => {
   );
 };
 
-export default App; 
+export default App;
