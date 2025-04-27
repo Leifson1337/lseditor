@@ -1,6 +1,6 @@
-# 🧠 lseditor – Die freie Alternative zu Cursor AI
+# 🧠 lseditor – Die freie Alternative zu AI Editoren
 
-> **Cursor AI ist großartig – aber auch teuer, cloudbasiert und begrenzt.**  
+> **Cursor AI, Windsurf und andere sind großartig – aber auch teuer, cloudbasiert und begrenzt.**  
 > lseditor ist die **Open-Source-, lokale und kostenlose Alternative**, die du auf deinem eigenen System mit deinen eigenen KI-Modellen betreiben kannst – ohne API-Limits, ohne Datenschutzprobleme, ohne laufende Kosten.
 
 ---
@@ -62,9 +62,9 @@ npm run dev
 ````
 English:
 
-# 🧠 lseditor - The free alternative to Cursor AI
+# 🧠 lseditor - The free alternative to AI Editors
 
-> **Cursor AI is great - but also expensive, cloud-based and limited.** 
+> **Cursor AI, Windsurf and other are great - but also expensive, cloud-based and limited.** 
 > lseditor is the **open-source, local and free alternative** that you can run on your own system with your own AI models - no API limits, no privacy issues, no ongoing costs.
 
 ---
