@@ -1,0 +1,157 @@
+.diff-viewer {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.9em;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 10px;
+  background-color: #f9f9f9;
+  max-height: 500px; /* Or any desired height */
+  overflow-y: auto;
+  color: #333;
+}
+
+.diff-viewer h4 {
+  margin-top: 0;
+  border-bottom: 1px solid #eee;
+  padding-bottom: 5px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+}
+
+.diff-content {
+  white-space: pre; /* Keep whitespace as is */
+  /* white-space: pre-wrap; /* Wrap long lines, might be better for some content */
+  /* We are using pre for line-by-line rendering, so internal spans will handle content wrapping if needed */
+}
+
+.diff-line {
+  display: flex;
+  width: 100%;
+  min-height: 1.2em; /* Ensure consistent line height */
+  line-height: 1.2em;
+  border-left: 3px solid transparent; /* For visual alignment with prefixes */
+}
+
+.diff-line:hover {
+  background-color: #f0f0f0;
+}
+
+.diff-line.added {
+  background-color: #e6ffed;
+  border-left-color: #28a745;
+}
+
+.diff-line.removed {
+  background-color: #ffeef0;
+  border-left-color: #dc3545;
+}
+
+.diff-line.context {
+  /* No special background for context lines, or a very light gray if preferred */
+  /* background-color: #fafafa; */
+}
+
+.diff-line.hunk-header {
+  background-color: #f1f8ff;
+  color: #586069;
+  font-weight: bold;
+  padding: 2px 0;
+  margin-top: 5px;
+  margin-bottom: 5px;
+  border-left: none; /* No specific border for hunk headers */
+}
+.diff-line.diff-meta-header {
+  background-color: #f7f7f7;
+  color: #555;
+  font-style: italic;
+  padding: 2px 0;
+  margin-top: 2px;
+  margin-bottom: 2px;
+  border-left: none;
+}
+
+
+.line-number {
+  display: inline-block;
+  width: 40px; /* Adjust as needed */
+  text-align: right;
+  padding-right: 10px;
+  color: #aaa;
+  user-select: none; /* Prevent selection of line numbers */
+}
+
+.line-number.new-line-number {
+  /* Style for new line numbers */
+}
+
+.line-number.old-line-number {
+ /* Style for old line numbers - currently empty for removed lines to keep alignment */
+}
+
+
+.line-prefix {
+  display: inline-block;
+  width: 15px; /* Width for + or - sign */
+  text-align: center;
+  user-select: none;
+  font-weight: bold;
+}
+
+.line-content {
+  display: inline-block;
+  padding-left: 5px;
+  flex-grow: 1;
+  white-space: pre-wrap; /* Allow content within the line to wrap */
+  word-break: break-all; /* Break long words if they overflow */
+}
+
+/* Modal specific styling (if DiffViewer is used in a modal) */
+.diff-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.diff-modal-content {
+  background-color: white;
+  padding: 20px;
+  border-radius: 5px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  width: 80%;
+  max-width: 900px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.diff-modal-content .diff-viewer {
+  flex-grow: 1; /* Allow diff viewer to take available space */
+  overflow-y: auto; /* Ensure diff viewer itself is scrollable if content exceeds its max-height */
+}
+
+
+.diff-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #eee;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+}
+
+.diff-modal-header h3 {
+  margin: 0;
+}
+
+.diff-modal-close-button {
+  background: none;
+  border: none;
+  font-size: 1.5em;
+  cursor: pointer;
+}

@@ -141,6 +141,82 @@ export class GitService extends EventEmitter {
   }
 
   /**
+   * Gets the diff for staged files.
+   * @returns A promise that resolves with the raw diff result for staged files
+   */
+  public async getStagedDiff(): Promise<string> {
+    this.checkInitialized();
+    try {
+      // Ensure that the git command is run in the correct directory.
+      // simple-git by default uses the workspacePath provided in the constructor.
+      const diff = await this.git.diff(['--staged']);
+      return diff;
+    } catch (error) {
+      console.error('Failed to get staged diff:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Pushes the current branch to its remote counterpart.
+   * @returns A promise that resolves when the push is complete
+   */
+  public async push(): Promise<void> {
+    this.checkInitialized();
+    try {
+      const currentBranch = await this.git.revparse(['--abbrev-ref', 'HEAD']);
+      const remoteBranch = await this.git.revparse(['--abbrev-ref', `${currentBranch}@{u}`]).catch(() => null);
+
+      if (remoteBranch) {
+        await this.git.push();
+      } else {
+        await this.git.push(['--set-upstream', 'origin', currentBranch]);
+      }
+      
+      await this.refreshStatus();
+      this.emit('pushed');
+    } catch (error) {
+      console.error('Failed to push:', error);
+      this.emit('error', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Pulls changes for the current branch.
+   * @returns A promise that resolves when the pull is complete
+   */
+  public async pull(): Promise<void> {
+    this.checkInitialized();
+    try {
+      await this.git.pull();
+      await this.refreshStatus();
+      this.emit('pulled');
+    } catch (error) {
+      console.error('Failed to pull:', error);
+      this.emit('error', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Fetches changes from all remotes.
+   * @returns A promise that resolves when the fetch is complete
+   */
+  public async fetch(): Promise<void> {
+    this.checkInitialized();
+    try {
+      await this.git.fetch(['--all']);
+      await this.refreshStatus();
+      this.emit('fetched');
+    } catch (error) {
+      console.error('Failed to fetch:', error);
+      this.emit('error', error);
+      throw error;
+    }
+  }
+
+  /**
    * Gets the singleton instance of the GitService class.
    * @param workspacePath Path to the workspace
    * @returns The singleton instance of the GitService class
@@ -163,6 +239,23 @@ export class GitService extends EventEmitter {
     } catch (error) {
       console.error('Error checking if directory is a git repository:', error);
       return false;
+    }
+  }
+
+  /**
+   * Creates a new branch with the given name.
+   * @param name Name of the new branch
+   * @returns A promise that resolves when the branch is created
+   */
+  public async createBranch(name: string): Promise<void> {
+    this.checkInitialized();
+    try {
+      await this.git.checkoutLocalBranch(name);
+      await this.refreshBranches();
+      this.emit('branchCreated', name);
+    } catch (error) {
+      console.error(`Failed to create branch ${name}:`, error);
+      throw error;
     }
   }
 

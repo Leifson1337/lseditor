@@ -87,12 +87,14 @@ export class AIService extends EventEmitter {
   private tokenizer: AITokenizer | null = null;       // Tokenizer for prompt length
   private prompts: Map<string, AIPrompt> = new Map(); // Custom prompts
   private customEndpoints: Map<string, any> = new Map(); // Custom API endpoints
+  private readonly localStorageKey = 'lseditor_ai_conversations';
 
   // Private constructor to enforce singleton pattern
   private constructor(config: AIConfig) {
     super();
     this.config = config;
     this.loadPrompts();
+    // Initial load from local storage is now part of initialize
   }
 
   // Get the singleton instance of AIService
@@ -133,10 +135,58 @@ export class AIService extends EventEmitter {
       await this.initializeTokenizer();
 
       this.isInitialized = true;
+      this.loadConversationsFromLocalStorage(); // Load conversations after initialization
     } catch (error) {
       throw new AIServiceError(
         'Failed to initialize AI service',
         'INIT_ERROR',
+        error
+      );
+    }
+  }
+
+  // Generate a commit message based on the given diff
+  public async generateCommitMessage(diff: string): Promise<string> {
+    try {
+      this.checkInitialized();
+      
+      const prompt = `Generate a concise and relevant commit message based on the following diff:\n\n\`\`\`diff\n${diff}\n\`\`\`\n\nProvide only the commit message.`;
+      
+      // Assuming a generic context is sufficient or no specific file context is needed here
+      const genericContext: CodeContext = {
+        imports: [],
+        code: '', // No specific code, diff is the main input
+        language: 'diff', // Using 'diff' as the language for context
+        filePath: '' // No specific file path
+      };
+      
+      const response = await this.queryAI(prompt, genericContext);
+      
+      // Extract the commit message from the response
+      // This might need adjustment based on how the AI formats the response
+      let commitMessage = response.text.trim();
+
+      // Remove potential quotes or formatting if the AI adds them
+      if ((commitMessage.startsWith('"') && commitMessage.endsWith('"')) ||
+          (commitMessage.startsWith("'") && commitMessage.endsWith("'")) ||
+          (commitMessage.startsWith("`") && commitMessage.endsWith("`"))) {
+        commitMessage = commitMessage.substring(1, commitMessage.length - 1);
+      }
+      // Remove "Commit message:" prefix if present
+      if (commitMessage.toLowerCase().startsWith("commit message:")) {
+        commitMessage = commitMessage.substring("commit message:".length).trim();
+      }
+
+
+      return commitMessage;
+    } catch (error) {
+      console.error('Failed to generate commit message:', error);
+      if (error instanceof AIServiceError) {
+        throw error;
+      }
+      throw new AIServiceError(
+        'Failed to generate commit message',
+        'COMMIT_MESSAGE_ERROR',
         error
       );
     }
@@ -414,16 +464,54 @@ export class AIService extends EventEmitter {
   // Generate tests for the given file path
   public async generateTests(
     filePath: string,
-    testFramework: string = 'jest'
-  ): Promise<AIResponse> {
+    testFramework: string = 'jest',
+    specificFocus?: string // Optional: e.g., function name, class name, or specific scenarios
+  ): Promise<string> { // Return string (test file content) instead of AIResponse
     try {
       this.checkInitialized();
-      
       const context = await this.getCodeContext(filePath);
-      const prompt = this.generateTestPrompt(context, testFramework);
+
+      let focusInstruction = '';
+      if (specificFocus) {
+        focusInstruction = `Focus on generating tests for ${specificFocus}.`;
+      }
+
+      // Comprehensive prompt based on research
+      const prompt = `Generate comprehensive unit tests for the following ${context.language} code from file '${context.filePath}' using the ${testFramework} testing framework.
+${focusInstruction}
+The code is:
+\`\`\`${context.language}
+${context.code}
+\`\`\`
+Ensure tests cover various scenarios including typical usage, edge cases (e.g., null inputs, empty arrays, invalid values if applicable to the code's logic), and error handling where appropriate.
+Provide the output as a complete, runnable test file/module, including all necessary imports (e.g., for the module under test, and from '${testFramework}') and setup.
+Only output the code for the test file. Do not include any explanatory text before or after the code block.
+The generated test file should be ready to run if saved with a conventional test file name (e.g., ${context.filePath.replace(/\.(ts|js)$/, '')}.test.${context.language === 'typescript' ? 'ts' : 'js'}).`;
+
+      const aiResponse = await this.queryAI(prompt, context);
       
-      return await this.queryAI(prompt, context);
+      // Assuming the AI response text is the raw code for the test file
+      // Extract from code block if AI still wraps it
+      if (aiResponse.codeBlocks && aiResponse.codeBlocks.length > 0) {
+        // Concatenate all code blocks if multiple, or use the first one
+        return aiResponse.codeBlocks.map(cb => cb.code).join('\n\n');
+      }
+      // Fallback: if no code blocks, try to clean up the raw text response
+      let testCode = aiResponse.text;
+      // Remove potential markdown code block delimiters if the AI includes them despite instructions
+      const codeBlockRegex = new RegExp("```(?:[\\w\\s]*\\n)?([\\s\\S]*?)```", "g");
+      const matches = [...testCode.matchAll(codeBlockRegex)];
+      if (matches.length > 0) {
+        testCode = matches.map(match => match[1]).join('\n\n');
+      }
+      
+      return testCode.trim();
+
     } catch (error) {
+      console.error('Error generating tests in AIService:', error);
+      if (error instanceof AIServiceError) {
+        throw error;
+      }
       throw new AIServiceError(
         'Failed to generate tests',
         'TEST_ERROR',
@@ -483,7 +571,7 @@ export class AIService extends EventEmitter {
     try {
       this.checkInitialized();
       
-      const conversationId = Math.random().toString(36).substring(2, 15);
+      const conversationId = Math.random().toString(36).substring(2, 15); // Simple ID generation
       
       // Create a new conversation
       const conversation: AIConversation = {
@@ -520,6 +608,7 @@ export class AIService extends EventEmitter {
       // Store the conversation
       this.conversations.set(conversationId, conversation);
       this.activeConversation = conversationId;
+      this.saveConversationsToLocalStorage(); // Save after starting a new one
       
       return conversationId;
     } catch (error) {
@@ -569,6 +658,7 @@ export class AIService extends EventEmitter {
       };
       
       conversation.messages.push(assistantMessage);
+      this.saveConversationsToLocalStorage(); // Save after AI responds
       
       return response;
     } catch (error) {
@@ -590,6 +680,7 @@ export class AIService extends EventEmitter {
       if (this.activeConversation === conversationId) {
         this.activeConversation = null;
       }
+      this.saveConversationsToLocalStorage(); // Save after ending one
     } catch (error) {
       throw new AIServiceError(
         'Failed to end conversation',
@@ -721,8 +812,12 @@ export class AIService extends EventEmitter {
   // Generate test prompt for the given context and test framework
   private generateTestPrompt(
     context: CodeContext,
-    testFramework: string
+    testFramework: string,
+    // specificFocus?: string // This parameter is now part of the main generateTests method
   ): string {
+    // This specific helper might become redundant if the prompt is fully constructed in generateTests
+    // For now, keeping it as a placeholder or for potential internal variations.
+    // The actual prompt construction is now more detailed in the main generateTests method.
     return `Generate comprehensive unit tests for the following code using ${testFramework}:\n\n\`\`\`${context.language}\n${context.code}\n\`\`\`\n\nProvide the test code with explanations of what each test covers.`;
   }
 
@@ -957,8 +1052,25 @@ export class AIService extends EventEmitter {
 
   // Get all conversations
   public getConversations(): AIConversation[] {
-    return Array.from(this.conversations.values());
+    // Return sorted by most recent first
+    return Array.from(this.conversations.values()).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   }
+
+  // Get a summarized list of conversations for UI display
+  public getConversationList(): Array<{ id: string; name: string; lastMessageTimestamp?: Date; messageCount: number }> {
+    return this.getConversations().map(conv => {
+      const firstUserMessage = conv.messages.find(m => m.role === 'user');
+      let name = conv.title || (firstUserMessage ? firstUserMessage.content.substring(0, 40) + (firstUserMessage.content.length > 40 ? '...' : '') : `Chat ${conv.id}`);
+      const lastMessage = conv.messages[conv.messages.length - 1];
+      return {
+        id: conv.id,
+        name,
+        lastMessageTimestamp: lastMessage ? new Date(lastMessage.timestamp) : new Date(conv.timestamp),
+        messageCount: conv.messages.length,
+      };
+    });
+  }
+
 
   // Get the active conversation ID
   public getActiveConversation(): string | null {
@@ -969,11 +1081,73 @@ export class AIService extends EventEmitter {
   public setActiveConversation(conversationId: string): void {
     if (this.conversations.has(conversationId)) {
       this.activeConversation = conversationId;
+      this.saveConversationsToLocalStorage(); // Save when active conversation changes
+    }
+  }
+
+  // Saves all conversations and the active conversation ID to local storage
+  private saveConversationsToLocalStorage(): void {
+    if (typeof localStorage === 'undefined') {
+      console.warn('Local storage is not available. Conversations will not be saved.');
+      return;
+    }
+    try {
+      const conversationsArray = Array.from(this.conversations.entries());
+      const dataToSave = {
+        conversations: conversationsArray,
+        activeConversationId: this.activeConversation,
+      };
+      localStorage.setItem(this.localStorageKey, JSON.stringify(dataToSave));
+      this.emit('conversationsChanged'); // Emit event after saving
+    } catch (error) {
+      console.error('Failed to save conversations to local storage:', error);
+      // Optionally, emit an event or handle UI feedback
+    }
+  }
+
+  // Loads conversations and the active conversation ID from local storage
+  private loadConversationsFromLocalStorage(): void {
+    if (typeof localStorage === 'undefined') {
+      console.warn('Local storage is not available. Cannot load conversations.');
+      return;
+    }
+    try {
+      const savedData = localStorage.getItem(this.localStorageKey);
+      if (savedData) {
+        const parsedData = JSON.parse(savedData);
+        if (parsedData.conversations && Array.isArray(parsedData.conversations)) {
+          this.conversations = new Map(parsedData.conversations.map(([id, conv]: [string, any]) => {
+            // Ensure timestamps are Date objects
+            const messages = conv.messages.map((msg: AIMessage) => ({
+              ...msg,
+              timestamp: new Date(msg.timestamp),
+            }));
+            return [id, { ...conv, messages, timestamp: new Date(conv.timestamp) }];
+          }));
+        }
+        if (parsedData.activeConversationId && this.conversations.has(parsedData.activeConversationId)) {
+          this.activeConversation = parsedData.activeConversationId;
+        } else if (this.conversations.size > 0 && !this.activeConversation) {
+          // If no active conversation or loaded active ID is invalid, set the most recent one
+          let latestConv: AIConversation | null = null;
+          for (const conv of this.conversations.values()) {
+            if (!latestConv || new Date(conv.timestamp).getTime() > new Date(latestConv.timestamp).getTime()) {
+              latestConv = conv;
+            }
+          }
+          if (latestConv) this.activeConversation = latestConv.id;
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load conversations from local storage:', error);
+      // Clear corrupted data to prevent loop, or handle more gracefully
+      localStorage.removeItem(this.localStorageKey);
     }
   }
 
   // Dispose of the AI service
   public dispose(): void {
+    this.saveConversationsToLocalStorage(); // Save before disposing
     // Clean up resources
     this.conversations.clear();
     this.codeContext.clear();

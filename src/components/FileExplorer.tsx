@@ -26,14 +26,17 @@ interface ContextMenuProps {
   onRename: () => void;
   onDelete: () => void;
   onLiveUpdate?: (() => void) | undefined;
+  onGenerateTests?: () => void; // New prop for generating tests
   onClose: () => void;
   isHtml?: boolean;
+  isTestableFile?: boolean; // To show "Generate Tests" option
 }
 
 // ContextMenu renders the right-click context menu for files
-const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, onOpen, onRename, onDelete, onLiveUpdate, onClose, isHtml }) => (
+const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, onOpen, onRename, onDelete, onLiveUpdate, onGenerateTests, onClose, isHtml, isTestableFile }) => (
   <ul className="file-context-menu" style={{ top: y, left: x, position: 'fixed', zIndex: 1000 }}>
     <li onClick={onOpen}>Open</li>
+    {isTestableFile && onGenerateTests && <li onClick={onGenerateTests}>Generate Tests with AI</li>}
     <li onClick={onRename}>Rename</li>
     <li onClick={onDelete}>Delete</li>
     {isHtml && onLiveUpdate && <li onClick={onLiveUpdate}>Live-Update</li>}
@@ -45,10 +48,11 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   fileStructure,
   onOpenFile,
   activeFile = '',
-  projectPath = ''
+  projectPath = '',
+  onGenerateAndOpenTests, // New prop from parent
 }) => {
-  // Tracks expanded (open) folders in the explorer
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  const [isGeneratingTests, setIsGeneratingTests] = useState<boolean>(false); // Loading state
   // Context menu state: coordinates and file path
   const [contextMenu, setContextMenu] = useState<{x: number, y: number, file: string} | null>(null);
   // File currently being renamed
@@ -218,6 +222,44 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     const isExpanded = expandedFolders.has(node.path);
     const isActive = activeFile === node.path;
     const isHtml = node.type === 'file' && node.name.toLowerCase().endsWith('.html');
+  const isTestableFile = node.type === 'file' && /\.(ts|tsx|js|jsx)$/i.test(node.name) && !node.name.toLowerCase().includes('.test.') && !node.name.toLowerCase().includes('.spec.');
+
+  const handleGenerateTestsClick = async () => {
+    if (!contextMenu) return;
+    const filePath = contextMenu.file;
+    setContextMenu(null); // Close context menu
+
+    const framework = prompt("Enter test framework (e.g., jest, vitest, mocha):", "jest");
+    if (!framework) return; // User cancelled
+
+    setIsGeneratingTests(true);
+    try {
+      // Ensure AIService is imported and configured
+      // This might require passing AIConfig or getting instance differently in a real app
+      const { AIService } = await import('../services/AIService');
+      const aiServiceInstance = AIService.getInstance({} as any); // Placeholder config
+      if (!aiServiceInstance.isInitialized) {
+        await aiServiceInstance.initialize();
+      }
+      
+      const testContent = await aiServiceInstance.generateTests(filePath, framework);
+      
+      if (onGenerateAndOpenTests) {
+        onGenerateAndOpenTests(filePath, testContent, framework);
+      } else {
+        // Fallback if the prop isn't provided (e.g. during isolated testing of FileExplorer)
+        console.log(`Generated test content for ${filePath} using ${framework}:\n${testContent}`);
+        alert(`Generated tests for ${filePath}. Check console for content.`);
+      }
+
+    } catch (error) {
+      console.error("Failed to generate tests:", error);
+      alert(`Failed to generate tests: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setIsGeneratingTests(false);
+    }
+  };
+
     if (node.type === 'directory') {
       return (
         <div key={node.path}>
@@ -278,9 +320,21 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
           onDelete={handleDeleteFromMenu}
           onLiveUpdate={contextMenu.file.toLowerCase().endsWith('.html') ? () => handleLiveUpdate(contextMenu.file) : undefined}
           isHtml={contextMenu.file.toLowerCase().endsWith('.html')}
+          onGenerateTests={isTestableFile ? handleGenerateTestsClick : undefined}
+          isTestableFile={isTestableFile}
           onClose={() => setContextMenu(null)}
         />
+      )}
+      {isGeneratingTests && (
+        <div className="loading-overlay">
+          <p>Generating tests, please wait...</p>
+        </div>
       )}
     </div>
   );
 };
+
+// Add a new prop type to FileExplorerProps
+interface FileExplorerPropsExtended extends FileExplorerProps {
+  onGenerateAndOpenTests?: (filePath: string, testContent: string, framework: string) => void;
+}

@@ -31,9 +31,9 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   activeFile = '',
   projectPath = '',
   onEditorChange,
-  onOpenFile
+  onOpenFile,
+  // onGenerateAndOpenTests prop will be implicitly handled by adding the function
 }) => {
-  // State for AI panel visibility
   const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
   // State for currently active tab
   const [activeTab, setActiveTab] = useState<string | null>(null);
@@ -41,11 +41,48 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   const [tabs, setTabs] = useState<Array<{ id: string; title: string; path: string; content: string; dirty: boolean }>>([]);
   // State for selected sidebar tab
   const [sidebarTab, setSidebarTab] = useState<string>('explorer');
-  // State for terminal panel visibility
   const [isTerminalPanelOpen, setIsTerminalPanelOpen] = useState(false); // State für Terminal-Panel
 
   // Get the content of the currently active tab
   const activeTabContent = tabs.find(t => t.id === activeTab)?.content || '';
+
+  const handleGenerateAndOpenTests = async (originalFilePath: string, testContent: string, framework: string) => {
+    const pathParts = originalFilePath.split(/[\\/]/);
+    const originalFileName = pathParts.pop() || '';
+    const directory = pathParts.join('/');
+
+    const extensionMatch = originalFileName.match(/\.(tsx|ts|jsx|js)$/);
+    const baseName = extensionMatch ? originalFileName.substring(0, extensionMatch.index) : originalFileName;
+    const extension = extensionMatch ? extensionMatch[1] : 'ts'; // Default to 'ts' if no extension found (should not happen for testable files)
+
+    // Determine test file suffix based on framework or a general one
+    // For simplicity, using .test.ext, common for Jest/Vitest
+    const testFileSuffix = `.test.${extension}`;
+    const testFileName = `${baseName}${testFileSuffix}`;
+    const testFilePath = directory ? `${directory}/${testFileName}` : testFileName;
+
+    // Check if tab for this test file already exists
+    let tab = tabs.find(t => t.path === testFilePath);
+    if (tab) {
+      // If tab exists, update its content and make it active
+      setTabs(tabs.map(t => t.id === tab!.id ? { ...tab!, content: testContent, dirty: true } : t));
+      setActiveTab(tab.id);
+    } else {
+      // Create a new tab for the test file
+      tab = {
+        id: Math.random().toString(36).substr(2, 9),
+        title: testFileName,
+        path: testFilePath, // This path might not exist on disk yet
+        content: testContent,
+        dirty: true, // Mark as dirty since it's new content
+      };
+      setTabs(prevTabs => [...prevTabs, tab!]);
+      setActiveTab(tab!.id);
+    }
+    // Optionally, bring the editor area into focus or the specific tab
+    // This might require more direct manipulation or a ref to the editor/tab component
+    alert(`Test file "${testFileName}" generated and opened in a new tab. Please save it.`);
+  };
 
   // Open a file in a new or existing tab and load its content
   const openFileInTab = async (filePath: string) => {
@@ -161,6 +198,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                   onOpenFile={openFileInTab}
                   activeFile={tabs.find(t => t.id === activeTab)?.path || ''}
                   projectPath={projectPath}
+                  onGenerateAndOpenTests={handleGenerateAndOpenTests} // Pass the new handler
                 />
               </div>
               {/* Editor content area: TabBar und Editor vertikal gestapelt */}
