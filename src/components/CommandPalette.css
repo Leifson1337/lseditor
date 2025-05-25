@@ -1,0 +1,107 @@
+.command-palette-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5); /* Semi-transparent backdrop */
+  display: flex;
+  align-items: flex-start; /* Align modal to the top */
+  justify-content: center;
+  z-index: 1050; /* Ensure it's above most other UI elements */
+  padding-top: 10vh; /* Position it a bit down from the top */
+}
+
+.command-palette-modal {
+  background-color: var(--background-color-secondary, #2a2a2a);
+  color: var(--text-color-primary, #d4d4d4);
+  border-radius: 8px;
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+  width: 90%;
+  max-width: 600px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* Prevent content from spilling out */
+}
+
+.command-palette-input {
+  width: calc(100% - 20px); /* Account for padding */
+  padding: 12px 10px;
+  margin: 0; /* Remove margin if any */
+  border: none;
+  border-bottom: 1px solid var(--border-color-primary, #333);
+  font-size: 1.1em;
+  background-color: var(--background-color-input, #3c3c3c);
+  color: var(--text-color-primary, #d4d4d4);
+  outline: none;
+}
+
+.command-palette-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 400px; /* Limit height and make scrollable */
+  overflow-y: auto;
+}
+
+.command-palette-item {
+  padding: 10px 15px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-color-secondary, #444);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.command-palette-item:last-child {
+  border-bottom: none;
+}
+
+.command-palette-item:hover,
+.command-palette-item.selected {
+  background-color: var(--background-color-hover, #007acc); /* Use accent color for selection */
+  color: white; /* Ensure text is readable on selection */
+}
+
+.command-palette-item.selected {
+  /* Additional styling for keyboard selection if different from hover */
+  background-color: var(--background-color-selected, #005f9e);
+}
+
+.command-palette-item-label {
+  font-weight: 500;
+}
+
+.command-palette-item-id {
+  font-size: 0.8em;
+  color: var(--text-color-secondary, #888);
+}
+
+.command-palette-item.selected .command-palette-item-id {
+  color: var(--text-color-primary-on-accent, #ddd); /* Lighter ID text on selection */
+}
+
+
+.command-palette-item-empty {
+  padding: 15px;
+  text-align: center;
+  color: var(--text-color-secondary, #888);
+}
+
+/* Scrollbar styling for webkit browsers */
+.command-palette-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.command-palette-list::-webkit-scrollbar-track {
+  background: var(--background-color-secondary, #2a2a2a);
+}
+
+.command-palette-list::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb-color, #555);
+  border-radius: 4px;
+}
+
+.command-palette-list::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover-color, #777);
+}

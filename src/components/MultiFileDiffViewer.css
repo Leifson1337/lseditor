@@ -1,0 +1,169 @@
+.multi-file-diff-viewer {
+  padding: 10px;
+  border-top: 1px solid var(--border-color-primary, #333); /* Separator if used within a panel */
+}
+
+.multi-file-diff-viewer h4 {
+  margin-top: 0;
+  margin-bottom: 10px;
+  font-size: 1.1em;
+  color: var(--text-color-secondary, #ccc);
+}
+
+.no-changes-message {
+  color: var(--text-color-secondary, #888);
+  font-style: italic;
+  padding: 10px 0;
+}
+
+.file-summary-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 250px; /* Example height, adjust as needed */
+  overflow-y: auto;
+}
+
+.file-summary-item {
+  display: flex;
+  align-items: center;
+  padding: 6px 8px;
+  cursor: pointer;
+  border-radius: 4px;
+  margin-bottom: 3px;
+  transition: background-color 0.2s ease;
+}
+
+.file-summary-item:hover {
+  background-color: var(--background-color-hover, #007acc);
+  color: white;
+}
+
+.file-summary-item:hover .file-path,
+.file-summary-item:hover .file-from-path,
+.file-summary-item:hover .file-status-badge {
+  color: white;
+}
+
+.file-status-badge {
+  display: inline-block;
+  width: 20px; /* Fixed width for alignment */
+  height: 20px;
+  line-height: 20px;
+  text-align: center;
+  font-weight: bold;
+  border-radius: 3px;
+  margin-right: 10px;
+  font-size: 0.85em;
+}
+
+.file-path {
+  flex-grow: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-color-primary, #d4d4d4);
+}
+
+.file-from-path {
+  font-size: 0.85em;
+  color: var(--text-color-secondary, #aaa);
+  margin-left: 5px;
+}
+
+/* Status-specific colors */
+.file-status-badge.status-added, .file-summary-item.status-added {
+  /* background-color: var(--success-color-faded, #28a74533); */
+  /* border-left: 3px solid var(--success-color, #28a745); */
+}
+.file-status-badge.status-added {
+  background-color: var(--success-color, #28a745);
+  color: white;
+}
+
+.file-status-badge.status-modified, .file-summary-item.status-modified {
+  /* background-color: var(--info-color-faded, #17a2b833); */
+  /* border-left: 3px solid var(--info-color, #17a2b8); */
+}
+.file-status-badge.status-modified {
+  background-color: var(--info-color, #17a2b8);
+  color: white;
+}
+
+.file-status-badge.status-deleted, .file-summary-item.status-deleted {
+  /* background-color: var(--error-color-faded, #dc354533); */
+  /* border-left: 3px solid var(--error-color, #dc3545); */
+}
+.file-status-badge.status-deleted {
+  background-color: var(--error-color, #dc3545);
+  color: white;
+}
+
+.file-status-badge.status-renamed, .file-summary-item.status-renamed {
+  /* background-color: var(--warning-color-faded, #ffc10733); */
+  /* border-left: 3px solid var(--warning-color, #ffc107); */
+}
+.file-status-badge.status-renamed {
+  background-color: var(--warning-color, #ffc107);
+  color: #333;
+}
+
+.file-status-badge.status-copied, .file-summary-item.status-copied {
+  /* background-color: var(--secondary-color-faded, #6c757d33); */
+  /* border-left: 3px solid var(--secondary-color, #6c757d); */
+}
+.file-status-badge.status-copied {
+  background-color: var(--secondary-color, #6c757d);
+  color: white;
+}
+
+.file-status-badge.status-type-changed, .file-summary-item.status-type-changed {
+  /* background-color: var(--accent-color-faded, #007bff33); */
+  /* border-left: 3px solid var(--accent-color, #007bff); */
+}
+.file-status-badge.status-type-changed {
+  background-color: var(--accent-color, #007bff);
+  color: white;
+}
+
+.file-status-badge.status-unmerged, .file-summary-item.status-unmerged {
+  /* background-color: var(--error-color-strong-faded, #bd213033); */
+  /* border-left: 3px solid var(--error-color-strong, #bd2130); */
+}
+.file-status-badge.status-unmerged {
+  background-color: var(--error-color-strong, #bd2130);
+  color: white;
+}
+
+.file-status-badge.status-untracked, .file-summary-item.status-untracked {
+  /* background-color: var(--text-color-placeholder-faded, #868e9633); */
+  /* border-left: 3px solid var(--text-color-placeholder, #868e96); */
+}
+.file-status-badge.status-untracked {
+  background-color: var(--text-color-placeholder, #868e96);
+  color: white;
+}
+
+.file-status-badge.status-ignored, .file-summary-item.status-ignored {
+  /* background-color: var(--background-color-disabled-faded, #6c757d1a); */
+  /* border-left: 3px solid var(--background-color-disabled, #6c757d); */
+}
+.file-status-badge.status-ignored {
+  background-color: var(--background-color-disabled, #6c757d);
+  color: #eee;
+}
+
+/* Scrollbar styling for webkit browsers */
+.file-summary-list::-webkit-scrollbar {
+  width: 6px;
+}
+.file-summary-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.file-summary-list::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb-color, #555);
+  border-radius: 3px;
+}
+.file-summary-list::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover-color, #777);
+}

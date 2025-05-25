@@ -88,8 +88,23 @@ export interface UIConfig {
   };
 }
 
+// Re-exporting StatusBarItem or defining it here if it's simple enough
+// For now, assuming StatusBarItem is imported from './StatusBarService'
+// If StatusBarService.ts is deleted, this definition needs to be moved or redefined.
+// For consolidation, let's define it here.
+export interface StatusBarItem {
+  id: string;                // Unique ID for the status bar item
+  text: string;              // Text to display
+  tooltip?: string;          // Optional tooltip text
+  alignment: 'left' | 'right'; // Alignment in the status bar
+  priority?: number;         // Priority for sorting
+  command?: string;          // Optional command to execute on click
+  icon?: string;             // Optional icon name or path
+}
+
+
 /**
- * Interface for a notification.
+ * Interface for a notification (using the more detailed one already in UIService).
  */
 export interface Notification {
   /**
@@ -122,7 +137,7 @@ export interface Notification {
     callback: () => void;
   }>;
   /**
-   * Optional timeout for the notification.
+   * Optional timeout for the notification (in milliseconds).
    */
   timeout?: number;
 }
@@ -288,8 +303,37 @@ export class UIService extends EventEmitter {
       key: 'Ctrl+F',
       command: 'actions.find'
     });
+
+    this.addShortcut({
+      id: 'showCommands',
+      key: 'Ctrl+Shift+P', // Common shortcut for command palette
+      command: 'workbench.action.showCommands'
+    });
   }
 
+  /**
+   * Triggers the execution of a registered command or emits an event for global listeners.
+   * This is primarily used by shortcuts or UI elements that want to invoke a command
+   * without directly depending on CommandService.
+   * @param commandId The ID of the command to trigger.
+   * @param args Optional arguments to pass to the command.
+   */
+  public triggerCommand(commandId: string, ...args: any[]): void {
+    // The actual command execution is handled by CommandService.
+    // UIService can emit a generic event that App.tsx or other top-level components
+    // can listen to, which then calls commandService.executeCommand.
+    // Or, if CommandService is available here, it could call it.
+    // For opening the command palette, a specific event is more direct.
+    if (commandId === 'workbench.action.showCommands') {
+      this.emit('toggleCommandPalette');
+    } else {
+      // For other commands, you might have a more generic mechanism
+      // For now, this service focuses on UI aspects, actual execution is elsewhere.
+      console.warn(`UIService.triggerCommand used for non-UI command: ${commandId}. This might be better handled by CommandService directly.`);
+      // This could emit a generic event like this.emit('executeCommand', { commandId, args });
+    }
+  }
+  
   /**
    * Initialize default context menus.
    */
@@ -372,7 +416,38 @@ export class UIService extends EventEmitter {
    * @param item Status bar item to update.
    */
   public updateStatusBarItem(item: StatusBarItem): void {
+    this.statusBarItems.set(item.id, item); // Actually update the item
     this.emit('statusBarItemUpdated', item);
+  }
+
+  /**
+   * Get a status bar item by ID.
+   * @param id ID of the item to retrieve
+   * @returns StatusBarItem or undefined if not found
+   */
+  public getStatusBarItem(id: string): StatusBarItem | undefined {
+    return this.statusBarItems.get(id);
+  }
+
+  /**
+   * Get all status bar items, sorted by alignment and priority.
+   * @returns Array of StatusBarItem
+   */
+  public getAllStatusBarItems(): StatusBarItem[] {
+    return Array.from(this.statusBarItems.values()).sort((a, b) => {
+      if (a.alignment !== b.alignment) {
+        return a.alignment === 'left' ? -1 : 1;
+      }
+      return (a.priority || 0) - (b.priority || 0);
+    });
+  }
+  
+  /**
+   * Clear all status bar items.
+   */
+  public clearStatusBarItems(): void {
+    this.statusBarItems.clear();
+    this.emit('statusBarCleared');
   }
 
   /**
@@ -381,47 +456,74 @@ export class UIService extends EventEmitter {
   public dispose(): void {
     this.themes.clear();
     this.shortcuts.clear();
-    this.notifications = [];
-    this.statusBarItems.clear();
+    this.clearNotifications(); // Use the new method
+    this.clearStatusBarItems(); // Use the new method
     this.contextMenus.clear();
     this.tooltips.clear();
     this.removeAllListeners();
   }
 
+  // --- Enhanced Notification Management ---
+
   /**
-   * Show a notification message.
-   * @param message Message to display.
-   * @param type Type of notification (info, warning, error, success).
-   * @returns ID of the notification.
+   * Show a new notification.
+   * @param notification Partial notification data (message and type are minimum).
+   * @returns The full Notification object with an ID.
    */
-  public showNotification(message: string, type: 'info' | 'warning' | 'error' | 'success'): string {
-    const id = Math.random().toString(36).substring(2);
-    const notification: Notification = {
+  public showNotification(notificationData: Omit<Notification, 'id'> & { id?: string }): Notification {
+    const id = notificationData.id || Math.random().toString(36).substring(2, 15);
+    const fullNotification: Notification = {
+      ...notificationData,
       id,
-      type,
-      message,
-      timeout: 5000
     };
-    this.notifications.push(notification);
-    this.emit('notification', notification);
-    return id;
+    this.notifications.push(fullNotification);
+    this.emit('notificationAdded', fullNotification); // Specific event
+
+    if (fullNotification.timeout) {
+      setTimeout(() => {
+        this.dismissNotification(fullNotification.id);
+      }, fullNotification.timeout);
+    }
+    return fullNotification;
+  }
+  
+  /**
+   * Dismiss a notification by its ID.
+   * @param notificationId The ID of the notification to dismiss.
+   */
+  public dismissNotification(notificationId: string): void {
+    const index = this.notifications.findIndex(n => n.id === notificationId);
+    if (index !== -1) {
+      const dismissedNotification = this.notifications.splice(index, 1)[0];
+      this.emit('notificationDismissed', dismissedNotification); // Specific event
+    }
   }
 
   /**
-   * Get the list of notifications.
-   * @returns List of notifications.
+   * Clear all notifications.
+   */
+  public clearNotifications(): void {
+    this.notifications = [];
+    this.emit('notificationsCleared'); // Specific event
+  }
+
+  /**
+   * Get all active notifications.
+   * @returns A copy of the array of notifications.
    */
   public getNotifications(): Notification[] {
     return [...this.notifications];
   }
 
+  // --- Enhanced Status Bar Management (already partially done, ensuring consistency) ---
+
   /**
-   * Add a status bar item.
-   * @param item Status bar item to add.
+   * Add a status bar item. If an item with the same ID exists, it will be updated.
+   * @param item Status bar item to add or update.
    */
   public addStatusBarItem(item: StatusBarItem): void {
     this.statusBarItems.set(item.id, item);
-    this.emit('statusBarItemAdded', item);
+    this.emit('statusBarItemAdded', item); // Keep specific event, or use a general 'changed'
   }
 
   /**
@@ -429,8 +531,11 @@ export class UIService extends EventEmitter {
    * @param id ID of the status bar item to remove.
    */
   public removeStatusBarItem(id: string): void {
-    this.statusBarItems.delete(id);
-    this.emit('statusBarItemRemoved', id);
+    if (this.statusBarItems.has(id)) {
+      const removedItem = this.statusBarItems.get(id);
+      this.statusBarItems.delete(id);
+      this.emit('statusBarItemRemoved', { id, item: removedItem }); // Emit id or full item
+    }
   }
 
   /**

@@ -128,3 +128,25 @@ export interface GitStatus {
    */
   untracked: string[];
 }
+
+/**
+ * GitFileDiffSummary represents a summary of changes for a single file.
+ */
+export interface GitFileDiffSummary {
+  filePath: string;
+  /**
+   * Status of the file:
+   * M = Modified
+   * A = Added
+   * D = Deleted
+   * R = Renamed
+   * C = Copied
+   * T = Type changed (e.g., file to symlink) - from git status --porcelain v1
+   * U = Unmerged (Updated but unmerged / Both modified etc.)
+   * ? = Untracked (for working directory changes)
+   * ! = Ignored (though usually not shown by status/diff unless requested)
+   */
+  status: 'M' | 'A' | 'D' | 'R' | 'C' | 'T' | 'U' | '?' | '!';
+  // Optional: fromPath for renamed/copied files
+  fromPath?: string; 
+}

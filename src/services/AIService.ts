@@ -88,6 +88,7 @@ export class AIService extends EventEmitter {
   private prompts: Map<string, AIPrompt> = new Map(); // Custom prompts
   private customEndpoints: Map<string, any> = new Map(); // Custom API endpoints
   private readonly localStorageKey = 'lseditor_ai_conversations';
+  private currentOpenAIApiKey: string | null = null; // Added for dynamic API key
 
   // Private constructor to enforce singleton pattern
   private constructor(config: AIConfig) {
@@ -112,16 +113,36 @@ export class AIService extends EventEmitter {
     }
 
     try {
+      // Determine the API key to use:
+      // 1. Key set dynamically via setOpenAIApiKey
+      // 2. Key from initial config (which might come from env or store via App.tsx)
+      // 3. Fallback to process.env if nothing else is set (though App.tsx should handle this for config)
+      const apiKeyToUse = this.currentOpenAIApiKey || this.config.openAIConfig?.apiKey || process.env.OPENAI_API_KEY;
+
       // Initialize local model if configured
       if (this.config.useLocalModel) {
         await this.loadLocalModel();
+        this.openai = null; // Ensure OpenAI client is not used if local model is primary
       } 
-      // Initialize OpenAI API client if configured
-      else if (this.config.openAIConfig?.apiKey) {
-        this.openai = new OpenAI({
-          apiKey: this.config.openAIConfig.apiKey,
-          dangerouslyAllowBrowser: true
-        });
+      // Initialize OpenAI API client if an API key is available and not solely using local model
+      else if (apiKeyToUse) {
+        if (this.openai && this.openai.apiKey === apiKeyToUse) {
+          // Client already initialized with this key
+        } else {
+          this.openai = new OpenAI({
+            apiKey: apiKeyToUse,
+            dangerouslyAllowBrowser: true // This is often needed in Electron renderer contexts
+          });
+          // Update config to reflect the key actually used for initialization
+          if (this.config.openAIConfig) {
+            this.config.openAIConfig.apiKey = apiKeyToUse;
+          } else {
+            this.config.openAIConfig = { apiKey: apiKeyToUse, model: this.config.model || 'gpt-3.5-turbo', temperature: this.config.temperature || 0.7, maxTokens: this.config.maxTokens || 2048 };
+          }
+        }
+      } else {
+        this.openai = null; // No API key, no OpenAI client
+        console.warn("OpenAI API key not available. OpenAI features will be disabled.");
       }
 
       // Initialize custom endpoints if configured
@@ -143,6 +164,40 @@ export class AIService extends EventEmitter {
         error
       );
     }
+  }
+
+  /**
+   * Sets/updates the OpenAI API key and re-initializes the OpenAI client if needed.
+   * @param apiKey The new OpenAI API key.
+   */
+  public setOpenAIApiKey(apiKey: string): void {
+    this.currentOpenAIApiKey = apiKey;
+    // Update the key in the running config as well, so if initialize is called again, it uses this.
+    if (this.config.openAIConfig) {
+      this.config.openAIConfig.apiKey = apiKey;
+    } else {
+      // If openAIConfig wasn't defined, create it.
+      this.config.openAIConfig = { 
+        apiKey: apiKey, 
+        model: this.config.model || 'gpt-3.5-turbo', // Use existing model or default
+        temperature: this.config.temperature || 0.7, // Use existing temp or default
+        maxTokens: this.config.maxTokens || 2048 // Use existing maxTokens or default
+      };
+    }
+
+    // Re-initialize the OpenAI client with the new key if the service is already initialized
+    // and not configured to solely use a local model.
+    if (this.isInitialized && !this.config.useLocalModel && apiKey) {
+      console.log("Re-initializing OpenAI client with new API key.");
+      this.openai = new OpenAI({
+        apiKey: apiKey,
+        dangerouslyAllowBrowser: true
+      });
+    } else if (this.isInitialized && !apiKey) {
+        this.openai = null; // Clear client if API key is removed
+        console.warn("OpenAI API key removed. OpenAI features disabled.");
+    }
+    this.emit('apiKeyChanged'); // Emit an event if UI needs to react
   }
 
   // Generate a commit message based on the given diff
@@ -465,28 +520,32 @@ export class AIService extends EventEmitter {
   public async generateTests(
     filePath: string,
     testFramework: string = 'jest',
-    specificFocus?: string // Optional: e.g., function name, class name, or specific scenarios
-  ): Promise<string> { // Return string (test file content) instead of AIResponse
+    targetElement?: { name: string, type: string } // Updated to accept targetElement object
+  ): Promise<string> { 
     try {
       this.checkInitialized();
-      const context = await this.getCodeContext(filePath);
+      const context = await this.getCodeContext(filePath); // Full code context is still useful
 
       let focusInstruction = '';
-      if (specificFocus) {
-        focusInstruction = `Focus on generating tests for ${specificFocus}.`;
+      if (targetElement) {
+        focusInstruction = `Focus on generating tests for the ${targetElement.type} named "${targetElement.name}". If it's a method within a class, ensure tests cover its interaction with the class instance if relevant.`;
+      } else {
+        focusInstruction = "Generate tests for the entire file content below."
       }
 
       // Comprehensive prompt based on research
       const prompt = `Generate comprehensive unit tests for the following ${context.language} code from file '${context.filePath}' using the ${testFramework} testing framework.
 ${focusInstruction}
-The code is:
+The relevant code context is:
 \`\`\`${context.language}
-${context.code}
+${context.code} 
 \`\`\`
-Ensure tests cover various scenarios including typical usage, edge cases (e.g., null inputs, empty arrays, invalid values if applicable to the code's logic), and error handling where appropriate.
+Ensure tests cover various scenarios including typical usage, edge cases (e.g., null inputs, empty arrays, invalid values if applicable to the code's logic), and error handling where appropriate for the specified target.
 Provide the output as a complete, runnable test file/module, including all necessary imports (e.g., for the module under test, and from '${testFramework}') and setup.
-Only output the code for the test file. Do not include any explanatory text before or after the code block.
-The generated test file should be ready to run if saved with a conventional test file name (e.g., ${context.filePath.replace(/\.(ts|js)$/, '')}.test.${context.language === 'typescript' ? 'ts' : 'js'}).`;
+Only output the code for the test file. Do not include any explanatory text, comments, or markdown formatting outside the code block itself.
+The generated test file should be ready to run if saved with a conventional test file name (e.g., ${context.filePath.replace(/\.(ts|jsx|js|tsx)$/, '')}.test.${context.language === 'typescript' ? 'ts' : 'js'}).`;
+      
+      console.log("Generating tests with prompt:", prompt); // For debugging prompt
 
       const aiResponse = await this.queryAI(prompt, context);
       
@@ -766,8 +825,36 @@ The generated test file should be ready to run if saved with a conventional test
   }
 
   // Generate completion prompt for the given context
-  private generateCompletionPrompt(context: CodeContext): string {
-    return `Complete the following code in ${context.language}:\n\n${context.code}\n\nProvide only the code completion, no explanations.`;
+  private generateCompletionPrompt(context: CodeContext, position: monaco.Position): string {
+    // Extract code on the current line before the cursor
+    const codeBeforeCursorOnCurrentLine = context.currentLine?.substring(0, position.column -1) || '';
+    
+    // Extract a few lines before the current line for context
+    const lines = context.code.split('\n');
+    const startLineIndex = Math.max(0, position.lineNumber - 6); // 5 lines before + current line
+    const endLineIndex = position.lineNumber -1; // Lines before the current line
+    const prefixLines = lines.slice(startLineIndex, endLineIndex);
+    const codePrefix = prefixLines.join('\n');
+
+    // Constructing a more specific prompt for autocompletion
+    // Instructing the AI to complete the line, or provide the next logical token/block.
+    return `Provide a concise code completion for the following ${context.language} code.
+The completion should immediately follow the existing text on the current line.
+Only return the code to be inserted, without any explanation, comments, or markdown formatting.
+If completing a function call or an expression, provide the rest of the statement.
+If starting a new block or statement, provide the initial part of it.
+
+File Path: ${context.filePath}
+Code context (lines before current):
+\`\`\`${context.language}
+${codePrefix}
+\`\`\`
+Current line up to cursor:
+\`\`\`${context.language}
+${context.currentLine?.substring(0, position.column - 1)}<CURSOR_POSITION>
+\`\`\`
+The cursor is at <CURSOR_POSITION>. Complete the current line or provide the next logical code snippet.
+`;
   }
 
   // Generate explanation prompt for the given context and selection

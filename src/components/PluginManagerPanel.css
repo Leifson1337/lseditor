@@ -1,0 +1,125 @@
+.plugin-manager-panel {
+  padding: 20px;
+  height: 100%;
+  overflow-y: auto;
+  background-color: var(--background-color-primary, #1e1e1e); /* Use theme variables if available */
+  color: var(--text-color-primary, #d4d4d4);
+}
+
+.plugin-manager-panel h2 {
+  margin-top: 0;
+  border-bottom: 1px solid var(--border-color-primary, #333);
+  padding-bottom: 10px;
+  margin-bottom: 20px;
+}
+
+.plugin-manager-loading,
+.plugin-manager-error,
+.plugin-manager-empty {
+  text-align: center;
+  margin-top: 50px;
+  font-size: 1.2em;
+  color: var(--text-color-secondary, #888);
+}
+
+.plugin-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); /* Responsive grid */
+  gap: 20px;
+}
+
+.plugin-item {
+  border: 1px solid var(--border-color-secondary, #444);
+  border-radius: 6px;
+  padding: 15px;
+  background-color: var(--background-color-secondary, #2a2a2a);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.plugin-info h3 {
+  margin-top: 0;
+  margin-bottom: 5px;
+  font-size: 1.3em;
+  color: var(--text-color-accent, #58a6ff); /* Accent color for plugin name */
+}
+
+.plugin-version {
+  font-size: 0.8em;
+  color: var(--text-color-secondary, #888);
+  margin-left: 8px;
+}
+
+.plugin-author {
+  font-size: 0.9em;
+  color: var(--text-color-secondary, #aaa);
+  margin-bottom: 10px;
+}
+
+.plugin-description {
+  font-size: 0.95em;
+  margin-bottom: 15px;
+  flex-grow: 1; /* Allow description to take available space */
+}
+
+.plugin-actions {
+  border-top: 1px solid var(--border-color-primary, #333);
+  padding-top: 15px;
+  margin-top: 15px;
+  display: flex;
+  flex-direction: column; /* Stack actions vertically */
+  gap: 10px; /* Space between buttons */
+}
+
+.plugin-status {
+  font-size: 0.9em;
+  margin-bottom: 10px;
+  font-weight: bold;
+}
+
+.plugin-status.enabled {
+  color: var(--success-color, #28a745);
+}
+
+.plugin-status.disabled {
+  color: var(--warning-color, #ffc107);
+}
+
+.plugin-actions button {
+  padding: 8px 12px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: bold;
+  transition: background-color 0.2s ease;
+}
+
+.plugin-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.plugin-toggle-button.enable {
+  background-color: var(--success-color-button-bg, #28a745);
+  color: white;
+}
+.plugin-toggle-button.enable:hover {
+  background-color: var(--success-color-button-hover-bg, #218838);
+}
+
+.plugin-toggle-button.disable {
+  background-color: var(--warning-color-button-bg, #ffc107);
+  color: #333;
+}
+.plugin-toggle-button.disable:hover {
+  background-color: var(--warning-color-button-hover-bg, #e0a800);
+}
+
+.plugin-uninstall-button {
+  background-color: var(--error-color-button-bg, #dc3545);
+  color: white;
+}
+.plugin-uninstall-button:hover {
+  background-color: var(--error-color-button-hover-bg, #c82333);
+}

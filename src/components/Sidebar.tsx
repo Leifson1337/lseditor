@@ -39,7 +39,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onTabChange, activeTab }) => {
     { id: 'github', icon: <FaGithub />, label: 'GitHub', action: () => setShowGithubDropdown(!showGithubDropdown) },
     { id: 'ai', icon: <FaBrain />, label: 'AI', action: () => onTabChange?.('ai') },
     { id: 'terminal', icon: <FaTerminal />, label: 'Terminal', action: () => onTabChange?.('terminal') },
-    { id: 'extensions', icon: <FaPuzzlePiece />, label: 'Extensions', action: () => onTabChange?.('extensions') },
+    // { id: 'extensions', icon: <FaPuzzlePiece />, label: 'Extensions', action: () => onTabChange?.('extensions') }, // Original "Extensions"
+    { id: 'plugins', icon: <FaPuzzlePiece />, label: 'Plugins', action: () => onTabChange?.('plugins') }, // New "Plugins" tab
   ];
 
   // Handle a GitHub dropdown action (e.g., Issues, PRs, Repos)

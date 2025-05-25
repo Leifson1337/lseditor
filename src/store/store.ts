@@ -35,6 +35,7 @@ export interface StoreSchema {
     lineNumbers: boolean; // Whether line numbers are enabled for the editor
     content?: string; // Content of the editor
   };
+  openai_api_key?: string; // Added for OpenAI API Key
 }
 
 /**

@@ -38,17 +38,24 @@ export class TerminalService extends EventEmitter {
   // Editor store instance
   private store: ReturnType<typeof useEditorStore> | undefined;
 
-  // Map of all terminal sessions
-  private sessions: Map<string, TerminalSession> = new Map();
+  // Map of all terminal sessions - REMOVED, will use TerminalManager's
+  // private sessions: Map<string, TerminalSession> = new Map();
 
-  // Currently active terminal session
-  private activeSession: TerminalSession | null = null;
+  // Currently active terminal session - REMOVED, will use TerminalManager's
+  // private activeSession: TerminalSession | null = null;
 
   // Flag indicating whether the terminal service is initialized
-  private isInitialized: boolean = false;
+  private isInitialized: boolean = false; // Still useful for TerminalService's own setup
 
-  // Monaco editor instance
+  // Monaco editor instance - This seems unrelated to terminal core logic, might belong elsewhere or be passed in.
+  // For now, keeping it if methods like selectAll, getCurrentInput, search are truly TerminalService's domain.
   private editor: monaco.editor.IStandaloneCodeEditor | null = null;
+
+
+  // DOM element for the XTerm instance, managed by the UI component (TerminalPanel)
+  // This is set by the UI component that hosts the terminal.
+  private terminalElement: HTMLElement | null = null;
+
 
   /**
    * Constructor for the TerminalService.
@@ -68,7 +75,9 @@ export class TerminalService extends EventEmitter {
     store?: ReturnType<typeof useEditorStore>
   ) {
     super();
-    this.terminalManager = terminalManager || null;
+    // Ensure terminalManager is always provided, or throw error if critical.
+    // For now, allowing null but checkInitialized should prevent usage if null.
+    this.terminalManager = terminalManager || null; 
     this.aiService = aiService;
     this.projectService = projectService;
     this.uiService = uiService;
@@ -120,254 +129,160 @@ export class TerminalService extends EventEmitter {
    * This method must be called before using the terminal service.
    */
   public async initialize(): Promise<void> {
+    if (!this.terminalManager) {
+      throw new Error("TerminalManager not provided to TerminalService.");
+    }
     try {
-      await this.terminalManager?.initialize();
+      // TerminalManager should initialize its own dependencies (like TerminalServer)
+      if (!this.terminalManager.isInitialized) { // Assuming isInitialized property exists
+          await this.terminalManager.initialize();
+      }
       this.isInitialized = true;
       this.emit('initialized');
+      console.log('TerminalService initialized and linked with TerminalManager.');
     } catch (error) {
-      console.error('Failed to initialize Terminal service:', error);
+      console.error('Failed to initialize TerminalService:', error);
       this.emit('error', error);
       throw error;
     }
   }
 
-  /**
-   * Create a new terminal session.
-   * @param config Terminal configuration
-   * @returns The new terminal session
-   */
+  // --- Session Management (Delegated to TerminalManager) ---
+
   public async createSession(config: TerminalConfig): Promise<TerminalSession> {
     this.checkInitialized();
-    try {
-      const id = uuidv4();
-      const element = document.createElement('div');
-      element.className = 'terminal-session';
-
-      // Get the terminal profile and theme
-      const profileName = config.profile || 'default';
-      const profile = this.terminalManager?.getProfile(profileName);
-
-      if (!profile) {
-        throw new Error(`Profile ${profileName} not found`);
-      }
-
-      const themeName = config.theme || 'default';
-      const theme = this.terminalManager?.getTheme(themeName);
-
-      if (!theme) {
-        throw new Error(`Theme ${themeName} not found`);
-      }
-
-      // Create a new terminal session
-      const session: TerminalSession = {
-        id,
-        element,
-        isActive: false,
-        config,
-        profile: profile,
-        theme: theme,
-        status: 'connecting',
-        createdAt: new Date(),
-        lastActive: new Date()
-      };
-
-      // Add the session to the map of sessions
-      this.sessions.set(id, session);
-      this.emit('sessionCreated', session);
-      return session;
-    } catch (error) {
-      console.error('Failed to create terminal session:', error);
-      throw error;
-    }
+    if (!this.terminalManager) throw new Error("TerminalManager not available.");
+    // TerminalManager.createSession now returns a TerminalSession that includes the XTerm instance
+    const session = await this.terminalManager.createSession(config);
+    // TerminalService no longer directly manages the DOM element for the session.
+    // This will be handled by TerminalPanel using getSessionXTerm.
+    this.emit('sessionCreated', session); // Forward event
+    return session;
   }
 
-  /**
-   * Activate a terminal session by ID.
-   * @param id Session ID to activate
-   */
   public async activateSession(id: string): Promise<void> {
     this.checkInitialized();
-    try {
-      const session = this.sessions.get(id);
-      if (!session) {
-        throw new Error(`Session ${id} not found`);
-      }
-
-      // Deactivate the current active session
-      if (this.activeSession) {
-        this.activeSession.isActive = false;
-        this.emit('sessionDeactivated', this.activeSession);
-      }
-
-      // Activate the session
-      session.isActive = true;
-      this.activeSession = session;
-      this.emit('sessionActivated', session);
-    } catch (error) {
-      console.error('Failed to activate terminal session:', error);
-      throw error;
-    }
+    if (!this.terminalManager) throw new Error("TerminalManager not available.");
+    this.terminalManager.activateSession(id);
+    // UI layer (TerminalPanel) will be responsible for showing the correct XTerm instance.
+    // TerminalService can emit an event that UI can listen to.
+    this.emit('sessionActivated', this.terminalManager.getSession(id)); // Forward event
   }
 
-  /**
-   * Deactivate a terminal session by ID.
-   * @param id Session ID to deactivate
-   */
-  public async deactivateSession(id: string): Promise<void> {
-    this.checkInitialized();
-    try {
-      const session = this.sessions.get(id);
-      if (!session) {
-        throw new Error(`Session ${id} not found`);
-      }
+  // Deactivate is primarily an internal TerminalManager concept if needed.
+  // UI will just switch active tabs.
+  // public async deactivateSession(id: string): Promise<void> { ... }
 
-      // Deactivate the session
-      session.isActive = false;
-      if (this.activeSession?.id === id) {
-        this.activeSession = null;
-      }
-      this.emit('sessionDeactivated', session);
-    } catch (error) {
-      console.error('Failed to deactivate terminal session:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Remove a terminal session by ID.
-   * @param id Session ID to remove
-   */
   public async removeSession(id: string): Promise<void> {
     this.checkInitialized();
-    try {
-      const session = this.sessions.get(id);
-      if (!session) {
-        throw new Error(`Session ${id} not found`);
-      }
-
-      // Deactivate the session if it is active
-      if (session.isActive) {
-        await this.deactivateSession(id);
-      }
-
-      // Remove the session from the map of sessions
-      this.sessions.delete(id);
-      this.emit('sessionRemoved', session);
-    } catch (error) {
-      console.error('Failed to remove terminal session:', error);
-      throw error;
-    }
+    if (!this.terminalManager) throw new Error("TerminalManager not available.");
+    this.terminalManager.removeSession(id);
+    this.emit('sessionRemoved', { id }); // Forward event
   }
 
-  /**
-   * Get a terminal session by ID.
-   * @param id Session ID to get
-   * @returns The terminal session or undefined
-   */
   public getSession(id: string): TerminalSession | undefined {
-    return this.sessions.get(id);
-  }
-
-  /**
-   * Get the currently active terminal session.
-   * @returns The active terminal session or null
-   */
-  public getActiveSession(): TerminalSession | null {
-    return this.activeSession;
-  }
-
-  /**
-   * Get all terminal sessions.
-   * @returns Array of terminal sessions
-   */
-  public getAllSessions(): TerminalSession[] {
-    return Array.from(this.sessions.values());
-  }
-
-  /**
-   * Write to a terminal session by ID.
-   * @param id Session ID to write to
-   * @param text Text to write
-   */
-  public async writeToSession(id: string, text: string): Promise<void> {
     this.checkInitialized();
-    try {
-      const session = this.sessions.get(id);
-      if (!session) {
-        throw new Error(`Session ${id} not found`);
-      }
-
-      // Write to the session
-      if (session.ws) {
-        session.ws.send(text);
-      }
-      this.emit('sessionOutput', { session, text });
-    } catch (error) {
-      console.error('Failed to write to terminal session:', error);
-      throw error;
-    }
+    return this.terminalManager?.getSession(id);
   }
 
-  /**
-   * Clear a terminal session by ID.
-   * @param id Session ID to clear
-   */
+  public getActiveSession(): TerminalSession | null {
+    this.checkInitialized();
+    return this.terminalManager?.getActiveSession() || null;
+  }
+
+  public getAllSessions(): TerminalSession[] {
+    this.checkInitialized();
+    return this.terminalManager?.getAllSessions() || [];
+  }
+
+  // --- Terminal I/O (Delegated) ---
+
+  public async writeToSession(id: string, data: string): Promise<void> {
+    this.checkInitialized();
+    if (!this.terminalManager) throw new Error("TerminalManager not available.");
+    await this.terminalManager.writeToSession(id, data);
+    // No direct event emission here; data flow is PTY -> XTerm (handled by Manager)
+  }
+
   public async clearSession(id: string): Promise<void> {
     this.checkInitialized();
-    try {
-      const session = this.sessions.get(id);
-      if (!session) {
-        throw new Error(`Session ${id} not found`);
+    if (!this.terminalManager) throw new Error("TerminalManager not available.");
+    const xterm = this.terminalManager.getSessionXTerm(id);
+    if (xterm) {
+      xterm.clear();
+      this.emit('sessionCleared', { id }); // Forward event
+    } else {
+      console.warn(`XTerm instance not found for session ${id} to clear.`);
+    }
+  }
+  
+  /**
+   * Attaches an XTerm.js instance (managed by TerminalManager) to a DOM element.
+   * This method is called by the UI layer (e.g., TerminalPanel).
+   * @param sessionId The ID of the session whose XTerm instance should be attached.
+   * @param element The HTMLElement to attach the XTerm instance to.
+   */
+  public attachXTermToElement(sessionId: string, element: HTMLElement): void {
+    this.checkInitialized();
+    if (!this.terminalManager) throw new Error("TerminalManager not available.");
+    const xterm = this.terminalManager.getSessionXTerm(sessionId);
+    if (xterm && element) {
+      // Clear previous children from element to prevent multiple terminals in one container
+      while (element.firstChild) {
+        element.removeChild(element.firstChild);
       }
+      xterm.open(element);
+      // TODO: Consider FitAddon usage here if XTerm instances have it.
+      // Example: if (xterm.fitAddon) xterm.fitAddon.fit();
+      // For now, assuming TerminalPanel might call fit if needed.
+    } else {
+      console.warn(`XTerm instance for session ${sessionId} or element not available for attachment.`);
+    }
+  }
+  
+  public detachXTermFromElement(sessionId: string): void {
+     this.checkInitialized();
+     if (!this.terminalManager) throw new Error("TerminalManager not available.");
+     const xterm = this.terminalManager.getSessionXTerm(sessionId);
+     if (xterm && xterm.element && xterm.element.parentElement) {
+         // xterm.dispose(); // Disposing the xterm instance might be too much if just detaching.
+         // If the goal is to simply remove it from DOM for reuse, this is more complex.
+         // For now, let's assume "detach" means the UI is no longer showing it,
+         // but the xterm instance itself is still managed by TerminalManager.
+         // The physical removal from DOM would be handled by the UI component managing 'element'.
+         console.log(`XTerm for session ${sessionId} detached (conceptually). DOM managed by UI.`);
+     }
+  }
 
-      // Clear the session
-      if (session.element) {
-        session.element.innerHTML = '';
-      }
-      this.emit('sessionCleared', session);
-    } catch (error) {
-      console.error('Failed to clear terminal session:', error);
-      throw error;
+
+  public getTerminalManager(): TerminalManager | null {
+    return this.terminalManager;
+  }
+  
+  // --- UI specific methods (like write, writeln, clear for active session) ---
+  public write(data: string): void {
+    const active = this.getActiveSession();
+    if (active) {
+      this.writeToSession(active.id, data);
+    } else {
+      console.warn("No active terminal session to write to.");
     }
   }
 
-  /**
-   * Get the terminal container element.
-   * @returns The terminal container element
-   */
-  public getElement(): HTMLElement {
-    const container = document.createElement('div');
-    container.className = 'terminal-container';
-    return container;
-  }
-
-  /**
-   * Write to the active terminal session.
-   * @param text Text to write
-   */
-  public write(text: string): void {
-    if (this.activeSession) {
-      this.writeToSession(this.activeSession.id, text);
-    }
-  }
-
-  /**
-   * Write a line to the active terminal session.
-   * @param text Text to write
-   */
   public writeln(text: string): void {
-    this.write(text + '\n');
+    this.write(text + '\\r\\n'); // Use \r\n for terminal newlines typically
   }
 
-  /**
-   * Clear the active terminal session.
-   */
   public clear(): void {
-    if (this.activeSession) {
-      this.clearSession(this.activeSession.id);
+    const active = this.getActiveSession();
+    if (active) {
+      this.clearSession(active.id);
+    } else {
+      console.warn("No active terminal session to clear.");
     }
   }
-
+  
+  // --- Editor related methods - consider if they belong here or in EditorService ---
   /**
    * Select all text in the Monaco editor.
    */

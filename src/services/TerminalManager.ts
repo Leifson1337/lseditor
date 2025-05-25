@@ -71,10 +71,9 @@ export class TerminalManager extends EventEmitter {
   private activeSession: TerminalSession | null = null;
   // isInitialized indicates whether the terminal manager has been initialized
   private isInitialized: boolean = false;
-  // container is the HTML element that contains the terminal
-  private container: HTMLElement | null = null;
+  // Removed: private container: HTMLElement | null = null; // DOM manipulation removed
   // ws is the WebSocket connection to the terminal server
-  private ws: any | null = null;
+  private ws: any | null = null; // This will be per-session if using real WebSockets
   // reconnectAttempts is the number of reconnect attempts
   private reconnectAttempts = 0;
   // maxReconnectAttempts is the maximum number of reconnect attempts
@@ -120,23 +119,16 @@ export class TerminalManager extends EventEmitter {
     if (this.isInitialized) {
       return;
     }
-
     try {
-      // Check if we're in a browser environment
-      if (typeof document !== 'undefined') {
-        this.container = document.createElement('div');
-        this.container.style.width = '100%';
-        this.container.style.height = '100%';
-        document.body.appendChild(this.container);
-      } else {
-        // We're in the main process, create a mock container
-        this.container = null;
-        console.log('Terminal UI will be initialized in renderer process');
-      }
+      // DOM manipulation removed.
+      // Initialization might involve connecting to TerminalServer or other setup
+      // if TerminalServer was more than just a PTY spawner.
+      // For now, TerminalServer is mainly for PTY interaction.
       this.isInitialized = true;
       this.emit('initialized');
+      console.log('TerminalManager initialized.');
     } catch (error) {
-      console.error('Failed to initialize Terminal manager:', error);
+      console.error('Failed to initialize TerminalManager:', error);
       this.emit('error', error);
       throw error;
     }
@@ -161,56 +153,146 @@ export class TerminalManager extends EventEmitter {
     const profileName = options.profile || 'default';
     const themeName = options.theme || 'default';
     const profile = this.profiles.get(profileName);
-    const theme = this.themes.get(themeName);
+    const theme = this.themes.get(themeName); // Assuming themes are still managed here for XTerm styling
 
-    if (!profile) {
-      throw new Error(`Profile ${profileName} not found`);
-    }
+    if (!profile) throw new Error(`Profile ${profileName} not found`);
+    if (!theme) throw new Error(`Theme ${themeName} not found`);
 
-    if (!theme) {
-      throw new Error(`Theme ${themeName} not found`);
-    }
+    // 1. Create XTerm.js instance
+    const xterm = new XTerm({
+      cursorBlink: profile.cursorBlink,
+      cursorStyle: profile.cursorStyle as 'block' | 'underline' | 'bar',
+      fontFamily: profile.fontFamily,
+      fontSize: profile.fontSize,
+      scrollback: profile.scrollback,
+      theme: { // Convert TerminalTheme to XTerm ITheme
+        background: theme.background,
+        foreground: theme.foreground,
+        cursor: theme.cursor,
+        selection: theme.selection,
+        black: theme.black,
+        red: theme.red,
+        green: theme.green,
+        yellow: theme.yellow,
+        blue: theme.blue,
+        magenta: theme.magenta,
+        cyan: theme.cyan,
+        white: theme.white,
+        brightBlack: theme.brightBlack,
+        brightRed: theme.brightRed,
+        brightGreen: theme.brightGreen,
+        brightYellow: theme.brightYellow,
+        brightBlue: theme.brightBlue,
+        brightMagenta: theme.brightMagenta,
+        brightCyan: theme.brightCyan,
+        brightWhite: theme.brightWhite,
+      },
+      // ... other XTerm options based on profile
+    });
+    this.terminals.set(id, xterm);
 
-    const session: TerminalSession = {
+    // 2. Create PTY (conceptual, using TerminalServer which might use MockPty)
+    // In a real scenario, TerminalServer.createPty would return PTY details.
+    // For now, we assume it returns a PTY-like object (MockPty instance).
+    const ptyOptions = {
+      name: 'xterm-color',
+      cols: xterm.cols,
+      rows: xterm.rows,
+      cwd: options.cwd || profile.cwd || process.cwd(),
+      env: { ...process.env, ...profile.env } as { [key: string]: string },
+    };
+
+    // This part is tricky with the current TerminalServer structure.
+    // TerminalServer itself doesn't directly expose a 'spawn' or 'createPty' method.
+    // It listens for WebSocket connections in a real setup.
+    // For the mock environment, we'll simulate this.
+    // The `pty` variable in `terminalServer.ts` is a mock.
+    // We'll bypass `TerminalServer` slightly for the mock PTY instantiation for clarity here,
+    // as `TerminalServer`'s role is more about WebSocket lifecycle in a real app.
+    
+    // Let's assume a method on TerminalServer or directly use the mock for now.
+    // This would be where you'd interact with `this.terminalServer` to spawn a real PTY
+    // and get WebSocket details.
+    // For now, directly creating a MockPty for each session:
+    const ptyProcess = (await import('../server/terminalServer')).pty.spawn(
+        profile.command,
+        profile.args || [],
+        ptyOptions
+    );
+    
+    // 3. Link XTerm to PTY
+    ptyProcess.onData((data: string) => {
+      xterm.write(data);
+    });
+    xterm.onData((data: string) => {
+      ptyProcess.write(data); // This is the PTY "input"
+    });
+    ptyProcess.onExit(({ exitCode, signal }) => {
+      this.emit('sessionClosed', { sessionId: id, exitCode, signal });
+      xterm.writeln(`\r\n\r\n[Process ended with code ${exitCode}]`);
+      // Potentially auto-remove session or mark as exited
+      const currentSession = this.sessions.get(id);
+      if (currentSession) {
+        currentSession.status = 'disconnected';
+        // currentSession.ptyProcess = undefined; // Clear the pty process
+      }
+    });
+
+
+    const newSession: TerminalSession = {
       id,
       config: {
-        title: options.title,
-        cwd: options.cwd || process.cwd(),
+        title: options.title || profile.name,
+        cwd: ptyOptions.cwd,
         profile: profileName,
-        theme: themeName
+        theme: themeName,
       },
-      profile: {
-        ...profile,
-        theme: themeName
-      },
+      profile,
       theme,
-      element: typeof document !== 'undefined' ? document.createElement('div') : null,
-      status: 'connecting',
+      // element: null, // DOM element is managed by UI layer (TerminalPanel)
+      status: 'connected', // Assuming connection is immediate with MockPty
       createdAt: new Date(),
       lastActive: new Date(),
       isActive: false,
-      ws: undefined
+      xterm: xterm, // Store XTerm instance
+      ptyProcess: ptyProcess, // Store PTY process (mock or real)
+      // ws: undefined, // This would be the WebSocket to the real PTY server
     };
 
-    this.sessions.set(id, session);
-    this.emit('sessionCreated', session);
-    return session;
+    this.sessions.set(id, newSession);
+    this.emit('sessionCreated', newSession);
+    return newSession;
   }
 
   // Remove a terminal session
   public removeSession(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (!session) {
-      throw new Error(`Session ${sessionId} not found`);
+      console.warn(`Session ${sessionId} not found for removal.`);
+      return;
     }
 
     if (session.isActive) {
-      this.deactivateSession(sessionId);
+      this.deactivateSession(sessionId); // This will set this.activeSession to null
     }
 
+    session.ptyProcess?.kill(); // Kill the PTY process
+    session.xterm?.dispose(); // Dispose the XTerm instance
+
+    this.terminals.delete(sessionId);
     this.sessions.delete(sessionId);
     this.emit('sessionRemoved', sessionId);
+
+    // If no sessions left, or if the removed session was active and no other becomes active
+    if (this.sessions.size > 0 && !this.activeSession) {
+        this.activateSession(this.sessions.keys().next().value); // Activate another session
+    }
   }
+  
+  public getSessionXTerm(sessionId: string): XTerm | undefined {
+    return this.terminals.get(sessionId);
+  }
+
 
   // Activate a terminal session
   public activateSession(sessionId: string): void {
@@ -525,31 +607,36 @@ export class TerminalManager extends EventEmitter {
   // Resize a terminal session
   public async resizeSession(sessionId: string, cols: number, rows: number): Promise<void> {
     const session = this.sessions.get(sessionId);
-    if (!session) {
-      throw new Error(`Session ${sessionId} not found`);
+    if (!session || !session.ptyProcess) {
+      console.warn(`Session ${sessionId} or its PTY not found for resize.`);
+      return;
     }
-
-    if (session.ws) {
-      session.ws.send(JSON.stringify({ type: 'resize', cols, rows }));
-    }
+    session.ptyProcess.resize(cols, rows);
+    
+    const xterm = this.terminals.get(sessionId);
+    // xterm.js v5 requires addons to be loaded and then used.
+    // Assuming FitAddon is loaded and available if needed.
+    // For now, we'll just call resize on xterm directly.
+    // In a real scenario with FitAddon:
+    // const fitAddon = session.xterm.getAddon('FitAddon'); // This is hypothetical
+    // if (fitAddon) fitAddon.fit(); else xterm.resize(cols, rows);
+    xterm?.resize(cols, rows); // XTerm also needs to know its new dimensions
   }
 
-  // Write to a terminal session
+  // Write to a terminal session (data from UI to PTY)
   public async writeToSession(sessionId: string, data: string): Promise<void> {
     const session = this.sessions.get(sessionId);
-    if (!session) {
-      throw new Error(`Session ${sessionId} not found`);
+    if (!session || !session.ptyProcess) {
+      console.warn(`Session ${sessionId} or its PTY not found for writing.`);
+      return;
     }
-
-    if (session.ws) {
-      session.ws.send(data);
-    }
+    session.ptyProcess.write(data);
   }
 
-  // Get the terminal container element
-  public getElement(): HTMLElement | null {
-    return this.container;
-  }
+  // Get the terminal container element - REMOVED as TerminalManager shouldn't handle DOM elements
+  // public getElement(): HTMLElement | null {
+  //   return this.container;
+  // }
 
   // Get the current input
   public getCurrentInput(): string {

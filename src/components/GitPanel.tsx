@@ -23,12 +23,15 @@ import {
   FaUpload,
   FaDownload,
   FaCloudDownloadAlt,
-  FaLightbulb
+  FaLightbulb,
+  FaListAlt, // Example icon for "Working Directory"
+  FaClipboardCheck // Example icon for "Staged Changes"
 } from 'react-icons/fa';
 import './GitPanel.css';
-import { GitBranch, GitStatus } from '../types/GitTypes';
+import { GitBranch, GitStatus, GitFileDiffSummary } from '../types/GitTypes'; // Added GitFileDiffSummary
 import { AIService } from '../services/AIService';
-import DiffViewer from './DiffViewer'; // Import DiffViewer
+import DiffViewer from './DiffViewer'; 
+import MultiFileDiffViewer from './MultiFileDiffViewer'; // Import MultiFileDiffViewer
 
 // Props for the GitPanel component
 interface GitPanelProps {
@@ -88,27 +91,38 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
   const [isCommitting, setIsCommitting] = useState<boolean>(false);
   const [isSuggesting, setIsSuggesting] = useState<boolean>(false);
 
-  const [selectedFileDiff, setSelectedFileDiff] = useState<{ filePath: string; diffResult: DiffResult } | null>(null);
+  const [selectedFileDiff, setSelectedFileDiff] = useState<{ filePath: string; diffResult: DiffResult; status?: GitFileDiffSummary['status'], fromPath?: string } | null>(null);
   const [isDiffModalOpen, setIsDiffModalOpen] = useState<boolean>(false);
+
+  // New states for multi-file diff summaries
+  const [workingDirectoryChanges, setWorkingDirectoryChanges] = useState<GitFileDiffSummary[]>([]);
+  const [stagedChangesSummary, setStagedChangesSummary] = useState<GitFileDiffSummary[]>([]);
+  const [activeSummaryView, setActiveSummaryView] = useState<'working' | 'staged'>('working');
+
 
   useEffect(() => {
     const updateGitInfo = async () => {
       try {
         setIsLoading(true);
-        const [newBranches, serviceStatus] = await Promise.all([
+        const [newBranches, serviceStatus, wdSummary, stagedSummary] = await Promise.all([
           gitService.getBranches(),
-          gitService.getStatus()
+          gitService.getStatus(),
+          gitService.getWorkingDirectoryDiffSummary(),
+          gitService.getStagedDiffSummary()
         ]);
         setBranches(newBranches);
-        setStatus({
+        setStatus({ // This status is for the high-level counts (modified, staged, untracked files)
           current: serviceStatus.branch,
           staged: serviceStatus.staged,
           not_added: serviceStatus.untracked, // From GitService's getStatus
           modified: serviceStatus.modified, // From GitService's getStatus (unstaged changes to tracked files)
           deleted: serviceStatus.deleted,
           renamed: [], // simple-git status doesn't explicitly list renamed, often as M or D+A
-          untracked: serviceStatus.untracked // Explicitly from GitService's getStatus
+          untracked: serviceStatus.untracked 
         });
+        setWorkingDirectoryChanges(wdSummary);
+        setStagedChangesSummary(stagedSummary);
+
         const current = gitService.getCurrentBranch();
         setCurrentBranch(current || '');
 
@@ -165,24 +179,32 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
   const refreshGitData = async () => {
     try {
       setIsLoading(true);
-      const [newBranches, serviceStatus] = await Promise.all([
+      // Fetch all data in parallel
+      const [newBranches, serviceStatus, wdSummary, stagedSummary] = await Promise.all([
         gitService.getBranches(),
-        gitService.getStatus()
+        gitService.getStatus(),
+        gitService.getWorkingDirectoryDiffSummary(),
+        gitService.getStagedDiffSummary()
       ]);
       setBranches(newBranches);
       setStatus({
         current: serviceStatus.branch,
-        staged: serviceStatus.staged,
-        not_added: serviceStatus.untracked,
-        modified: serviceStatus.modified,
-        deleted: serviceStatus.deleted,
-        renamed: [],
-        untracked: serviceStatus.untracked
+        staged: serviceStatus.staged, // Count for badge
+        not_added: serviceStatus.untracked, // Count for badge (working dir)
+        modified: serviceStatus.modified, // Count for badge (working dir)
+        deleted: serviceStatus.deleted, // Count for badge (working dir)
+        renamed: [], // StatusResult doesn't directly give this in a simple list
+        untracked: serviceStatus.untracked // Count for badge
       });
+      setWorkingDirectoryChanges(wdSummary);
+      setStagedChangesSummary(stagedSummary);
       const current = gitService.getCurrentBranch();
       setCurrentBranch(current || '');
     } catch (error) {
       console.error('Error refreshing git data:', error);
+      // Clear summaries on error to avoid stale display
+      setWorkingDirectoryChanges([]);
+      setStagedChangesSummary([]);
     } finally {
       setIsLoading(false);
     }
@@ -356,24 +378,48 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
     finally { setIsSuggesting(false); }
   };
 
-  const handleFileClick = async (filePath: string, isStaged: boolean) => {
+  const handleFileSummaryClick = async (filePath: string, fileStatus: GitFileDiffSummary['status'], fromPath?: string) => {
     try {
       let diffResult: DiffResult;
-      if (isStaged) {
+      let diffTitle = filePath;
+
+      if (activeSummaryView === 'staged' || fileStatus === 'A' || fileStatus === 'M' || fileStatus === 'D' || fileStatus === 'R' || fileStatus === 'C' || fileStatus === 'T') {
+         // For staged files, or files with status indicating they are tracked and changed
         const rawDiff = await gitService.git.diff(['--staged', filePath]);
-        // Construct DiffResult; DiffViewer primarily uses raw but other fields are for structure
-        diffResult = { raw: rawDiff, files: [filePath], insertions: 0, deletions: 0, changed: [] };
-      } else {
-        diffResult = await gitService.getDiff(filePath);
+        diffResult = { raw: rawDiff, files: [filePath], insertions: 0, deletions: 0, changed: [] }; // Basic parsing
+        if (fileStatus === 'R' && fromPath) diffTitle = `${filePath} (from ${fromPath})`;
+      } else if (fileStatus === '?' ) { // Untracked file in working directory
+        const content = await gitService.projectService.getFileContent(filePath); // Assuming projectService is on gitService
+        // Create a "diff" that shows all content as added
+        const lines = content.split('\n');
+        diffResult = {
+          raw: `+++ b/${filePath}\n` + lines.map(line => `+${line}`).join('\n'),
+          files: [filePath],
+          insertions: lines.length,
+          deletions: 0,
+          changed: lines.map((line, index) => ({ type: 'added', content: line, lineNumber: index + 1 }))
+        };
+        diffTitle = `${filePath} (Untracked)`;
       }
-      setSelectedFileDiff({ filePath, diffResult });
+      // For 'M', 'D' in working directory (unstaged)
+      else if (activeSummaryView === 'working' && (fileStatus === 'M' || fileStatus === 'D')) {
+        diffResult = await gitService.getDiff(filePath); // Diff working file against index
+      }
+       else {
+        // Fallback or other statuses like 'U'
+        console.warn(`Diff view for status ${fileStatus} on ${filePath} might not be fully representative.`);
+        // Attempt a general diff, which might be against HEAD or index depending on file state
+        diffResult = await gitService.getDiff(filePath); 
+      }
+      
+      setSelectedFileDiff({ filePath: diffTitle, diffResult, status: fileStatus, fromPath });
       setIsDiffModalOpen(true);
     } catch (error) {
       console.error('Error fetching diff for file:', filePath, error);
       alert(`Could not load diff for ${filePath}.`);
     }
   };
-
+  
   const closeDiffModal = () => {
     setIsDiffModalOpen(false);
     setSelectedFileDiff(null);
@@ -429,44 +475,52 @@ export const GitPanel: React.FC<GitPanelProps> = ({ workspacePath }) => {
           <h3>Commit Changes</h3>
           <textarea className="commit-message-input" value={commitMessage} onChange={(e) => setCommitMessage(e.target.value)} placeholder="Commit message" rows={3} disabled={isCommitting || isSuggesting} />
           <div className="commit-actions">
-            <button className="commit-button" onClick={handleCommit} disabled={isCommitting || isSuggesting || (status.staged.length === 0 && status.modified.length === 0 && status.untracked.length === 0)}>{isCommitting ? 'Committing...' : 'Commit'}</button>
-            <button className="suggest-commit-button" onClick={handleSuggestCommitMessage} disabled={isSuggesting || isCommitting || status.staged.length === 0} title="Suggest commit message (AI)">{isSuggesting ? <FaSync className="fa-spin" /> : <FaLightbulb />} {isSuggesting ? 'Suggesting...' : 'Suggest'}</button>
+            <button 
+              className="commit-button" 
+              onClick={handleCommit} 
+              disabled={isCommitting || isSuggesting || stagedChangesSummary.length === 0}
+            >
+              {isCommitting ? 'Committing...' : 'Commit All Staged'}
+            </button>
+            <button className="suggest-commit-button" onClick={handleSuggestCommitMessage} disabled={isSuggesting || isCommitting || stagedChangesSummary.length === 0} title="Suggest commit message (AI)">{isSuggesting ? <FaSync className="fa-spin" /> : <FaLightbulb />} {isSuggesting ? 'Suggesting...' : 'Suggest'}</button>
           </div>
         </div>
-
-        <div className="git-section">
-          <h3>Staged Changes ({status.staged.length})</h3>
-          {status.staged.length === 0 ? <p>No files staged.</p> : (
-            <div className="file-list">
-              {status.staged.map(file => (
-                <div key={`staged-${file}`} className="file-item staged-file">
-                  <span className="file-name" onClick={() => handleFileClick(file, true)} title={`View diff for ${file}`}>{file}</span>
-                  <button onClick={() => handleUnstageFile(file)}>Unstage</button>
-                </div>
-              ))}
-            </div>
-          )}
+        
+        <div className="git-section changes-toggle-buttons">
+          <button 
+            onClick={() => setActiveSummaryView('working')} 
+            className={activeSummaryView === 'working' ? 'active' : ''}
+            disabled={isLoading}
+          >
+            <FaListAlt /> Working Directory ({workingDirectoryChanges.length})
+          </button>
+          <button 
+            onClick={() => setActiveSummaryView('staged')} 
+            className={activeSummaryView === 'staged' ? 'active' : ''}
+            disabled={isLoading}
+          >
+            <FaClipboardCheck /> Staged Changes ({stagedChangesSummary.length})
+          </button>
         </div>
 
-        <div className="git-section">
-          <h3>Modified Files ({status.modified.length + status.untracked.length})</h3>
-          {(status.modified.length + status.untracked.length) === 0 ? <p>No modified or untracked files.</p> : (
-            <div className="file-list">
-              {status.modified.map(file => (
-                <div key={`modified-${file}`} className="file-item modified-file">
-                  <span className="file-name" onClick={() => handleFileClick(file, false)} title={`View diff for ${file}`}>{file} (Modified)</span>
-                  <button onClick={() => handleStageFile(file)}>Stage</button>
-                </div>
-              ))}
-              {status.untracked.map(file => (
-                <div key={`untracked-${file}`} className="file-item untracked-file">
-                  <span className="file-name" onClick={() => handleFileClick(file, false)} title={`View diff for ${file}`}>{file} (Untracked)</span>
-                  <button onClick={() => handleStageFile(file)}>Stage</button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        {activeSummaryView === 'working' && (
+          <MultiFileDiffViewer
+            diffSummary={workingDirectoryChanges}
+            title="Working Directory Changes"
+            onFileSelect={(filePath, fileStatus, fromPath) => handleFileSummaryClick(filePath, fileStatus, fromPath)}
+          />
+        )}
+        {activeSummaryView === 'staged' && (
+           <MultiFileDiffViewer
+            diffSummary={stagedChangesSummary}
+            title="Staged Changes"
+            onFileSelect={(filePath, fileStatus, fromPath) => handleFileSummaryClick(filePath, fileStatus, fromPath)}
+          />
+        )}
+
+        {/* Old file lists are removed, replaced by MultiFileDiffViewer */}
+        {/* Individual file staging/unstaging can be added to MultiFileDiffViewer or context menu on items */}
+
 
         {isDiffModalOpen && selectedFileDiff && (
           <div className="diff-modal-overlay" onClick={closeDiffModal}>

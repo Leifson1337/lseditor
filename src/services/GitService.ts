@@ -157,6 +157,80 @@ export class GitService extends EventEmitter {
     }
   }
 
+  private parseNameStatusDiff(diffOutput: string): GitFileDiffSummary[] {
+    const files: GitFileDiffSummary[] = [];
+    const lines = diffOutput.split('\n').filter(line => line.trim() !== '');
+
+    lines.forEach(line => {
+      const parts = line.split('\t');
+      const statusChar = parts[0].charAt(0) as GitFileDiffSummary['status']; // Take the first char for status like M, A, D, R, C
+      
+      if (statusChar === 'R' || statusChar === 'C') { // Renamed or Copied
+        if (parts.length >= 3) {
+          // For R100, parts[0] is "R100". We only care about "R".
+          // parts[1] is fromPath, parts[2] is toPath
+          files.push({
+            status: statusChar,
+            filePath: parts[2],
+            fromPath: parts[1],
+          });
+        }
+      } else if (parts.length >= 2) {
+        // For M, A, D, T, U, ?
+        files.push({
+          status: statusChar,
+          filePath: parts[1],
+        });
+      }
+    });
+    return files;
+  }
+
+  /**
+   * Gets a summary of all changes in the working directory (unstaged changes) compared to HEAD.
+   * Uses `git diff HEAD --name-status`.
+   * @returns A promise that resolves with an array of GitFileDiffSummary objects.
+   */
+  public async getWorkingDirectoryDiffSummary(): Promise<GitFileDiffSummary[]> {
+    this.checkInitialized();
+    try {
+      // Get unstaged changes against HEAD
+      const diffOutput = await this.git.diff(['HEAD', '--name-status']);
+      const summary = this.parseNameStatusDiff(diffOutput);
+      
+      // Additionally, find untracked files as `git diff HEAD` won't show them.
+      const statusResult = await this.git.status();
+      statusResult.not_added.forEach(filePath => {
+        // Avoid adding if already listed (e.g. if a file was deleted and re-added as untracked)
+        if (!summary.some(s => s.filePath === filePath)) {
+          summary.push({ filePath, status: '?' });
+        }
+      });
+      
+      return summary;
+    } catch (error) {
+      console.error('Failed to get working directory diff summary:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Gets a summary of all staged changes compared to HEAD.
+   * Uses `git diff --staged --name-status`.
+   * @returns A promise that resolves with an array of GitFileDiffSummary objects.
+   */
+  public async getStagedDiffSummary(): Promise<GitFileDiffSummary[]> {
+    this.checkInitialized();
+    try {
+      const diffOutput = await this.git.diff(['--staged', '--name-status']);
+      return this.parseNameStatusDiff(diffOutput);
+    } catch (error) {
+      console.error('Failed to get staged diff summary:', error);
+      throw error;
+    }
+  }
+
+
   /**
    * Pushes the current branch to its remote counterpart.
    * @returns A promise that resolves when the push is complete

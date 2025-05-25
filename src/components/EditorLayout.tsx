@@ -3,11 +3,14 @@ import { Editor } from '@monaco-editor/react';
 import { FileExplorer } from './FileExplorer';
 import { TabBar } from './TabBar';
 import Sidebar from './Sidebar';
-import AIChatPanel from './AIChatPanel';
+// import AIChatPanel from './AIChatPanel'; // Removed
 import { TerminalPanel } from './TerminalPanel'; // Import TerminalPanel
 import { ThemeProvider } from '../contexts/ThemeContext';
-import { EditorProvider } from '../contexts/EditorContext';
-import { AIProvider } from '../contexts/AIContext';
+// import { EditorProvider } from '../contexts/EditorContext'; // Will be provided by App.tsx
+// import { AIProvider } from '../contexts/AIContext'; // Will be provided by App.tsx
+import { useEditor } from '../contexts/EditorContext'; // Use the new EditorContext
+import { PluginManagerPanel } from './PluginManagerPanel'; 
+import { CommandPalette } from './CommandPalette'; // Import CommandPalette
 import '../styles/EditorLayout.css';
 import { FaRegFile } from 'react-icons/fa';
 
@@ -32,19 +35,30 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   projectPath = '',
   onEditorChange,
   onOpenFile,
+  onOpenFile,
   // onGenerateAndOpenTests prop will be implicitly handled by adding the function
 }) => {
+  const { 
+    activeTabId, 
+    setActiveTab: contextSetActiveTab,
+    activeTabContent, // Destructure activeTabContent
+    activeTabPath,    // Destructure activeTabPath
+    activeTabLanguage, // Destructure activeTabLanguage
+    updateActiveTabContent // Destructure updateActiveTabContent
+  } = useEditor(); 
+
   const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
-  // State for currently active tab
-  const [activeTab, setActiveTab] = useState<string | null>(null);
-  // State for all open tabs
+  // Removed: const [activeTab, setActiveTab] = useState<string | null>(null);
+  // State for all open tabs - will be replaced with context.tabs later
   const [tabs, setTabs] = useState<Array<{ id: string; title: string; path: string; content: string; dirty: boolean }>>([]);
   // State for selected sidebar tab
   const [sidebarTab, setSidebarTab] = useState<string>('explorer');
   const [isTerminalPanelOpen, setIsTerminalPanelOpen] = useState(false); // State für Terminal-Panel
+  const [isPaletteOpen, setIsPaletteOpen] = useState(false); // State for CommandPalette
+  const { uiService } = useServices(); // Get UIService from context
 
-  // Get the content of the currently active tab
-  const activeTabContent = tabs.find(t => t.id === activeTab)?.content || '';
+  // activeTabContent is now directly from useEditor()
+  // const activeTabContent = editorContext.activeTabContent; // This was from previous step, now directly use destructured one
 
   const handleGenerateAndOpenTests = async (originalFilePath: string, testContent: string, framework: string) => {
     const pathParts = originalFilePath.split(/[\\/]/);
@@ -103,9 +117,9 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
         dirty: false
       };
       setTabs([...tabs, tab]);
-      setActiveTab(tab.id);
+      contextSetActiveTab(tab.id); // Use context action
     } else {
-      setActiveTab(tab.id);
+      contextSetActiveTab(tab.id); // Use context action
     }
   };
 
@@ -117,11 +131,12 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
 
   // Handle editor content change
   const handleEditorChange = (val: string | undefined) => {
-    if (!activeTab) return;
-    setTabs(tabs.map(tab =>
-      tab.id === activeTab ? { ...tab, content: val ?? '', dirty: true } : tab
-    ));
-    if (onEditorChange) onEditorChange(val ?? '');
+    if (activeTabId && val !== undefined) { // Use activeTabId from context
+      updateActiveTabContent(val); // Call context action
+    }
+    // The original onEditorChange prop call can be kept if App.tsx still needs to react directly,
+    // but ideally, App.tsx should also react to changes via context or service events if needed.
+    if (onEditorChange) onEditorChange(val ?? ''); // Prop from App.tsx (still passed for now)
   };
 
   // Save the currently active tab
@@ -151,9 +166,16 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   // Handle closing a tab
   const handleTabClose = (tabId: string) => {
     setTabs(tabs.filter(tab => tab.id !== tabId));
-    if (activeTab === tabId) {
-      setActiveTab(tabs.length > 1 ? tabs[tabs.length - 2].id : null);
+    if (activeTabId === tabId) { // Use context state
+      // The actual logic of deciding the next active tab is now in EditorService,
+      // triggered by contextSetActiveTab if it calls editorService.closeTab.
+      // For now, this component shouldn't directly set the active tab after close.
+      // The context and service events will handle updating activeTabId.
+      // contextSetActiveTab(tabs.length > 1 ? tabs[tabs.length - 2].id : null); // Old direct logic
     }
+    // The actual call to close the tab via context will be added in a later step
+    // For now, this function will be modified to just call context's closeTab.
+    // For this step, we are only removing local activeTab state and its direct setter.
   };
 
   // Helper function to check if a file is a media file
@@ -170,11 +192,34 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
     setIsTerminalPanelOpen(sidebarTab === 'terminal');
   }, [sidebarTab]);
 
+  // Placeholder for UIService integration for opening command palette
+  // In a real setup, UIService would emit an event or call a registered action.
+  // For now, we can use a keyboard shortcut directly in EditorLayout for demo.
+  useEffect(() => {
+    // const handleOpenPaletteShortcut = (e: KeyboardEvent) => {
+    //   if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'p') {
+    //     e.preventDefault();
+    //     setIsPaletteOpen(prev => !prev);
+    //   }
+    // };
+    // document.addEventListener('keydown', handleOpenPaletteShortcut);
+    // return () => document.removeEventListener('keydown', handleOpenPaletteShortcut);
+    
+    // Listen to UIService event for toggling command palette
+    const togglePalette = () => setIsPaletteOpen(prev => !prev);
+    uiService?.on('toggleCommandPalette', togglePalette);
+    return () => {
+      uiService?.off('toggleCommandPalette', togglePalette);
+      // document.removeEventListener('keydown', handleOpenPaletteShortcut); // If still using direct shortcut
+    };
+  }, [uiService]); // Add uiService to dependency array
+
   return (
     <ThemeProvider>
       <EditorProvider>
         <AIProvider>
           <div className="editor-layout-root" style={{ display: 'flex', height: '100vh', width: '100vw' }}>
+            <CommandPalette isOpen={isPaletteOpen} onClose={() => setIsPaletteOpen(false)} />
             {/* Sidebar is always visible */}
             <Sidebar activeTab={sidebarTab} onTabChange={setSidebarTab} />
             {/* Main content area: Explorer und Editor nebeneinander */}
@@ -193,13 +238,19 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                 display: 'flex',
                 flexDirection: 'column'
               }}>
-                <FileExplorer
-                  fileStructure={fileStructure}
-                  onOpenFile={openFileInTab}
-                  activeFile={tabs.find(t => t.id === activeTab)?.path || ''}
-                  projectPath={projectPath}
-                  onGenerateAndOpenTests={handleGenerateAndOpenTests} // Pass the new handler
-                />
+                {sidebarTab === 'explorer' && (
+                  <FileExplorer
+                    fileStructure={fileStructure}
+                    onOpenFile={openFileInTab}
+                    activeFile={tabs.find(t => t.id === activeTabId)?.path || ''} // Use context state
+                    projectPath={projectPath}
+                    onGenerateAndOpenTests={handleGenerateAndOpenTests} // Pass the new handler
+                  />
+                )}
+                {sidebarTab === 'plugins' && (
+                  <PluginManagerPanel />
+                )}
+                {/* Add other panels for 'git', 'ai' etc. if they have dedicated components */}
               </div>
               {/* Editor content area: TabBar und Editor vertikal gestapelt */}
               <div style={{
@@ -224,22 +275,23 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                   boxSizing: 'border-box'
                 }}>
                   <TabBar
-                    tabs={tabs}
-                    activeTab={activeTab}
-                    onTabClose={handleTabClose}
-                    onTabSelect={setActiveTab}
+                    tabs={tabs} // This will be replaced by context.tabs later
+                    activeTab={activeTabId} // Use context state
+                    onTabClose={handleTabClose} // This will call context.closeTab later
+                    onTabSelect={contextSetActiveTab} // Use context action
                   />
                 </div>
                 {/* Editor nimmt restlichen Platz */}
                 <div style={{ flex: 1, minHeight: 0, minWidth: 0, position: 'relative', boxSizing: 'border-box' }}>
-                  {tabs.length > 0 && activeTab ? (
+                  {tabs.length > 0 && activeTabId ? ( // Use context state
                     <Editor
                       height="100%"
-                      defaultLanguage={initialLanguage}
-                      defaultValue={activeTabContent}
-                      value={activeTabContent}
-                      onChange={handleEditorChange}
-                      theme="vs-dark"
+                      // defaultLanguage and defaultValue are less relevant when path/language are explicit
+                      language={activeTabLanguage || 'plaintext'} // Use language from context
+                      path={activeTabPath} // Use path from context for model identity
+                      value={activeTabContent} // Use content from context
+                      onChange={handleEditorChange} // This will call editorService.handleModelContentChange
+                      theme="vs-dark" // Or from context/config
                       options={{
                         fontSize: 16,
                         minimap: { enabled: false },
@@ -250,6 +302,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                         glyphMargin: true,
                         renderLineHighlight: 'all',
                         scrollbar: { vertical: 'visible', horizontal: 'visible' },
+                        readOnly: !activeTabId, // Ensure editor is read-only if no tab is active
                       }}
                     />
                   ) : (
@@ -279,7 +332,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
             </div>
             {isAIPanelOpen && (
               <div style={{ width: 340, minWidth: 260, maxWidth: 600, height: '100%', position: 'relative', display: 'flex' }}>
-                <AIChatPanel />
+                {/* <AIChatPanel /> */} {/* Removed */}
               </div>
             )}
           </div>

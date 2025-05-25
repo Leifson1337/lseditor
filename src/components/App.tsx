@@ -6,6 +6,10 @@ import { TerminalManager } from '../services/TerminalManager';
 import { TerminalService } from '../services/TerminalService';
 import { AIService } from '../services/AIService';
 import { UIService } from '../services/UIService';
+import { PluginService } from '../services/PluginService';
+import { CommandService } from '../services/CommandService';
+import { ViewService } from '../services/ViewService';
+import { ProviderService } from '../services/ProviderService'; // Import ProviderService
 import { TerminalServer } from '../server/terminalServer';
 import '../styles/App.css';
 import { Terminal } from './Terminal';
@@ -16,6 +20,7 @@ import { FileNode } from '../types/FileNode';
 import { EditorLayout } from './EditorLayout';
 import SettingsIcon from './SettingsIcon';
 import { ThemeProvider } from '../contexts/ThemeContext';
+import { ServiceProvider, ServiceContextType } from '../contexts/ServiceContext'; // Import ServiceProvider
 import Titlebar from './Titlebar';
 
 // Extend StoreSchema to include all required properties for the editor and terminal
@@ -89,25 +94,33 @@ const App: React.FC = () => {
   const [terminalManager, setTerminalManager] = useState<TerminalManager | null>(null);
   // State to signal app initialization
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
-  // State for path validity
   const [isValidPath, setIsValidPath] = useState<boolean>(false);
-  // State to prevent multiple dialogs
   const [isBrowseDialogOpen, setIsBrowseDialogOpen] = useState<boolean>(false);
-  // State for recent projects list
-  const [recentProjects, setRecentProjects] = useState<string[]>(() => {
-    return store.get('recentProjects') || [];
-  });
-  // State for showing settings
+  const [recentProjects, setRecentProjects] = useState<string[]>(() => store.get('recentProjects') || []);
   const [showSettings, setShowSettings] = useState(false);
+
+  // States for services
+  const [projectService, setProjectService] = useState<ProjectService | null>(null);
+  const [aiService, setAiService] = useState<AIService | null>(null);
+  // terminalManager is already in state
+  const [terminalService, setTerminalService] = useState<TerminalService | null>(null);
+  const [uiService, setUiService] = useState<UIService | null>(null);
+  const [pluginService, setPluginService] = useState<PluginService | null>(null); 
+  const [commandService, setCommandService] = useState<CommandService | null>(null); 
+  const [viewService, setViewService] = useState<ViewService | null>(null); 
+  const [providerService, setProviderService] = useState<ProviderService | null>(null); // Added ProviderService state
+  const [appStore, setAppStore] = useState<typeof store | null>(null); 
 
   useEffect(() => {
     console.log('App component mounted');
+    setAppStore(store); // Set the global store instance to state
     // Load initial settings from store
     const theme = store.get('theme') || 'dark';
     const fontSize = store.get('fontSize') || 14;
     const fontFamily = store.get('fontFamily') || 'Consolas, monospace';
     const savedProjectPath = store.get('lastProjectPath');
     const editor = store.get('editor') || { wordWrap: true, minimap: true, lineNumbers: true };
+    const savedOpenAIApiKey = store.get('openai_api_key');
 
     // Apply theme to root element
     document.documentElement.setAttribute('data-theme', theme);
@@ -162,47 +175,114 @@ const App: React.FC = () => {
 
     try {
       // Initialize core services for the project
-      const projectService = new ProjectService(path);
-      const uiService = new UIService();
-      const aiService = AIService.getInstance({
+      const newProjectService = new ProjectService(path);
+      const newUiService = new UIService();
+      
+      // Initial AIConfig, can still use process.env as a fallback if no stored key
+      const initialAIConfig: AIConfig = {
         useLocalModel: false,
-        model: 'gpt-3.5-turbo',
+        model: 'gpt-3.5-turbo', // Default model
         temperature: 0.7,
         maxTokens: 2048,
         contextWindow: 4096,
         stopSequences: ['\n\n', '```'],
         topP: 1,
         openAIConfig: {
-          apiKey: process.env.OPENAI_API_KEY || '',
+          apiKey: savedOpenAIApiKey || process.env.OPENAI_API_KEY || '', // Prioritize stored key
           model: 'gpt-3.5-turbo',
           temperature: 0.7,
           maxTokens: 2048
         }
+        // Ensure other AIConfig properties are included if they exist in your type
+      };
+      const newAiService = AIService.getInstance(initialAIConfig);
+      
+      // If a key was loaded from store, explicitly set it in AIService to ensure it's preferred
+      // and potentially re-initializes the OpenAI client if AIService logic requires it.
+      // AIService.setOpenAIApiKey will also update its internal config.
+      if (savedOpenAIApiKey) {
+        newAiService.setOpenAIApiKey(savedOpenAIApiKey);
+      }
+      
+      setProjectService(newProjectService);
+      setUiService(newUiService);
+      setAiService(newAiService);
+      
+      // Initialize PluginService
+      // TODO: Define actual pluginDirectory and marketplaceUrl, possibly from config/store
+      const pluginDir = 'path/to/plugins'; // Placeholder
+      const marketplaceUrl = 'https://example-marketplace.com/api'; // Placeholder
+      const newPluginService = new PluginService(pluginDir, marketplaceUrl);
+      setPluginService(newPluginService);
+
+      // Initialize CommandService
+      const newCommandService = new CommandService(newPluginService);
+      setCommandService(newCommandService);
+
+      // Initialize ViewService
+      const newViewService = new ViewService(newPluginService); 
+      setViewService(newViewService);
+
+      // Initialize ProviderService
+      const newProviderService = new ProviderService(newPluginService); // Pass pluginService
+      setProviderService(newProviderService);
+
+      // Setup listener for PluginAPI.showNotification
+      // This assumes newPluginService and newUiService are immediately available.
+      // If their setup is async or complex, this might need adjustment.
+      newPluginService.on('notification', ({ message, type }: { message: string, type?: 'info' | 'warning' | 'error' }) => {
+        if (newUiService) { // Check if uiService is initialized
+          newUiService.showNotification({ message, type: type || 'info' });
+        }
       });
+      
+      // Load plugins (this might also trigger command registrations)
+      newPluginService.loadPlugins().catch(err => console.error("Error loading plugins:", err));
+
+      // Setup listeners for CommandService feedback
+      if (newCommandService && newUiService) {
+        newCommandService.on('commandExecuted', ({ id }) => {
+          // newUiService.showNotification({ message: `Command '${id}' executed.`, type: 'success', timeout: 2000 });
+          // console.log(`Command '${id}' executed successfully.`); // For now, log, as showNotification might be too verbose for every command
+        });
+        newCommandService.on('commandExecutionError', ({ id, error }) => {
+          console.error(`Error executing command ${id}:`, error);
+          newUiService.showNotification({ message: `Error executing command '${id}': ${error instanceof Error ? error.message : String(error)}`, type: 'error' });
+        });
+        newCommandService.on('commandNotFound', (id) => {
+          console.warn(`Command ${id} not found.`);
+          newUiService.showNotification({ message: `Command '${id}' not found.`, type: 'warning', timeout: 3000 });
+        });
+      }
+
 
       // Initialize terminal server and services
-      const terminalServer = new TerminalServer(terminalPort);
-      const terminalService = TerminalService.getInstance(
-        null,
-        aiService,
-        projectService,
-        uiService,
-        terminalServer,
-        store
+      // TerminalServer is managed internally by TerminalManager or TerminalService now
+      const newTerminalService = TerminalService.getInstance(
+        null, // terminal element, will be set by TerminalPanel or Terminal component
+        newAiService,
+        newProjectService,
+        newUiService,
+        null, // terminalServer instance - to be managed by TerminalManager/Service
+        store // global store
       );
+      setTerminalService(newTerminalService);
+
       // Initialize terminal manager
-      const manager = new TerminalManager(
-        terminalPort,
-        terminalService,
-        aiService,
-        projectService,
-        uiService
+      const newTerminalManager = new TerminalManager(
+        terminalPort, // This port needs to be managed better if dynamic
+        newTerminalService,
+        newAiService,
+        newProjectService,
+        newUiService
       );
-      setTerminalManager(manager);
+      newTerminalService.setTerminalManager(newTerminalManager); // Link manager to service
+      setTerminalManager(newTerminalManager);
+
 
       // Load file structure for the project
       try {
-        const structure = await projectService.getFileStructure(path);
+        const structure = await newProjectService.getFileStructure(path);
         console.log('File structure loaded:', structure);
         setFileStructure(structure);
       } catch (error) {
@@ -382,14 +462,27 @@ const App: React.FC = () => {
 
   console.log('App rendering, showProjectDialog:', showProjectDialog);
 
+  const services: ServiceContextType = {
+    aiService,
+    projectService,
+    terminalManager,
+    terminalService,
+    uiService,
+    store: appStore,
+    commandService, 
+    viewService, 
+    providerService, // Added providerService
+  };
+
   return (
     <ThemeProvider>
-      <div className="app">
-        {/* SettingsIcon is now placed in the MenuBar, no separate popup */}
-        {showProjectDialog ? (
-          <>
-            <Titlebar minimal />
-            <div className="project-dialog">
+      <ServiceProvider value={services}> {/* Wrap with ServiceProvider */}
+        <div className="app">
+          {/* SettingsIcon is now placed in the MenuBar, no separate popup */}
+          {showProjectDialog ? (
+            <>
+              <Titlebar minimal />
+              <div className="project-dialog">
               <h2>Open Project</h2>
               <div className="project-input">
                 <input 
@@ -462,7 +555,8 @@ const App: React.FC = () => {
             />
           </Layout>
         )}
-      </div>
+        </div>
+      </ServiceProvider>
     </ThemeProvider>
   );
 };

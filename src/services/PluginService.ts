@@ -91,20 +91,25 @@ interface PluginAPI {
    * Registers a command.
    * @param command Command name
    * @param callback Command callback function
+   * @param label Optional user-facing label for the command
+   * @param icon Optional icon for the command
    */
-  registerCommand: (command: string, callback: (...args: any[]) => void) => void;
+  registerCommand: (command: string, callback: (...args: any[]) => void, label?: string, icon?: string) => void;
   /**
    * Registers a view.
    * @param viewId View ID
    * @param component View component
+   * @param title Optional user-facing title for the view
+   * @param icon Optional icon for the view
    */
-  registerView: (viewId: string, component: React.ComponentType) => void;
+  registerView: (viewId: string, component: React.ComponentType<any>, title?: string, icon?: string) => void;
   /**
    * Registers a provider.
    * @param providerId Provider ID
    * @param provider Provider instance
+   * @param type Optional type string for categorizing the provider
    */
-  registerProvider: (providerId: string, provider: any) => void;
+  registerProvider: (providerId: string, provider: any, type?: string) => void;
   /**
    * Shows a notification.
    * @param message Notification message
@@ -207,9 +212,9 @@ export class PluginService extends EventEmitter {
     try {
       const pluginModule = require(path.join(this.pluginDirectory, plugin.id, plugin.main));
       const api: PluginAPI = {
-        registerCommand: (command, callback) => this.registerCommand(plugin.id, command, callback),
-        registerView: (viewId, component) => this.registerView(plugin.id, viewId, component),
-        registerProvider: (providerId, provider) => this.registerProvider(plugin.id, providerId, provider),
+        registerCommand: (command, callback, label, icon) => this.registerCommand(plugin.id, command, callback, label, icon),
+        registerView: (viewId, component, title, icon) => this.registerView(plugin.id, viewId, component, title, icon),
+        registerProvider: (providerId, provider, type) => this.registerProvider(plugin.id, providerId, provider, type),
         showNotification: (message, type) => this.showNotification(message, type),
         getSettings: () => this.getPluginSettings(plugin.id),
         updateSettings: (settings) => this.updatePluginSettings(plugin.id, settings)
@@ -378,9 +383,11 @@ export class PluginService extends EventEmitter {
    * @param pluginId Plugin ID
    * @param command Command name
    * @param callback Command callback function
+   * @param label Optional user-facing label
+   * @param icon Optional icon
    */
-  private registerCommand(pluginId: string, command: string, callback: (...args: any[]) => void): void {
-    this.emit('commandRegistered', { pluginId, command, callback });
+  private registerCommand(pluginId: string, command: string, callback: (...args: any[]) => void, label?: string, icon?: string): void {
+    this.emit('commandRegistered', { pluginId, command, callback, label, icon });
   }
 
   /**
@@ -388,9 +395,11 @@ export class PluginService extends EventEmitter {
    * @param pluginId Plugin ID
    * @param viewId View ID
    * @param component View component
+   * @param title Optional title
+   * @param icon Optional icon
    */
-  private registerView(pluginId: string, viewId: string, component: React.ComponentType): void {
-    this.emit('viewRegistered', { pluginId, viewId, component });
+  private registerView(pluginId: string, viewId: string, component: React.ComponentType<any>, title?: string, icon?: string): void {
+    this.emit('viewRegistered', { pluginId, viewId, component, title, icon });
   }
 
   /**
@@ -398,9 +407,10 @@ export class PluginService extends EventEmitter {
    * @param pluginId Plugin ID
    * @param providerId Provider ID
    * @param provider Provider instance
+   * @param type Optional type string
    */
-  private registerProvider(pluginId: string, providerId: string, provider: any): void {
-    this.emit('providerRegistered', { pluginId, providerId, provider });
+  private registerProvider(pluginId: string, providerId: string, provider: any, type?: string): void {
+    this.emit('providerRegistered', { pluginId, providerId, instance: provider, type });
   }
 
   /**
