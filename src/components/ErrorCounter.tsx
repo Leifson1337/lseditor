@@ -4,12 +4,22 @@ import './ErrorCounter.css';
 // Props for the ErrorCounter component
 interface ErrorCounterProps {
   errorCount: number; // Number of errors to display
+  hasErrors: boolean; // Whether there are any real errors
+  errorType?: 'error' | 'warning'; // Type of error to display
 }
 
 // ErrorCounter displays an error icon and the current error count
-const ErrorCounter: React.FC<ErrorCounterProps> = ({ errorCount }) => {
+const ErrorCounter: React.FC<ErrorCounterProps> = ({ 
+  errorCount, 
+  hasErrors,
+  errorType = 'error'
+}) => {
+  const iconColor = hasErrors ? 
+    (errorType === 'error' ? 'var(--error-color)' : 'var(--warning-color)') : 
+    'currentColor';
+    
   return (
-    <div className="error-counter">
+    <div className={`error-counter ${hasErrors ? 'has-errors' : ''} ${errorType}`}>
       {/* Error icon (SVG) */}
       <svg
         xmlns="http://www.w3.org/2000/svg"
@@ -17,7 +27,7 @@ const ErrorCounter: React.FC<ErrorCounterProps> = ({ errorCount }) => {
         height="16"
         viewBox="0 0 24 24"
         fill="none"
-        stroke="currentColor"
+        stroke={iconColor}
         strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { FaPuzzlePiece } from 'react-icons/fa';
 import { FolderIcon, FileIcon, ChevronRightIcon, ChevronDownIcon } from './Icons';
 import '../styles/FileExplorer.css';
 
@@ -30,6 +31,12 @@ interface ContextMenuProps {
   isHtml?: boolean;
 }
 
+// Props for the extensions explorer
+interface ExtensionsExplorerProps {
+  extensions: any[];
+  onInstallExtension: () => void;
+}
+
 // ContextMenu renders the right-click context menu for files
 const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, onOpen, onRename, onDelete, onLiveUpdate, onClose, isHtml }) => (
   <ul className="file-context-menu" style={{ top: y, left: x, position: 'fixed', zIndex: 1000 }}>
@@ -40,6 +47,38 @@ const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, onOpen, onRename, onDel
     <li onClick={onClose}>Cancel</li>
   </ul>
 );
+
+// ExtensionsExplorer displays extensions
+const ExtensionsExplorer: React.FC<ExtensionsExplorerProps> = ({ extensions, onInstallExtension }) => {
+  if (extensions.length === 0) {
+    return (
+      <div className="empty-explorer">
+        <p>No extensions installed</p>
+        <button 
+          className="install-extension-btn"
+          onClick={onInstallExtension}
+        >
+          Install Extension
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="file-explorer-content">
+      {extensions.map(ext => (
+        <div key={ext.id} className="file-explorer-item">
+          <div className="file-explorer-icon">
+            {ext.icon || <FaPuzzlePiece />}
+          </div>
+          <div className="file-explorer-name">
+            {ext.name}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
 
 export const FileExplorer: React.FC<FileExplorerProps> = ({
   fileStructure,
@@ -213,62 +252,131 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     );
   }
 
+  // Handle single click on file or folder
+  const handleNodeClick = (e: React.MouseEvent, node: FileNode) => {
+    e.stopPropagation();
+    if (node.type === 'directory') {
+      toggleFolder(node.path);
+    } else {
+      onOpenFile(node.path);
+    }
+  };
+
+  // Handle Enter key on file or folder
+  const handleNodeKeyDown = (e: React.KeyboardEvent, node: FileNode) => {
+    if (e.key === 'Enter') {
+      e.stopPropagation();
+      if (node.type === 'directory') {
+        toggleFolder(node.path);
+      } else {
+        onOpenFile(node.path);
+      }
+    } else if (e.key === 'ArrowRight' && node.type === 'directory' && !expandedFolders.has(node.path)) {
+      e.stopPropagation();
+      toggleFolder(node.path);
+    } else if (e.key === 'ArrowLeft' && node.type === 'directory' && expandedFolders.has(node.path)) {
+      e.stopPropagation();
+      toggleFolder(node.path);
+    }
+  };
+
   // Render a file or folder node recursively
   const renderFileNode = (node: FileNode, level: number = 0) => {
     const isExpanded = expandedFolders.has(node.path);
     const isActive = activeFile === node.path;
     const isHtml = node.type === 'file' && node.name.toLowerCase().endsWith('.html');
-    if (node.type === 'directory') {
-      return (
-        <div key={node.path}>
-          <div
-            className={`file-node folder ${isExpanded ? 'expanded' : ''}`}
-            data-level={level}
-            onClick={() => toggleFolder(node.path)}
-          >
-            {isExpanded ? <ChevronDownIcon /> : <ChevronRightIcon />}
-            <FolderIcon />
+    
+    return (
+      <div key={node.path} className={`file-node-container ${node.type}`}>
+        <div
+          className={`file-node ${node.type} ${isActive ? 'active' : ''} ${isExpanded ? 'expanded' : ''}`}
+          data-level={level}
+          tabIndex={0}
+          onClick={(e) => handleNodeClick(e, node)}
+          onKeyDown={(e) => handleNodeKeyDown(e, node)}
+          onDoubleClick={() => node.type === 'file' && handleFileDoubleClick(node.path)}
+          onContextMenu={e => handleContextMenu(e, node.path)}
+          role="treeitem"
+          aria-expanded={node.type === 'directory' ? isExpanded : undefined}
+          aria-selected={isActive}
+        >
+          {node.type === 'directory' && (
+            <span className="folder-icon">
+              {isExpanded ? <ChevronDownIcon /> : <ChevronRightIcon />}
+            </span>
+          )}
+          <span className="node-icon">
+            {node.type === 'directory' ? <FolderIcon /> : getFileIconByExtension(node.name)}
+          </span>
+          {renamingFile === node.path ? (
+            <input
+              type="text"
+              value={renameValue}
+              autoFocus
+              onChange={e => setRenameValue(e.target.value)}
+              onBlur={handleRenameConfirm}
+              onKeyDown={e => { 
+                if (e.key === 'Enter') handleRenameConfirm(); 
+                if (e.key === 'Escape') setRenamingFile(null); 
+              }}
+              onClick={e => e.stopPropagation()}
+              style={{ marginLeft: 8, fontSize: 14 }}
+            />
+          ) : (
             <span className="file-name">{node.name}</span>
-          </div>
-          {isExpanded && node.children && (
-            <div className="file-children">
-              {sortNodes(node.children).map((child) => renderFileNode(child, level + 1))}
-            </div>
           )}
         </div>
-      );
-    }
-    return (
-      <div
-        key={node.path}
-        className={`file-node file ${isActive ? 'active' : ''}`}
-        data-level={level}
-        tabIndex={0}
-        onDoubleClick={() => handleFileDoubleClick(node.path)}
-        onContextMenu={e => handleContextMenu(e, node.path)}
-      >
-        {getFileIconByExtension(node.name)}
-        {renamingFile === node.path ? (
-          <input
-            type="text"
-            value={renameValue}
-            autoFocus
-            onChange={e => setRenameValue(e.target.value)}
-            onBlur={handleRenameConfirm}
-            onKeyDown={e => { if (e.key === 'Enter') handleRenameConfirm(); if (e.key === 'Escape') setRenamingFile(null); }}
-            style={{ marginLeft: 8, fontSize: 14 }}
-          />
-        ) : (
-          <span className="file-name">{node.name}</span>
+        {node.type === 'directory' && isExpanded && node.children && (
+          <div className="file-children" role="group">
+            {sortNodes(node.children).map((child) => renderFileNode(child, level + 1))}
+          </div>
         )}
       </div>
     );
   };
 
+  // Add this new state for extensions
+  const [extensions, setExtensions] = useState<any[]>([]);
+  
+  // Add this effect to load extensions
+  useEffect(() => {
+    // This would normally load extensions from a service
+    // For now we'll use an empty array to show the "no extensions" message
+    setExtensions([]);
+  }, []);
+
+  // Add this handler for installing extensions
+  const handleInstallExtension = () => {
+    // This would normally open an extension marketplace
+    alert('Extension installation would open here');
+  };
+
   // Main render: file explorer root, context menu
   return (
-    <div className="file-explorer-root" style={{height:'100%',maxHeight:'100%',overflowY:'auto'}} key={refreshKey}>
-      {sortNodes(fileStructure).map(node => renderFileNode(node))}
+    <div className="file-explorer" role="tree" aria-label="File Explorer">
+      {fileStructure.length > 0 ? (
+        <div className="file-explorer-content">
+          {sortNodes(fileStructure).map((node, index) => (
+            <div key={node.path} role="none">
+              {renderFileNode(node, 0)}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="empty-explorer">
+          <p>No files in project</p>
+        </div>
+      )}
+      
+      {/* Extensions section */}
+      <div className="extensions-section">
+        <h4 className="extensions-header">Extensions</h4>
+        <ExtensionsExplorer 
+          extensions={extensions} 
+          onInstallExtension={handleInstallExtension} 
+        />
+      </div>
+      
       {contextMenu && (
         <ContextMenu
           x={contextMenu.x}
@@ -276,9 +384,10 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
           onOpen={handleOpenFromMenu}
           onRename={handleRenameFromMenu}
           onDelete={handleDeleteFromMenu}
-          onLiveUpdate={contextMenu.file.toLowerCase().endsWith('.html') ? () => handleLiveUpdate(contextMenu.file) : undefined}
-          isHtml={contextMenu.file.toLowerCase().endsWith('.html')}
+          onLiveUpdate={contextMenu.file.toLowerCase().endsWith('.html') ? 
+            () => handleLiveUpdate(contextMenu.file) : undefined}
           onClose={() => setContextMenu(null)}
+          isHtml={contextMenu.file.toLowerCase().endsWith('.html')}
         />
       )}
     </div>

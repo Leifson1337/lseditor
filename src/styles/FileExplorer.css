@@ -61,11 +61,29 @@
   overflow-y: auto;
   min-height: 0;
   max-height: none;
-  padding: 8px 0;
+  padding: 8px 4px;
   display: block;
-  /* Ermögliche mehr Scrollbereich oben/unten */
-  margin-bottom: 32px;
-  margin-top: 16px;
+  scrollbar-width: thin;
+  scrollbar-color: #4a4a4a transparent;
+}
+
+/* Custom scrollbar for WebKit browsers */
+.file-explorer-content::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.file-explorer-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.file-explorer-content::-webkit-scrollbar-thumb {
+  background-color: #4a4a4a;
+  border-radius: 3px;
+}
+
+.file-explorer-content::-webkit-scrollbar-thumb:hover {
+  background-color: #5a5a5a;
 }
 
 .file-explorer-item {
@@ -149,36 +167,37 @@
 
 /* Styling für die ausklappbaren Elemente */
 .file-children {
-  margin-left: 16px;
+  margin-left: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
   overflow-y: visible;
+  border-left: 1px solid rgba(255, 255, 255, 0.05);
+  margin-left: 8px;
+  padding-left: 8px;
 }
 
-/* Verbesserte Styles für Ordner und Dateien */
+/* Improved styles for folders and files */
 .file-node {
   display: flex;
   align-items: center;
-  padding: 6px 10px;
+  padding: 4px 8px 4px 8px;
+  margin: 2px 4px;
   cursor: pointer;
   -webkit-user-select: none;
   user-select: none;
-  transition: background-color 0.2s;
+  transition: all 0.2s ease;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  border-radius: 3px;
+  outline: none;
 }
 
-.file-node.file,
-.file-explorer-item {
-  min-height: 32px;
-  line-height: 32px;
-  padding: 0 10px;
-  box-sizing: border-box;
-  display: flex;
-  align-items: center;
+.file-node:focus {
+  outline: 1px solid var(--accent-blue, #4a90e2);
+  outline-offset: -1px;
 }
 
 .file-node:hover {
@@ -187,6 +206,7 @@
 
 .file-node.active {
   background-color: rgba(0, 120, 215, 0.4);
+  color: #fff;
 }
 
 .file-node.folder {
@@ -198,15 +218,47 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1;
+}
+
+.folder-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-right: 4px;
+}
+
+.node-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-right: 4px;
+  color: inherit;
+}
+
+.file-node.file .node-icon {
+  color: #6d8a9d;
+}
+
+.file-node.folder .node-icon {
+  color: #e2c08d;
+}
+
+.file-node[aria-selected="true"] .node-icon {
+  color: inherit;
 }
 
 /* Indentation levels */
-.file-node[data-level="0"] { padding-left: 10px; }
-.file-node[data-level="1"] { padding-left: 30px; }
-.file-node[data-level="2"] { padding-left: 50px; }
-.file-node[data-level="3"] { padding-left: 70px; }
-.file-node[data-level="4"] { padding-left: 90px; }
-.file-node[data-level="5"] { padding-left: 110px; }
+.file-node[data-level="0"] { padding-left: 12px; }
+.file-node[data-level="1"] { padding-left: 32px; }
+.file-node[data-level="2"] { padding-left: 52px; }
+.file-node[data-level="3"] { padding-left: 72px; }
+.file-node[data-level="4"] { padding-left: 92px; }
+.file-node[data-level="5"] { padding-left: 112px; }
 
 /* Kontextmenü für Rechtsklick */
 .file-context-menu {

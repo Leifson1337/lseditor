@@ -1,5 +1,6 @@
 import React from 'react';
 import '../styles/StatusBar.css';
+import ErrorCounter from './ErrorCounter';
 
 // Props for the StatusBar component
 interface StatusBarProps {
@@ -9,6 +10,7 @@ interface StatusBarProps {
   errorCount?: number; // Number of errors in the current file/project
   problemCount?: number; // Number of problems/warnings
   portForwardCount?: number; // Number of active port forwards
+  hasErrors?: boolean; // Whether there are any real errors
 }
 
 // StatusBar displays file info, error/warning counts, port status, and terminal connection status
@@ -18,7 +20,8 @@ const StatusBar: React.FC<StatusBarProps> = ({
   isTerminalConnected,
   errorCount = 0,
   problemCount = 0,
-  portForwardCount = 0
+  portForwardCount = 0,
+  hasErrors = false
 }) => {
   // Determine programming language from file extension
   let language = '';
@@ -58,10 +61,10 @@ const StatusBar: React.FC<StatusBarProps> = ({
       <div className="status-bar-left">
         {/* Errors, Warnings und Port Forwards GANZ LINKS */}
         <div className="status-item error-count">
-          <span className={`status-value ${errorCount > 0 ? 'error' : ''}`}>Errors: {errorCount}</span>
+          <ErrorCounter errorCount={errorCount} hasErrors={hasErrors} errorType="error" />
         </div>
         <div className="status-item warning-count">
-          <span className={`status-value ${problemCount > 0 ? 'warning' : ''}`}>Warnings: {problemCount}</span>
+          <ErrorCounter errorCount={problemCount} hasErrors={problemCount > 0} errorType="warning" />
         </div>
         <div className="status-item port-count">
           <span className={`status-value ${portForwardCount > 0 ? 'info' : ''}`}>Port Forwards: {portForwardCount}</span>

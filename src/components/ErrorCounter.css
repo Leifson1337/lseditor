@@ -4,15 +4,26 @@
   gap: 4px;
   padding: 4px 8px;
   background-color: var(--error-background);
-  color: var(--error-color);
+  color: var(--text-secondary);
   border-radius: 4px;
   font-size: 13px;
   position: fixed;
   bottom: 8px;
   left: 8px;
   z-index: 1000;
+  transition: all 0.2s ease;
+}
+
+.error-counter.has-errors.error {
+  background-color: var(--error-background);
+  color: var(--error-color);
+}
+
+.error-counter.has-errors.warning {
+  background-color: var(--warning-background);
+  color: var(--warning-color);
 }
 
 .error-count {
   font-weight: 600;
-} 
+}

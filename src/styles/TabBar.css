@@ -1,59 +1,145 @@
 .tab-bar {
   display: flex;
   align-items: stretch;
-  background: #23272e;
-  border-bottom: 1px solid #333;
+  background: #1e1e1e;
   height: 36px;
   overflow-x: auto;
+  overflow-y: hidden;
   white-space: nowrap;
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+  -webkit-overflow-scrolling: touch;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  border-bottom: 1px solid #333;
+}
+
+.tab-bar::-webkit-scrollbar {
+  display: none;
 }
 
 .tab {
   display: flex;
   align-items: center;
-  background: none;
-  border: none;
-  color: #ddd;
+  background: #2d2d2d;
+  color: #ccc;
   padding: 0 16px;
   height: 36px;
   cursor: pointer;
-  font-size: 14px;
-  border-right: 1px solid #333;
+  font-size: 13px;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  border-right: 1px solid #252526;
   position: relative;
-  transition: background 0.15s;
+  transition: all 0.15s ease;
   box-sizing: border-box;
+  user-select: none;
+  -webkit-user-drag: element;
+  -webkit-app-region: no-drag;
+}
+
+.tab:hover {
+  background: #2a2d2e;
+  color: #fff;
 }
 
 .tab.active {
   background: #1e1e1e;
   color: #fff;
+  border-top: 1px solid #0078d7;
+  border-bottom: 1px solid #1e1e1e;
+  margin-bottom: -1px;
+  height: 37px;
+}
+
+.tab.dragging {
+  background: #3c3c3c;
+  opacity: 0.8;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
 .tab-close {
   background: none;
   border: none;
-  color: #888;
-  margin-left: 0;
+  color: #7a7a7a;
+  margin-left: 8px;
   cursor: pointer;
-  font-size: 13px;
-  padding: 0;
-  transition: color 0.15s;
-  box-sizing: border-box;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 2px;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  visibility: hidden;
+}
+
+.tab:hover .tab-close,
+.tab.active .tab-close {
+  opacity: 1;
+  visibility: visible;
 }
 
 .tab-close:hover {
-  color: #f14c4c;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
 }
 
 .tab-title {
-  max-width: 140px;
+  max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   box-sizing: border-box;
+  padding-right: 4px;
+}
+
+/* Tab drop indicator */
+.tab-drop-indicator {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -2px;
+  width: 2px;
+  background-color: #0078d7;
+  z-index: 10;
+  pointer-events: none;
+  display: none;
+}
+
+.tab-drop-before .tab-drop-indicator {
+  display: block;
+  left: -2px;
+}
+
+.tab-drop-after .tab-drop-indicator {
+  display: block;
+  left: auto;
+  right: -2px;
+}
+
+/* Scroll buttons for tab bar */
+.tab-scroll-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  background: #2d2d2d;
+  color: #ccc;
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.tab-scroll-button:hover {
+  background: #3c3c3c;
+  color: #fff;
+}
+
+.tab-scroll-button:disabled {
+  opacity: 0.3;
+  cursor: default;
 }
 
 /* Extra: Zeilennummern in Monaco Editor immer sichtbar */

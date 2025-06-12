@@ -203,6 +203,7 @@ function setupFsIpcHandlers() {
     try {
       return await fs.promises.readFile(filePath, 'utf-8');
     } catch (err) {
+      console.error('Error reading file:', err);
       return '';
     }
   });
@@ -213,6 +214,7 @@ function setupFsIpcHandlers() {
       await fs.promises.writeFile(filePath, content, 'utf-8');
       return true;
     } catch (err) {
+      console.error('Error writing file:', err);
       return false;
     }
   });
