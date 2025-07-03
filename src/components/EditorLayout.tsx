@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Editor } from '@monaco-editor/react';
-import FileExplorer from './FileExplorer.new';
+import { FileExplorer } from './FileExplorer';
 import { TabBar } from './TabBar';
-import Sidebar from './Sidebar.new';
-import AIChatPanel from './AIChatPanel.new';
+import Sidebar from './Sidebar';
+import AIChatPanelWrapper from './AIChatPanelWrapper';
 import { TerminalPanel } from './TerminalPanel'; // Import TerminalPanel
 import { ThemeProvider } from '../contexts/ThemeContext';
 import { EditorProvider } from '../contexts/EditorContext';
@@ -11,6 +11,7 @@ import { AIProvider } from '../contexts/AIContext';
 import '../styles/EditorLayout.css';
 import { FaRegFile } from 'react-icons/fa';
 import { Resizable } from 're-resizable';
+import { ChatMessage } from './AIChatPanel';
 
 // Define FileNode interface for the file structure
 export interface FileNode {
@@ -58,8 +59,10 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   const [activeTab, setActiveTab] = useState<string | null>(null);
   // State for all open editor tabs
   const [tabs, setTabs] = useState<EditorTab[]>([]);
-  // State for selected sidebar tab (explorer, extensions, ai, etc.)
+  // State for selected sidebar tab (explorer, extensions, etc.)
   const [sidebarTab, setSidebarTab] = useState<string>('explorer');
+  // State for AI chat panel visibility
+  const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
   // State for terminal panel visibility
   const [isTerminalPanelOpen, setIsTerminalPanelOpen] = useState(false);
   // State for sidebar panel width with localStorage persistence
@@ -67,6 +70,23 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
     const savedWidth = localStorage.getItem('sidebarWidth');
     return savedWidth ? parseInt(savedWidth, 10) : 260;
   });
+
+  // State for chat messages and active chat
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
+    const savedMessages = localStorage.getItem('chatMessages');
+    return savedMessages ? JSON.parse(savedMessages) : [];
+  });
+  const [activeChatId, setActiveChatId] = useState<string>(() => {
+    return localStorage.getItem('activeChatId') || Date.now().toString();
+  });
+
+  // Save chat messages to localStorage when they change
+  useEffect(() => {
+    if (chatMessages.length > 0) {
+      localStorage.setItem('chatMessages', JSON.stringify(chatMessages));
+      localStorage.setItem('activeChatId', activeChatId);
+    }
+  }, [chatMessages, activeChatId]);
 
   // Get the language mode based on file extension
   const getLanguageFromFileName = (fileName: string): string => {
@@ -390,15 +410,27 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
 
   // Handle terminal panel toggle
   const toggleTerminalPanel = useCallback((isOpen: boolean) => {
-    setIsTerminalPanelOpen(isOpen);
-    // Don't change the sidebar tab state when toggling terminal
-    if (isOpen && sidebarTab !== 'terminal') {
-      setSidebarTab('explorer'); // Or keep the current tab
+    const newState = isOpen !== undefined ? isOpen : !isTerminalPanelOpen;
+    setIsTerminalPanelOpen(newState);
+    
+    // Wenn das Terminal geöffnet wird, schließe den Chat, um Überlappungen zu vermeiden
+    if (newState) {
+      setIsChatOpen(false);
+      
+      // Wechsle zum Explorer-Tab, wenn das Terminal über das Toggle geöffnet wird
+      if (sidebarTab !== 'terminal') {
+        setSidebarTab('explorer');
+      }
     }
-  }, [sidebarTab]);
+  }, [isTerminalPanelOpen, sidebarTab]);
 
   // Handle sidebar tab changes
   const handleSidebarTabChange = useCallback((tab: string) => {
+    if (tab === 'ai') {
+      setIsChatOpen(prev => !prev);
+      return;
+    }
+    
     setSidebarTab(tab);
     // Close terminal if opening a different tab
     if (tab !== 'terminal' && isTerminalPanelOpen) {
@@ -424,7 +456,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
             
             {/* Main content area: Sidebar panel and Editor */}
             <div className="editor-layout-main">
-              {/* Sidebar panel (Explorer, Extensions, AI Chat) */}
+              {/* Sidebar panel (Explorer, Extensions) */}
               <Resizable
                 size={{ width: sidebarWidth, height: '100%' }}
                 minWidth={200}
@@ -479,19 +511,10 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                       }}>Extensions will be listed here</p>
                     </div>
                   )}
-                  
-                  {sidebarTab === 'ai' && (
-                    <AIChatPanel style={{ 
-                      flex: 1, 
-                      display: 'flex', 
-                      flexDirection: 'column',
-                      height: '100%',
-                      overflow: 'hidden',
-                    }} />
-                  )}
                 </div>
               </Resizable>
-              {/* Editor content area: TabBar und Editor vertikal gestapelt */}
+              
+              {/* Main editor area with chat panel */}
               <div style={{
                 flex: 1,
                 display: 'flex',
@@ -501,181 +524,304 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                 height: '100%',
                 boxSizing: 'border-box',
                 padding: 0,
-                margin: 0
+                margin: 0,
+                position: 'relative',
+                overflow: 'hidden',
               }}>
-                {/* TabBar direkt oben, bündig mit Explorer */}
+                {/* Editor content area with right margin for chat panel */}
                 <div style={{
-                  height: 36,
-                  minHeight: 36,
-                  maxHeight: 36,
-                  margin: 0,
-                  padding: 0,
-                  borderBottom: '1px solid #333',
-                  boxSizing: 'border-box'
-                }}>
-                  <TabBar
-                    tabs={tabs}
-                    activeTab={activeTab}
-                    onTabClose={handleTabClose}
-                    onTabSelect={setActiveTab}
-                  />
-                </div>
-                {/* Editor container takes remaining space */}
-                <div key="editor-container" style={{ 
-                  flex: 1, 
+                  flex: 1,
                   display: 'flex',
                   flexDirection: 'column',
-                  overflow: 'hidden',
-                  position: 'relative',
-                  backgroundColor: '#1e1e1e', // Use explicit color instead of CSS var
-                  width: '100%',
+                  minWidth: 0,
+                  minHeight: 0,
                   height: '100%',
-                  boxSizing: 'border-box'
+                  boxSizing: 'border-box',
+                  padding: 0,
+                  margin: 0,
+                  marginRight: sidebarTab === 'ai' ? '300px' : 0,
+                  transition: 'margin-right 0.3s ease',
                 }}>
-                  {tabs.length > 0 && activeTab ? (
-                    <div key={`editor-wrapper-${activeTab}`} style={{ 
-                      flex: 1, 
-                      overflow: 'hidden',
-                      position: 'relative',
-                      minHeight: 0,
-                      minWidth: 0,
-                      display: 'flex',
-                      flexDirection: 'column'
-                    }}>
-                      <Editor
-                        key={activeTab}
-                        height="100%"
-                        width="100%"
-                        language={getCurrentLanguage()}
-                        value={tabs.find(t => t.id === activeTab)?.content || ''}
-                        onChange={handleEditorChange}
-                        theme={document.documentElement.getAttribute('data-theme') === 'light' ? 'vs' : 'vs-dark'}
-                        beforeMount={configureEditor}
-                        onMount={(editor, monaco) => {
-                          // Force a layout update after mounting
-                          setTimeout(() => {
-                            editor.layout();
-                          }, 0);
-                        }}
-                        onValidate={(markers) => {
-                          console.log('Validation markers:', markers);
-                        }}
-                        options={{
-                          scrollBeyondLastLine: true,
-                          minimap: { enabled: true },
-                          fontSize: 14,
-                          wordWrap: 'on',
-                          automaticLayout: true,
-                          lineNumbers: 'on',
-                          glyphMargin: true,
-                          lineDecorationsWidth: 10,
-                          renderLineHighlight: 'all',
-                          scrollbar: {
-                            vertical: 'auto',
-                            horizontal: 'auto',
-                            alwaysConsumeMouseWheel: false
-                          },
-                          padding: {
-                            top: 10,
-                            bottom: 10
-                          },
-                          tabSize: 2,
-                          insertSpaces: true,
-                          autoIndent: 'full',
-                          formatOnPaste: true,
-                          formatOnType: true,
-                          suggestOnTriggerCharacters: true,
-                          selectionHighlight: true,
-                          renderWhitespace: 'selection',
-                          renderIndentGuides: true,
-                          showFoldingControls: 'always',
-                          folding: true,
-                          foldingHighlight: true,
-                          foldingStrategy: 'auto',
-                          renderLineHighlightOnlyWhenFocus: false,
-                          overviewRulerLanes: 5,
-                          overviewRulerBorder: true,
-                          cursorBlinking: 'smooth',
-                          cursorSmoothCaretAnimation: true,
-                          cursorStyle: 'line',
-                          cursorWidth: 2,
-                          fontLigatures: true,
-                          bracketPairColorization: {
-                            enabled: true,
-                            independentColorPoolPerBracketType: true
-                          },
-                          guides: {
-                            bracketPairs: true,
-                            bracketPairsHorizontal: true,
-                            highlightActiveBracketPair: true,
-                            indentation: true,
-                            highlightActiveIndentation: true
-                          },
-                          smoothScrolling: true,
-                          mouseWheelZoom: true,
-                          multiCursorModifier: 'alt',
-                          quickSuggestions: {
-                            comments: true,
-                            strings: true,
-                            other: true
-                          },
-                          suggest: {
-                            filterGraceful: true,
-                            snippetsPreventQuickSuggestions: false,
-                            localityBonus: true,
-                            shareSuggestSelections: true,
-                            showIcons: true
-                          },
-                          inlayHints: {
-                            enabled: 'on'
-                          },
-                          unicodeHighlight: {
-                            ambiguousCharacters: true,
-                            invisibleCharacters: true,
-                            nonBasicASCII: true
-                          }
-                        }}
-                      />
-                    </div>
-                  ) : (
-                    <div className="editor-empty-ui" style={{ 
-                      flex: 1, 
-                      height: '100%', 
-                      width: '100%', 
-                      minHeight: 0, 
-                      minWidth: 0, 
-                      display: 'flex', 
-                      flexDirection: 'column',
-                      alignItems: 'center', 
-                      justifyContent: 'center',
-                      color: '#888',
-                      textAlign: 'center',
-                      padding: '20px'
-                    }}>
-                      <FaRegFile size={64} style={{ marginBottom: '16px' }} />
-                      <div style={{ fontSize: '16px', fontWeight: 'bold', marginBottom: '8px' }}>No file opened</div>
-                      <div style={{ fontSize: '14px' }}>Select a file in the explorer or create a new file to get started.</div>
-                    </div>
-                  )}
-                </div>
-                {/* Terminal panel as an overlay */}
-                {isTerminalPanelOpen && (
+                  {/* TabBar at the top */}
                   <div style={{
-                    position: 'absolute',
-                    left: 0,
+                    height: 36,
+                    minHeight: 36,
+                    maxHeight: 36,
+                    margin: 0,
+                    padding: 0,
+                    borderBottom: '1px solid #333',
+                    boxSizing: 'border-box',
+                    backgroundColor: 'var(--editor-background, #1e1e1e)',
+                    zIndex: 5,
+                  }}>
+                    <TabBar
+                      tabs={tabs}
+                      activeTab={activeTab}
+                      onTabClose={handleTabClose}
+                      onTabSelect={setActiveTab}
+                    />
+                  </div>
+                  
+                  {/* Editor container takes remaining space */}
+                  <div style={{ 
+                    flex: 1, 
+                    display: 'flex',
+                    flexDirection: 'column',
+                    overflow: 'hidden',
+                    position: 'relative',
+                    backgroundColor: 'var(--editor-background, #1e1e1e)',
+                    width: '100%',
+                    height: '100%',
+                    boxSizing: 'border-box',
+                    zIndex: 1,
+                  }}>
+                    {tabs.length > 0 && activeTab ? (
+                      <div key={`editor-wrapper-${activeTab}`} style={{ 
+                        flex: 1, 
+                        overflow: 'hidden',
+                        position: 'relative',
+                        minHeight: 0,
+                        minWidth: 0,
+                        display: 'flex',
+                        flexDirection: 'column'
+                      }}>
+                        <Editor
+                          key={activeTab}
+                          height="100%"
+                          width="100%"
+                          language={getCurrentLanguage()}
+                          value={tabs.find(t => t.id === activeTab)?.content || ''}
+                          onChange={handleEditorChange}
+                          theme={document.documentElement.getAttribute('data-theme') === 'light' ? 'vs' : 'vs-dark'}
+                          beforeMount={configureEditor}
+                          onMount={(editor) => {
+                            // Force a layout update after mounting
+                            setTimeout(() => {
+                              editor.layout();
+                            }, 0);
+                          }}
+                          onValidate={(markers) => {
+                            console.log('Validation markers:', markers);
+                          }}
+                          options={{
+                            scrollBeyondLastLine: true,
+                            minimap: { enabled: true },
+                            fontSize: 14,
+                            wordWrap: 'on',
+                            automaticLayout: true,
+                            lineNumbers: 'on',
+                            glyphMargin: true,
+                            lineDecorationsWidth: 10,
+                            renderLineHighlight: 'all',
+                            scrollbar: {
+                              vertical: 'auto',
+                              horizontal: 'auto',
+                              alwaysConsumeMouseWheel: false
+                            },
+                            padding: {
+                              top: 10,
+                              bottom: 10
+                            },
+                            tabSize: 2,
+                            insertSpaces: true,
+                            autoIndent: 'full',
+                            formatOnPaste: true,
+                            formatOnType: true,
+                            suggestOnTriggerCharacters: true,
+                            selectionHighlight: true,
+                            renderWhitespace: 'selection',
+                            renderIndentGuides: true,
+                            showFoldingControls: 'always',
+                            folding: true,
+                            foldingHighlight: true,
+                            foldingStrategy: 'auto',
+                            renderLineHighlightOnlyWhenFocus: false,
+                            overviewRulerLanes: 5,
+                            overviewRulerBorder: true,
+                            cursorBlinking: 'smooth',
+                            cursorSmoothCaretAnimation: true,
+                            cursorStyle: 'line',
+                            cursorWidth: 2,
+                            fontLigatures: true,
+                            bracketPairColorization: {
+                              enabled: true,
+                              independentColorPoolPerBracketType: true
+                            },
+                            guides: {
+                              bracketPairs: true,
+                              bracketPairsHorizontal: true,
+                              highlightActiveBracketPair: true,
+                              indentation: true,
+                              highlightActiveIndentation: true
+                            },
+                            smoothScrolling: true,
+                            mouseWheelZoom: true,
+                            multiCursorModifier: 'alt',
+                            quickSuggestions: {
+                              comments: true,
+                              strings: true,
+                              other: true
+                            },
+                            suggest: {
+                              filterGraceful: true,
+                              snippetsPreventQuickSuggestions: false,
+                              localityBonus: true,
+                              shareSuggestSelections: true,
+                              showIcons: true
+                            },
+                            inlayHints: {
+                              enabled: 'on'
+                            },
+                            unicodeHighlight: {
+                              ambiguousCharacters: true,
+                              invisibleCharacters: true,
+                              nonBasicASCII: true
+                            }
+                          }}
+                        />
+                      </div>
+                    ) : (
+                      <div className="editor-empty-ui" style={{ 
+                        flex: 1, 
+                        height: '100%', 
+                        width: '100%', 
+                        minHeight: 0, 
+                        minWidth: 0, 
+                        display: 'flex', 
+                        flexDirection: 'column',
+                        alignItems: 'center', 
+                        justifyContent: 'center',
+                        color: '#888',
+                        textAlign: 'center',
+                        padding: '20px'
+                      }}>
+                        <FaRegFile size={64} style={{ marginBottom: '16px' }} />
+                        <div style={{ fontSize: '16px', fontWeight: 'bold', marginBottom: '8px' }}>No file opened</div>
+                        <div style={{ fontSize: '14px' }}>Select a file in the explorer or create a new file to get started.</div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                {/* Terminal panel at the bottom */}
+                <div 
+                  style={{
+                    position: 'fixed',
+                    left: `${sidebarWidth}px`,
                     right: 0,
                     bottom: 0,
-                    height: 320,
-                    zIndex: 20,
-                    background: '#181818',
-                    borderTop: '1px solid #333'
+                    height: isTerminalPanelOpen ? '300px' : '0',
+                    zIndex: 100,
+                    backgroundColor: '#1e1e1e',
+                    borderTop: isTerminalPanelOpen ? '1px solid #333' : 'none',
+                    boxShadow: isTerminalPanelOpen ? '0 -2px 10px rgba(0, 0, 0, 0.3)' : 'none',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    transition: 'height 0.2s ease-in-out, border-top 0.2s ease-in-out',
+                    overflow: 'hidden'
+                  }}
+                >
+                  <TerminalPanel 
+                    isVisible={isTerminalPanelOpen}
+                    onClose={() => toggleTerminalPanel(false)} 
+                  />
+                </div>
+                
+                {/* Persistent AI Chat Panel on the right side */}
+                {isChatOpen && (
+                  <div style={{
+                    position: 'fixed',
+                    top: '32px',
+                    right: 0,
+                    bottom: 0,
+                    width: '400px',
+                    zIndex: 1000,
+                    backgroundColor: 'var(--editor-background, #1e1e1e)',
+                    borderLeft: '1px solid var(--border-color, #333)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    boxShadow: '-2px 0 15px rgba(0, 0, 0, 0.3)',
+                    transition: 'transform 0.3s ease-out',
+                    transform: 'translateX(0)'
                   }}>
-                    <TerminalPanel onClose={() => toggleTerminalPanel(false)} />
+                    <AIChatPanelWrapper
+                      key={activeChatId}
+                      fileStructure={fileStructure}
+                      projectPath={projectPath}
+                      messages={chatMessages}
+                      onMessagesChange={setChatMessages}
+                      onNewChat={() => {
+                        setChatMessages([]);
+                        setActiveChatId(Date.now().toString());
+                      }}
+                      onClose={() => setIsChatOpen(false)}
+                      onCodeProposal={(code, filePath) => {
+                        if (filePath) {
+                          openFileInTab(filePath);
+                          setTabs(prevTabs => 
+                            prevTabs.map(tab => 
+                              tab.path === filePath 
+                                ? { ...tab, content: code, dirty: true } 
+                                : tab
+                            )
+                          );
+                        } else if (activeTab) {
+                          setTabs(prevTabs => 
+                            prevTabs.map(tab => 
+                              tab.id === activeTab 
+                                ? { ...tab, content: code, dirty: true } 
+                                : tab
+                            )
+                          );
+                        }
+                      }}
+                      readFile={async (filePath) => {
+                        try {
+                          if (!window.electron) {
+                            throw new Error('Electron API is not available');
+                          }
+                          const content = await window.electron.ipcRenderer.invoke('fs:readFile', filePath);
+                          return String(content || '');
+                        } catch (error) {
+                          console.error('Error reading file:', error);
+                          throw error;
+                        }
+                      }}
+                    />
                   </div>
                 )}
+                
+                {/* Global styles for the chat panel */}
+                <style dangerouslySetInnerHTML={{
+                  __html: `
+                    @keyframes slideIn {
+                      from { transform: translateX(100%); }
+                      to { transform: translateX(0); }
+                    }
+                    
+                    @keyframes fadeIn {
+                      from { opacity: 0; }
+                      to { opacity: 1; }
+                    }
+                    
+                    /* Ensure the editor content doesn't shift when chat is open */
+                    .editor-content {
+                      transition: none !important;
+                    }
+                    
+                    /* No overlay needed for persistent chat panel */
+                    
+                    /* Adjust editor content to make room for chat panel */
+                    .editor-content {
+                      transition: margin-right 0.3s ease;
+                    }
+                    
+                    .editor-content.chat-open {
+                      margin-right: 400px;
+                    }
+                  `
+                }} />
               </div>
             </div>
-            {/* AI Chat is now part of the sidebar panel */}
           </div>
         </AIProvider>
       </EditorProvider>

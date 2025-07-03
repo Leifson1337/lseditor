@@ -22,74 +22,151 @@ export const Terminal: React.FC<TerminalProps> = ({ onResize, onData }) => {
   useEffect(() => {
     // Mount xterm.js terminal when component mounts
     console.log('Terminal component mounted');
+    
     if (!terminalRef.current) {
       console.error('Terminal container not found');
       return;
     }
 
-    // Initialize xterm.js with common options
-    console.log('Initializing xterm.js');
-    const xterm = new XTerm({ allowProposedApi: true, 
-      cursorBlink: true,
-      fontSize: 14,
-      fontFamily: 'Consolas, Monaco, monospace',
-      theme: {
-        background: '#1e1e1e',
-        foreground: '#d4d4d4',
-      },
-    });
+    let xterm: XTerm | null = null;
+    let fitAddon: FitAddon | null = null;
 
-    // Add Unicode, fit, web links, and search addons
-    const unicodeAddon = new Unicode11Addon();
-    xterm.loadAddon(unicodeAddon);
-    xterm.unicode.activeVersion = '11';
+    try {
+      // Initialize xterm.js with common options
+      console.log('Initializing xterm.js');
+      xterm = new XTerm({ 
+        allowProposedApi: true, 
+        cursorBlink: true,
+        fontSize: 14,
+        fontFamily: 'Consolas, Monaco, monospace',
+        theme: {
+          background: '#1e1e1e',
+          foreground: '#d4d4d4',
+        },
+        disableStdin: false,
+        cursorStyle: 'bar',
+        scrollback: 1000,
+        screenReaderMode: true,
+        convertEol: true,
+        allowTransparency: true,
+        windowsMode: true,
+        macOptionIsMeta: true,
+      });
 
-    const fitAddon = new FitAddon();
-    xterm.loadAddon(fitAddon);
-    xterm.loadAddon(new WebLinksAddon());
-    xterm.loadAddon(new SearchAddon());
+      // Add Unicode, fit, web links, and search addons
+      try {
+        const unicodeAddon = new Unicode11Addon();
+        xterm.loadAddon(unicodeAddon);
+        xterm.unicode.activeVersion = '11';
+        console.log('Unicode addon loaded');
 
-    // Attach terminal to the DOM
-    console.log('Opening terminal in container');
-    xterm.open(terminalRef.current);
-    fitAddon.fit();
+        fitAddon = new FitAddon();
+        xterm.loadAddon(fitAddon);
+        console.log('Fit addon loaded');
 
-    xtermRef.current = xterm;
-    fitAddonRef.current = fitAddon;
+        xterm.loadAddon(new WebLinksAddon());
+        console.log('Web links addon loaded');
 
-    // Set up data handler for terminal input
-    if (onData) {
-      console.log('Setting up data handler');
-      xterm.onData(onData);
-    }
-
-    // Handle terminal resize events
-    const handleResize = () => {
-      console.log('Handling terminal resize');
-      fitAddon.fit();
-      if (onResize) {
-        onResize(xterm.cols, xterm.rows);
+        xterm.loadAddon(new SearchAddon());
+        console.log('Search addon loaded');
+      } catch (addonError) {
+        console.error('Failed to load terminal addons:', addonError);
       }
-    };
 
-    window.addEventListener('resize', handleResize);
+      // Attach terminal to the DOM
+      console.log('Opening terminal in container');
+      xterm.open(terminalRef.current);
+      
+      try {
+        fitAddon?.fit();
+        console.log('Terminal fitted to container');
+      } catch (fitError) {
+        console.error('Failed to fit terminal:', fitError);
+      }
 
-    // Initial resize
-    handleResize();
+      xtermRef.current = xterm;
+      fitAddonRef.current = fitAddon;
 
-    return () => {
-      // Clean up on unmount
-      console.log('Terminal component unmounting');
-      window.removeEventListener('resize', handleResize);
-      xterm.dispose();
-    };
+      // Set up data handler for terminal input
+      if (onData) {
+        console.log('Setting up data handler');
+        xterm.onData(onData);
+      }
+
+      // Handle terminal resize events
+      const handleResize = () => {
+        if (!xterm || !fitAddon) return;
+        
+        try {
+          console.log('Handling terminal resize');
+          fitAddon.fit();
+          if (onResize && xterm.cols && xterm.rows) {
+            onResize(xterm.cols, xterm.rows);
+          }
+        } catch (resizeError) {
+          console.error('Error during terminal resize:', resizeError);
+        }
+      };
+
+      // Debounce resize events
+      let resizeTimeout: NodeJS.Timeout;
+      const debouncedResize = () => {
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(handleResize, 50);
+      };
+
+      window.addEventListener('resize', debouncedResize);
+
+      // Initial resize after a short delay to ensure DOM is ready
+      const initTimeout = setTimeout(() => {
+        try {
+          handleResize();
+        } catch (error) {
+          console.error('Error during initial terminal resize:', error);
+        }
+      }, 100);
+
+      return () => {
+        // Clean up on unmount
+        console.log('Terminal component unmounting');
+        clearTimeout(resizeTimeout);
+        clearTimeout(initTimeout);
+        window.removeEventListener('resize', debouncedResize);
+        
+        try {
+          if (xterm) {
+            xterm.dispose();
+            console.log('Terminal disposed');
+          }
+        } catch (disposeError) {
+          console.error('Error disposing terminal:', disposeError);
+        }
+      };
+    } catch (error) {
+      console.error('Failed to initialize terminal:', error);
+      // Try to clean up partially initialized components
+      try {
+        xterm?.dispose();
+      } catch (e) {
+        console.error('Error during cleanup after failed init:', e);
+      }
+    }
   }, [onResize, onData]);
 
   return (
-    <div className="terminal-container">
+    <div className="terminal-container" onClick={(e) => e.stopPropagation()}>
       <div className="terminal-wrapper">
         {/* Container for the xterm.js terminal */}
-        <div ref={terminalRef} className="terminal" />
+        <div 
+          ref={terminalRef} 
+          className="terminal"
+          onMouseDown={(e) => {
+            // Only handle events directly on the terminal, not its children
+            if (e.target === e.currentTarget) {
+              e.stopPropagation();
+            }
+          }}
+        />
       </div>
     </div>
   );

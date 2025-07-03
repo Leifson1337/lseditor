@@ -21,6 +21,11 @@ export interface StoreSchema {
   theme: string; // Current theme (e.g., 'dark' or 'light')
   fontSize: number; // Font size for the application
   fontFamily: string; // Font family for the application
+  ai: {
+    model: string; // Selected AI model (e.g., 'gpt-4', 'gpt-3.5-turbo')
+    temperature: number; // Temperature setting for AI responses
+    maxTokens: number; // Maximum tokens for AI responses
+  };
   terminal: {
     fontSize: number; // Font size for the terminal
     fontFamily: string; // Font family for the terminal
@@ -77,6 +82,32 @@ class AppStore implements AppServices {
     //     fontFamily: {
     //       type: 'string',
     //       default: 'monospace'
+    //     },
+    //     ai: {
+    //       type: 'object',
+    //       properties: {
+    //         model: {
+    //           type: 'string',
+    //           default: 'gpt-4'
+    //         },
+    //         temperature: {
+    //           type: 'number',
+    //           default: 0.7,
+    //           minimum: 0,
+    //           maximum: 2
+    //         },
+    //         maxTokens: {
+    //           type: 'number',
+    //           default: 2048,
+    //           minimum: 1,
+    //           maximum: 4096
+    //         }
+    //       },
+    //       default: {
+    //         model: 'gpt-4',
+    //         temperature: 0.7,
+    //         maxTokens: 2048
+    //       }
     //     },
     //     terminal: {
     //       type: 'object',
@@ -136,22 +167,34 @@ class AppStore implements AppServices {
     this.projectService = new ProjectService(defaultWorkspacePath);
     this.uiService = new UIService();
     
-    // Initialize AIService with default config
+    // Initialize AIService with default config or stored config
+    const storedAISettings = this.get('ai') as { model: string; temperature: number; maxTokens: number } | undefined;
     const defaultAIConfig: AIConfig = {
       useLocalModel: false,
       openAIConfig: {
         apiKey: process.env.OPENAI_API_KEY || '',
-        model: 'gpt-3.5-turbo',
-        temperature: 0.7,
-        maxTokens: 1000
+        model: storedAISettings?.model || 'gpt-4',
+        temperature: storedAISettings?.temperature ?? 0.7,
+        maxTokens: storedAISettings?.maxTokens ?? 2048
       },
-      model: 'gpt-3.5-turbo',
-      temperature: 0.7,
-      maxTokens: 1000,
-      contextWindow: 2048,
-      stopSequences: [],
-      topP: 1
+      model: storedAISettings?.model || 'gpt-4',
+      temperature: storedAISettings?.temperature ?? 0.7,
+      maxTokens: storedAISettings?.maxTokens ?? 2048,
+      contextWindow: 4096,
+      stopSequences: ['\n\n', '```'],
+      topP: 1,
+      systemPrompt: 'You are an AI coding assistant. When providing code changes, you can specify line numbers using the z//<line-number> syntax at the start of a code block. For example:\n\n```\nz//10\nconst example = "This will replace line 10";\n```\n\nYou can also specify line ranges with z//<start-line>-<end-line> to replace multiple lines. If no line number is specified, the code will be appended to the end of the file.'
     };
+    
+    // If no AI settings exist in store, save the defaults
+    if (!storedAISettings) {
+      this.set('ai', {
+        model: defaultAIConfig.model,
+        temperature: defaultAIConfig.temperature,
+        maxTokens: defaultAIConfig.maxTokens
+      });
+    }
+    
     this.aiService = AIService.getInstance(defaultAIConfig);
   }
 

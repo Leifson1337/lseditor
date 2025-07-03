@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import './SettingsIcon.css';
 import { useTheme } from '../contexts/ThemeContext';
+import { store } from '../store/store';
 
 // Props for the SettingsIcon component
 interface SettingsIconProps {
@@ -11,6 +12,34 @@ interface SettingsIconProps {
 const SettingsIcon: React.FC<SettingsIconProps> = ({ onClick }) => {
   const [isOpen, setIsOpen] = useState(false); // State for dropdown visibility
   const { theme, toggleTheme } = useTheme();   // Theme context for toggling theme
+  const [aiSettings, setAISettings] = useState({
+    model: 'gpt-4',
+    temperature: 0.7,
+    maxTokens: 2048,
+  });
+
+  // Load settings from store on mount
+  useEffect(() => {
+    const settings = store.get('ai');
+    if (settings) {
+      setAISettings(prev => ({
+        ...prev,
+        ...settings
+      }));
+    }
+  }, []);
+
+  // Update AI settings in both local state and store
+  const updateAISettings = (updates: Partial<typeof aiSettings>) => {
+    const newSettings = { ...aiSettings, ...updates };
+    setAISettings(newSettings);
+    
+    // Update the store with the new settings
+    store.set('ai', {
+      ...store.get('ai'),
+      ...updates
+    });
+  };
 
   // Handle click on the settings icon
   const handleClick = (e: React.MouseEvent) => {
@@ -72,7 +101,10 @@ const SettingsIcon: React.FC<SettingsIconProps> = ({ onClick }) => {
               <h4>AI</h4>
               <div className="setting-item">
                 <label>Model</label>
-                <select defaultValue="gpt-4">
+                <select 
+                  value={aiSettings.model}
+                  onChange={(e) => updateAISettings({ model: e.target.value })}
+                >
                   <option value="gpt-4">GPT-4</option>
                   <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
                 </select>
