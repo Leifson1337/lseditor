@@ -567,6 +567,17 @@ const MenuBar: React.FC<MenuBarProps> = ({ onHelpAction, onFileAction, onEditAct
     }
   }; // Function to handle toggle item
 
+  // Function to handle search key down events
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.ctrlKey && e.shiftKey && e.key === 'F') {
+      e.preventDefault();
+      // Focus the search input when Ctrl+Shift+F is pressed
+      e.currentTarget.select();
+    } else if (e.key === 'Escape') {
+      e.currentTarget.blur();
+    }
+  };
+
   // Render the menu bar
   return (
     <div className="menu-bar" ref={menuRef}>
@@ -587,17 +598,17 @@ const MenuBar: React.FC<MenuBarProps> = ({ onHelpAction, onFileAction, onEditAct
           </div>
         ))}
       </div>
-      <div className="menu-bar-center">
-        <div className="menu-searchbar-wrapper">
-          <input
-            type="text"
-            className="menu-searchbar"
-            placeholder="Search..."
-          />
-        </div>
-      </div>
-      <div className="menu-bar-right">
-        <SettingsIcon />
+      <div className="menu-searchbar-wrapper">
+        <input
+          type="text"
+          className="menu-searchbar"
+          placeholder="Search (Ctrl+Shift+F)"
+          onKeyDown={handleSearchKeyDown}
+        />
+        <SettingsIcon 
+          className="settings-icon-container" 
+          onClick={() => onHelpAction?.('settings')} 
+        />
       </div>
     </div>
   );

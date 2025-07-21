@@ -4,13 +4,13 @@
   height: 48px;
   background: var(--background-color, #1e1e1e);
   color: var(--text-color, #fff);
-  padding: 0 12px;
+  padding: 0 0 0 12px;
   user-select: none;
   -webkit-app-region: drag;
   position: relative;
   z-index: 20;
-  gap: 15px;
   border-bottom: 1px solid #2d2d2d;
+  justify-content: space-between;
 }
 
 .titlebar-logo {
@@ -48,30 +48,33 @@
 }
 
 .titlebar > .menu-bar {
-  flex: 1 1 auto;
-  margin-left: 24px;
-  margin-right: 24px;
+  flex: 1;
   height: 100%;
   display: flex;
   align-items: center;
   -webkit-app-region: no-drag;
+  margin-right: auto;
+  padding: 0;
+  max-width: calc(100% - 140px);
 }
 
 .titlebar-buttons {
   display: flex;
   align-items: center;
   margin-left: auto;
-  gap: 2px;
+  gap: 0;
   -webkit-app-region: no-drag;
+  height: 100%;
+  margin-right: 0;
 }
 
 .titlebar-btn {
-  width: 38px;
-  height: 32px;
+  width: 46px;
+  height: 100%;
   background: none;
   border: none;
   color: var(--text-color, #fff);
-  font-size: 1.2rem;
+  font-size: 1rem;
   cursor: pointer;
   outline: none;
   display: flex;
@@ -79,6 +82,18 @@
   justify-content: center;
   transition: background 0.15s;
   -webkit-app-region: no-drag;
+  margin: 0;
+  padding: 0;
+  position: relative;
+}
+
+.titlebar-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.titlebar-btn.close:hover {
+  background: #e06c75;
+  color: #fff;
 }
 
 .titlebar-btn:hover {

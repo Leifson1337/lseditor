@@ -100,22 +100,24 @@ const Titlebar: React.FC<TitlebarProps> = ({ children, minimal = false }) => {
   return (
     <div className="titlebar" style={{position: 'relative'}}>
       <div className="titlebar-drag" />
-      <div className="titlebar-logo no-drag">
-        <img 
-          src={logoUrl} 
-          alt="LSEditor Logo" 
-          onError={(e) => {
-            // If logo fails to load, show text fallback
-            const target = e.target as HTMLImageElement;
-            target.style.display = 'none';
-            const textFallback = document.createElement('div');
-            textFallback.className = 'titlebar-logo-text';
-            textFallback.textContent = 'LSEditor';
-            target.parentNode?.insertBefore(textFallback, target.nextSibling);
-          }}
-        />
-        <div className="titlebar-title">
-          {children || 'LSEditor'}
+      <div className="menu-bar">
+        <div className="titlebar-logo no-drag">
+          <img 
+            src={logoUrl} 
+            alt="LSEditor Logo" 
+            onError={(e) => {
+              // If logo fails to load, show text fallback
+              const target = e.target as HTMLImageElement;
+              target.style.display = 'none';
+              const textFallback = document.createElement('div');
+              textFallback.className = 'titlebar-logo-text';
+              textFallback.textContent = 'LSEditor';
+              target.parentNode?.insertBefore(textFallback, target.nextSibling);
+            }}
+          />
+          <div className="titlebar-title">
+            {children || 'LSEditor'}
+          </div>
         </div>
       </div>
       <div className="titlebar-buttons no-drag">

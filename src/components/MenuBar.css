@@ -1,15 +1,15 @@
 .menu-bar {
   display: flex;
   align-items: center;
-  height: 40px;
-  background: var(--bg-primary, #1e1e1e);
+  height: 100%;
+  background: transparent;
   color: var(--text-primary, #fff);
-  border-bottom: 1px solid var(--border-color, #22223b);
   position: relative;
-  justify-content: flex-start;
   z-index: 10;
-/* Verhindert Überlappung mit Sidebar */
-  margin-left: 56px; /* Breite der Sidebar (Icons) anpassen! */
+  flex: 1;
+  padding: 0 12px 0 0;
+  margin-right: auto;
+  max-width: calc(100% - 140px);
 }
 
 @media (max-width: 800px) {
@@ -43,50 +43,75 @@
   align-items: center;
   height: 100%;
   gap: 8px;
+  margin-left: auto;
+  padding-right: 8px;
+  max-width: 400px;
+  flex: 1;
+  justify-content: flex-end;
 }
 
 .menu-searchbar {
-  width: 320px;
-  max-width: 36vw;
-  padding: 8px 16px;
-  border-radius: 8px;
-  border: 1.5px solid var(--border-color, #22223b);
-  background: var(--bg-tertiary, #23243a);
+  width: 280px;
+  max-width: 30vw;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #2d2d2d);
+  background: rgba(255, 255, 255, 0.05);
   color: var(--text-primary, #fff);
-  font-size: 1rem;
+  font-size: 0.9rem;
   outline: none;
-  transition: border 0.15s, background 0.15s;
-  box-shadow: 0 2px 8px rgba(30,34,43,0.04);
+  transition: all 0.15s ease;
+  height: 28px;
 }
 
 .menu-searchbar:focus {
-  border: 1.5px solid #007acc;
-  background: #23243a;
+  border-color: #007acc;
+  background: rgba(0, 122, 204, 0.1);
+  box-shadow: 0 0 0 1px #007acc;
 }
 
-.menu-searchbar-wrapper .settings-icon {
-  margin-left: 2px;
-  font-size: 1.25em;
-  color: var(--text-secondary,#aaa);
-  background: transparent;
-  border-radius: 50%;
-  transition: background 0.15s;
+.settings-icon-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 28px;
+  margin-left: 4px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 0.15s ease;
+}
+
+.settings-icon-container:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.settings-button {
+  background: none;
+  border: none;
+  color: var(--text-secondary, #aaa);
   cursor: pointer;
   padding: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
+  transition: color 0.15s ease;
+}
+
+.settings-button:hover {
+  color: var(--text-primary, #fff);
 }
 
 .menu-searchbar-wrapper .settings-icon:hover {
-  background: #23243a;
-  color: #007acc;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
 }
 
 .menu-bar-menus {
   display: flex;
   align-items: center;
   height: 100%;
+  margin-right: auto;
 }
 
 .menu-item-container {
@@ -94,11 +119,18 @@
   align-items: center;
   position: relative;
   height: 100%;
+  padding: 0 8px;
+  transition: background-color 0.15s ease;
+}
+
+.menu-item-container:hover {
+  background-color: rgba(255, 255, 255, 0.05);
 }
 
 .menu-item-label {
-  padding: 0 16px;
-  font-size: 15px;
+  padding: 0 4px;
+  font-size: 13px;
+  font-weight: 500;
   color: var(--text-primary, #fff);
   cursor: pointer;
   height: 100%;

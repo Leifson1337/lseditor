@@ -6,10 +6,11 @@ import { store } from '../store/store';
 // Props for the SettingsIcon component
 interface SettingsIconProps {
   onClick?: () => void; // Optional callback for when the icon is clicked
+  className?: string;    // Optional className to apply to the root element
 }
 
 // SettingsIcon renders a gear icon that opens a dropdown for settings
-const SettingsIcon: React.FC<SettingsIconProps> = ({ onClick }) => {
+const SettingsIcon: React.FC<SettingsIconProps> = ({ onClick, className = '' }) => {
   const [isOpen, setIsOpen] = useState(false); // State for dropdown visibility
   const { theme, toggleTheme } = useTheme();   // Theme context for toggling theme
   const [aiSettings, setAISettings] = useState({
@@ -53,7 +54,7 @@ const SettingsIcon: React.FC<SettingsIconProps> = ({ onClick }) => {
   };
 
   return (
-    <div className="settings-container">
+    <div className={`settings-container ${className}`.trim()}>
       <button 
         className="settings-button"
         onClick={handleClick}
