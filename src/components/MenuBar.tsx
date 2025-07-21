@@ -325,7 +325,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onHelpAction, onFileAction, onEditAct
             <h1>LSEditor</h1>
             <div class="version">Version 1.0.0</div>
             <div style="margin-bottom: 20px; color: #888; max-width: 80%; line-height: 1.5; font-size: 14px;">
-              A powerful code editor for modern web development
+              A powerful code editor for modern development.
             </div>
             <div class="features">
               <div class="feature">
