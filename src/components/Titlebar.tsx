@@ -2,6 +2,18 @@ import React, { useState, useEffect, ReactNode } from 'react';
 import { FaWindowRestore } from 'react-icons/fa';
 import './Titlebar.css';
 
+// Get the base URL for static assets
+const getAssetUrl = (path: string) => {
+  // In development, assets are served from the public folder
+  if (process.env.NODE_ENV === 'development') {
+    return `${window.location.origin}/${path}`;
+  }
+  // In production, use the relative path
+  return `./${path}`;
+};
+
+const logoUrl = getAssetUrl('logo.png');
+
 // Props for the Titlebar component
 interface TitlebarProps {
   children?: ReactNode; // Optional children to render in the titlebar
@@ -84,12 +96,28 @@ const Titlebar: React.FC<TitlebarProps> = ({ children, minimal = false }) => {
     );
   }
 
-  // Default mode: show title, children, and window controls
+  // Default mode: show logo, title, children, and window controls
   return (
     <div className="titlebar" style={{position: 'relative'}}>
       <div className="titlebar-drag" />
-      <div className="titlebar-title no-drag">lseditor</div>
-      {children}
+      <div className="titlebar-logo no-drag">
+        <img 
+          src={logoUrl} 
+          alt="LSEditor Logo" 
+          onError={(e) => {
+            // If logo fails to load, show text fallback
+            const target = e.target as HTMLImageElement;
+            target.style.display = 'none';
+            const textFallback = document.createElement('div');
+            textFallback.className = 'titlebar-logo-text';
+            textFallback.textContent = 'LSEditor';
+            target.parentNode?.insertBefore(textFallback, target.nextSibling);
+          }}
+        />
+        <div className="titlebar-title">
+          {children || 'LSEditor'}
+        </div>
+      </div>
       <div className="titlebar-buttons no-drag">
         <button className="titlebar-btn" title="Minimize" onClick={handleMinimize}>
           <span>&#x2013;</span>

@@ -31,12 +31,6 @@ interface ContextMenuProps {
   isHtml?: boolean;
 }
 
-// Props for the extensions explorer
-interface ExtensionsExplorerProps {
-  extensions: any[];
-  onInstallExtension: () => void;
-}
-
 // ContextMenu renders the right-click context menu for files
 const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, onOpen, onRename, onDelete, onLiveUpdate, onClose, isHtml }) => (
   <ul className="file-context-menu" style={{ top: y, left: x, position: 'fixed', zIndex: 1000 }}>
@@ -48,37 +42,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, onOpen, onRename, onDel
   </ul>
 );
 
-// ExtensionsExplorer displays extensions
-const ExtensionsExplorer: React.FC<ExtensionsExplorerProps> = ({ extensions, onInstallExtension }) => {
-  if (extensions.length === 0) {
-    return (
-      <div className="empty-explorer">
-        <p>No extensions installed</p>
-        <button 
-          className="install-extension-btn"
-          onClick={onInstallExtension}
-        >
-          Install Extension
-        </button>
-      </div>
-    );
-  }
 
-  return (
-    <div className="file-explorer-content">
-      {extensions.map(ext => (
-        <div key={ext.id} className="file-explorer-item">
-          <div className="file-explorer-icon">
-            {ext.icon || <FaPuzzlePiece />}
-          </div>
-          <div className="file-explorer-name">
-            {ext.name}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-};
 
 export const FileExplorer: React.FC<FileExplorerProps> = ({
   fileStructure,
@@ -335,21 +299,6 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     );
   };
 
-  // Add this new state for extensions
-  const [extensions, setExtensions] = useState<any[]>([]);
-  
-  // Add this effect to load extensions
-  useEffect(() => {
-    // This would normally load extensions from a service
-    // For now we'll use an empty array to show the "no extensions" message
-    setExtensions([]);
-  }, []);
-
-  // Add this handler for installing extensions
-  const handleInstallExtension = () => {
-    // This would normally open an extension marketplace
-    alert('Extension installation would open here');
-  };
 
   // Main render: file explorer root, context menu
   return (
@@ -367,16 +316,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
           <p>No files in project</p>
         </div>
       )}
-      
-      {/* Extensions section */}
-      <div className="extensions-section">
-        <h4 className="extensions-header">Extensions</h4>
-        <ExtensionsExplorer 
-          extensions={extensions} 
-          onInstallExtension={handleInstallExtension} 
-        />
-      </div>
-      
+
       {contextMenu && (
         <ContextMenu
           x={contextMenu.x}

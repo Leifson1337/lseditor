@@ -9,16 +9,42 @@
   -webkit-app-region: drag;
   position: relative;
   z-index: 20;
+  gap: 15px;
+  border-bottom: 1px solid #2d2d2d;
+}
+
+.titlebar-logo {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  -webkit-app-region: no-drag;
+  padding: 0 10px;
+  margin-right: 10px;
+}
+
+.titlebar-logo img {
+  height: 28px;
+  width: auto;
+  margin-right: 8px;
+}
+
+.titlebar-logo-text {
+  font-size: 14px;
+  font-weight: 500;
+  color: #e0e0e0;
+  margin-right: 5px;
+  white-space: nowrap;
 }
 
 .titlebar-title {
-  font-size: 1.2rem;
-  font-weight: 600;
-  margin-right: 24px;
-  margin-left: 12px;
+  font-size: 1.1rem;
+  font-weight: 500;
+  margin: 0;
   white-space: nowrap;
   flex-shrink: 0;
   -webkit-app-region: no-drag;
+  color: #cccccc;
+  opacity: 0.9;
 }
 
 .titlebar > .menu-bar {

@@ -491,24 +491,16 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                   )}
                   
                   {sidebarTab === 'extensions' && (
-                    <div className="sidebar-panel-content" style={{
-                      padding: '16px',
-                      color: 'var(--foreground, #e0e0e0)',
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      height: '100%',
+                      color: 'var(--description-foreground, #858585)',
+                      fontSize: '14px',
+                      fontStyle: 'italic'
                     }}>
-                      <h3 style={{
-                        marginTop: 0,
-                        marginBottom: '12px',
-                        fontSize: '13px',
-                        fontWeight: 600,
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.5px',
-                        color: 'var(--text-muted, #858585)',
-                      }}>Extensions</h3>
-                      <p style={{
-                        margin: 0,
-                        fontSize: '13px',
-                        lineHeight: '1.5',
-                      }}>Extensions will be listed here</p>
+                      Coming Soon..
                     </div>
                   )}
                 </div>

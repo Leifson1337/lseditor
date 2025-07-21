@@ -35,7 +35,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onTabChange, activeTab }) => {
   // List of sidebar tabs with their icons, labels, and actions
   const tabs = [
     { id: 'explorer', icon: <FaFolder />, label: 'Explorer', action: () => onTabChange?.('explorer') },
-    { id: 'git', icon: <FaGitAlt />, label: 'Git', action: () => onTabChange?.('git') },
+
     { id: 'github', icon: <FaGithub />, label: 'GitHub', action: () => setShowGithubDropdown(!showGithubDropdown) },
     { id: 'ai', icon: <FaBrain />, label: 'AI', action: () => onTabChange?.('ai') },
     { id: 'terminal', icon: <FaTerminal />, label: 'Terminal', action: () => onTabChange?.('terminal') },
