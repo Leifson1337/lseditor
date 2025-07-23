@@ -4,40 +4,72 @@ import StatusBar from './StatusBar';
 import Titlebar from './Titlebar';
 import MenuBar from './MenuBar';
 import { EditorLayout } from './EditorLayout';
+import Sidebar from './Sidebar';
+import { TerminalPanel } from './TerminalPanel';
 
-// Props for the Layout component
 interface LayoutProps {
-  children: React.ReactNode; // Child components to render inside the layout
-  initialContent?: string;   // Optional initial content for the editor
-  initialLanguage?: string;  // Optional initial language for the editor
-  fileStructure?: any[];     // Optional file structure for the project
-  projectPath?: string;      // Optional project path
+  children: React.ReactNode;
+  initialContent?: string;
+  initialLanguage?: string;
+  fileStructure?: any[];
+  projectPath?: string;
+  onTabChange?: (tab: string) => void;
+  activeTab?: string;
+  isTerminalOpen?: boolean;
+  onTerminalToggle?: () => void;
 }
 
-// Layout provides the main application structure, including titlebar, menubar, statusbar, and editor area
 const Layout: React.FC<LayoutProps> = ({
   children,
-  initialContent = '',
-  initialLanguage = 'plaintext',
   fileStructure = [],
-  projectPath = ''
+  projectPath = '',
+  onTabChange = () => {},
+  activeTab = 'explorer',
+  isTerminalOpen = false,
+  onTerminalToggle = () => {}
 }) => {
   return (
     <div className="app-container">
-      {/* Titlebar with embedded MenuBar */}
       <Titlebar>
-        <MenuBar onHelpAction={() => {}} onFileAction={() => {}} onEditAction={() => {}} recentProjects={[]} />
+        <MenuBar 
+          onHelpAction={() => {}} 
+          onFileAction={() => {}} 
+          onEditAction={() => {}} 
+          recentProjects={[]} 
+        />
       </Titlebar>
+      
       <div className="main-content">
         <div className="left-panel">
-          {/* StatusBar displays file/terminal/project status */}
-          <StatusBar activeFile={''} terminalPort={3001} isTerminalConnected={false} errorCount={0} problemCount={0} portForwardCount={0} />
+          <Sidebar onTabChange={onTabChange} activeTab={activeTab} />
+          <StatusBar 
+            activeFile={''} 
+            terminalPort={3001} 
+            isTerminalConnected={false} 
+            errorCount={0} 
+            problemCount={0} 
+            portForwardCount={0} 
+          />
         </div>
-        <div className="editor-container" style={{width:'100%'}}>
-          {/* EditorLayout handles the main editor and file navigation UI */}
-          <EditorLayout
-            fileStructure={fileStructure}
-            projectPath={projectPath}
+        
+        <div className="editor-container" style={{ 
+          display: 'flex', 
+          flexDirection: 'column',
+          width: '100%',
+          height: '100%',
+          position: 'relative'
+        }}>
+          <div style={{ 
+            flex: isTerminalOpen ? '1 1 70%' : '1 1 100%',
+            minHeight: 0,
+            overflow: 'hidden'
+          }}>
+            {children}
+          </div>
+          
+          <TerminalPanel 
+            onClose={onTerminalToggle} 
+            isVisible={isTerminalOpen} 
           />
         </div>
       </div>

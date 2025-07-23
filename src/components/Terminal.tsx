@@ -9,12 +9,35 @@ import '../styles/Terminal.css';
 
 // Props for the Terminal component
 interface TerminalProps {
-  onResize?: (cols: number, rows: number) => void; // Callback for terminal resize events
-  onData?: (data: string) => void;                // Callback for terminal input data
+  isOpen: boolean;
+  onToggle: () => void;
+  terminalManager: any;
+  onResize?: (cols: number, rows: number) => void;
+  onData?: (data: string) => void;
+  onExit?: () => void;
+  options?: any;
+  addMessage?: (message: string) => void;
+  onInit?: () => void;
+  onTitleChange?: (title: string) => void;
+  onActive?: () => void;
+  [key: string]: any; // For any additional props
 }
 
 // Terminal component wraps xterm.js and manages its lifecycle
-export const Terminal: React.FC<TerminalProps> = ({ onResize, onData }) => {
+export const Terminal: React.FC<TerminalProps> = ({
+  isOpen,
+  onToggle,
+  terminalManager,
+  onResize = () => {},
+  onData = () => {},
+  onExit = () => {},
+  options = {},
+  addMessage = () => {},
+  onInit = () => {},
+  onTitleChange = () => {},
+  onActive = () => {},
+  ...rest
+}) => {
   const terminalRef = useRef<HTMLDivElement>(null);    // Ref for the terminal container div
   const xtermRef = useRef<XTerm | null>(null);         // Ref for the xterm.js instance
   const fitAddonRef = useRef<FitAddon | null>(null);   // Ref for the fit addon
@@ -153,21 +176,24 @@ export const Terminal: React.FC<TerminalProps> = ({ onResize, onData }) => {
     }
   }, [onResize, onData]);
 
+  if (!isOpen) {
+    return null;
+  }
+
   return (
-    <div className="terminal-container" onClick={(e) => e.stopPropagation()}>
-      <div className="terminal-wrapper">
-        {/* Container for the xterm.js terminal */}
-        <div 
-          ref={terminalRef} 
-          className="terminal"
-          onMouseDown={(e) => {
-            // Only handle events directly on the terminal, not its children
-            if (e.target === e.currentTarget) {
-              e.stopPropagation();
-            }
-          }}
-        />
-      </div>
+    <div className="terminal-container">
+      <div 
+        ref={terminalRef} 
+        className="terminal"
+        style={{ width: '100%', height: '100%' }}
+      />
+      <button 
+        className="terminal-toggle" 
+        onClick={onToggle}
+        title="Toggle terminal"
+      >
+        {isOpen ? '▼' : '▲'}
+      </button>
     </div>
   );
 };

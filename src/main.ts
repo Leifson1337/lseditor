@@ -27,6 +27,9 @@ let uiService: UIService | undefined = undefined;
 let terminalServer: TerminalServer | undefined = undefined;
 let terminalManager: TerminalManager | undefined = undefined;
 
+// --- TERMINAL ---
+// Terminal functionality is now handled in the renderer process
+
 // --- SYSTEM BUTTONS ---
 ipcMain.handle('window:minimize', (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);

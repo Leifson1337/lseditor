@@ -1,301 +1,501 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Terminal } from './Terminal';
-import { Terminal as XTerm } from '@xterm/xterm';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
+import * as path from 'path';
+import * as fs from 'fs';
+
+// Import types
+import type { ITerminalAddon, IEvent } from '@xterm/xterm';
+
+// Import styles
 import '@xterm/xterm/css/xterm.css';
-import { TerminalService } from '../services/TerminalService';
-import { TerminalManager } from '../services/TerminalManager';
-import { AIService } from '../services/AIService';
-import { ProjectService } from '../services/ProjectService';
-import { UIService } from '../services/UIService';
-import { TerminalServer } from '../server/terminalServer';
-import { Store } from '../store';
-import { TerminalSession } from '../types/terminal';
-import { AIConfig } from '../types/AITypes';
 import './TerminalPanel.css';
 
-// Props for the TerminalPanel component
-interface TerminalPanelProps {
-  onClose: () => void; // Callback to close the terminal panel
-  isVisible: boolean;   // Controls the visibility of the panel
+// Type for command handler
+interface CommandHandler {
+  (args: string[], term: Terminal, onExit?: () => void): Promise<number> | number;
 }
 
-// TerminalPanel manages terminal sessions and renders the terminal UI
-export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose, isVisible }) => {
-  const containerRef = useRef<HTMLDivElement>(null); // Ref for the terminal container
-  const terminalServiceRef = useRef<TerminalService | null>(null); // Ref for the terminal service instance
-  const [sessions, setSessions] = useState<string[]>([]); // List of session IDs
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null); // ID of the active session
 
-  // Initialize terminal services and UI
-  const initializeTerminal = useCallback(async () => {
-    console.log('Initializing terminal...');
-    if (!containerRef.current) {
-      console.error('Terminal container ref is not available');
-      return;
-    }
-    
+
+// Built-in commands
+const COMMANDS: Record<string, CommandHandler> = {
+  help: async (args, term) => {
+    term.writeln('\r\nAvailable commands:');
+    term.writeln('  clear    - Clear the terminal');
+    term.writeln('  help     - Show this help message');
+    term.writeln('  echo     - Print arguments to the terminal');
+    term.writeln('  pwd      - Print current working directory');
+    term.writeln('  exit     - Close the terminal');
+    return 0;
+  },
+  
+  clear: (args, term) => {
+    term.clear();
+    return 0;
+  },
+  
+  echo: (args, term) => {
+    term.writeln(args.join(' '));
+    return 0;
+  },
+  
+  pwd: async (args, term) => {
     try {
-      // Set up backend services and dependencies
-      const terminalServer = new TerminalServer(3001);
-      const store = new Store();
-      const uiService = new UIService();
-      const projectService = new ProjectService(process.cwd());
-      const aiService = AIService.getInstance({
-        useLocalModel: false,
-        model: 'gpt-3.5-turbo',
-        temperature: 0.7,
-        maxTokens: 2048,
-        contextWindow: 4096,
-        stopSequences: ['\n\n', '```'],
-        topP: 1,
-        openAIConfig: {
-          apiKey: process.env.OPENAI_API_KEY || '',
-          model: 'gpt-3.5-turbo',
-          temperature: 0.7,
-          maxTokens: 2048
-        }
-      });
-
-      console.log('Creating terminal service and manager...');
-      // Create the terminal service and manager
-      let terminalService: TerminalService;
-      let terminalManager: TerminalManager;
-
-      try {
-        terminalService = TerminalService.getInstance(
-          null,
-          aiService,
-          projectService,
-          uiService,
-          terminalServer,
-          store
-        );
-        console.log('Terminal service created');
-
-        terminalManager = new TerminalManager(
-          3001,
-          terminalService,
-          aiService,
-          projectService,
-          uiService
-        );
-        console.log('Terminal manager created');
-      } catch (error) {
-        console.error('Failed to create terminal service/manager:', error);
-        throw error;
-      }
-
-      // Initialize services
-      try {
-        console.log('Initializing terminal service...');
-        await terminalService.initialize();
-        console.log('Terminal service initialized');
-        
-        // @ts-ignore - Accessing private property for now
-        terminalService.terminalManager = terminalManager;
-        terminalServiceRef.current = terminalService;
-        console.log('Terminal manager set on service');
-      } catch (error) {
-        console.error('Failed to initialize terminal service:', error);
-        throw error;
-      }
-
-      // Create initial terminal session
-      const session = await terminalManager.createSession({
-        title: 'Terminal',
-        cwd: process.cwd(),
-        profile: 'default',
-        theme: 'default'
-      });
-
-      setActiveSessionId(session.id);
-      setSessions([session.id]);
-
-      // Set up event listeners
-      const onSessionCreated = (newSession: TerminalSession) => {
-        setSessions(prev => [...prev, newSession.id]);
-      };
-
-      const onSessionRemoved = (sessionId: string) => {
-        setSessions(prev => {
-          const newSessions = prev.filter(id => id !== sessionId);
-          if (activeSessionId === sessionId) {
-            setActiveSessionId(newSessions[0] || null);
-          }
-          return newSessions;
-        });
-      };
-
-      terminalManager.on('sessionCreated', onSessionCreated);
-      terminalManager.on('sessionRemoved', onSessionRemoved);
-      terminalManager.on('error', (error: Error) => {
-        console.error('Terminal error:', error);
-      });
-
-      // Cleanup function
-      return () => {
-        terminalManager.removeListener('sessionCreated', onSessionCreated);
-        terminalManager.removeListener('sessionRemoved', onSessionRemoved);
-        if (terminalServiceRef.current) {
-          terminalServiceRef.current.dispose();
-        }
-      };
+      const cwd = process.cwd();
+      term.writeln(`\r${cwd}`);
+      return 0;
     } catch (error) {
-      console.error('Failed to initialize terminal:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      term.writeln(`\x1b[31mError: ${errorMessage}\x1b[0m`);
+      return 1;
     }
-  }, [activeSessionId]);
+  },
+  
+  exit: (args, term, onExit) => {
+    if (onExit) onExit();
+    return 0;
+  }
+};
 
-  // Initialize terminal when component mounts and when visibility changes
+interface TerminalPanelProps {
+  onClose: () => void;
+  isVisible: boolean;
+  initialCwd?: string;
+  port?: number;
+  onTerminalInit?: (term: Terminal) => void;
+}
+
+export const TerminalPanel: React.FC<TerminalPanelProps> = ({
+  onClose, 
+  isVisible, 
+  initialCwd = process.cwd(),
+  port,
+  onTerminalInit
+}) => {
+  const [input, setInput] = useState('');
+  const [cwd, setCwd] = useState(initialCwd);
+  const [commandHistory, setCommandHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [currentInput, setCurrentInput] = useState('');
+  const containerRef = useRef<HTMLDivElement>(null);
+  const terminalRef = useRef<Terminal | null>(null);
+  const fitAddonRef = useRef<FitAddon>(new FitAddon());
+  const [terminalInitialized, setTerminalInitialized] = useState(false);
+  const commandHistoryRef = useRef<string[]>([]);
+  const historyIndexRef = useRef(-1);
+  const isProcessingRef = useRef(false);
+  const cwdRef = useRef(cwd);
+  
+  // Update refs when state changes
   useEffect(() => {
-    if (!isVisible) return;
+    cwdRef.current = cwd;
+  }, [cwd]);
+  
+  // Initialize terminal
+  useEffect(() => {
+    if (!isVisible || !containerRef.current || terminalInitialized) return;
     
-    let cleanup: (() => void) | undefined;
+    const term = new Terminal({
+      cursorBlink: true,
+      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      fontSize: 14,
+      theme: {
+        background: '#1e1e1e',
+        foreground: '#ffffff',
+        cursor: '#ffffff',
+        cursorAccent: '#000000',
+        black: '#000000',
+        red: '#cd3131',
+        green: '#0dbc79',
+        yellow: '#e5e510',
+        blue: '#2472c8',
+        magenta: '#bc3fbc',
+        cyan: '#11a8cd',
+        white: '#e5e5e5',
+        brightBlack: '#666666',
+        brightRed: '#f14c4c',
+        brightGreen: '#23d18b',
+        brightYellow: '#f5f543',
+        brightBlue: '#3b8eea',
+        brightMagenta: '#d670d6',
+        brightCyan: '#29b8db',
+        brightWhite: '#e5e5e5',
+      },
+    });
     
-    const init = async () => {
-      cleanup = await initializeTerminal();
-    };
+    const fitAddon = fitAddonRef.current;
+    const webLinksAddon = new WebLinksAddon();
+    const searchAddon = new SearchAddon();
     
-    init();
+    // Load addons
+    term.loadAddon(fitAddon);
+    term.loadAddon(webLinksAddon);
+    term.loadAddon(searchAddon);
+    term.loadAddon(new Unicode11Addon());
     
-    return () => {
-      if (cleanup) {
-        cleanup();
+    // Try to enable WebGL renderer
+    try {
+      const webglAddon = new WebglAddon();
+      term.loadAddon(webglAddon);
+      // Handle context loss if the method exists
+      if ('onContextLoss' in webglAddon) {
+        (webglAddon as any).onContextLoss(() => {
+          webglAddon.dispose();
+        });
+      }
+    } catch (e) {
+      console.warn('WebGL addon could not be loaded, falling back to canvas renderer');
+    }
+    
+    // Open terminal in container
+    term.open(containerRef.current);
+    fitAddon.fit();
+    
+    // Set initial prompt and welcome message
+    term.writeln('Welcome to LS Editor Terminal');
+    term.writeln('Type \'help\' to see available commands');
+    showPrompt(term);
+    
+    // Handle terminal input
+    const onData = (data: string) => {
+      if (isProcessingRef.current) return;
+      
+      const printable = ![
+        '\r', '\x7f', '\x1b[A', '\x1b[B', '\x1b[D', '\x1b[C',
+        '\x1b[1;5D', '\x1b[1;5C', '\x1b[H', '\x1b[F', '\x03', '\x04', '\x0c', '\t'
+      ].includes(data);
+      
+      // Handle special keys
+      switch (data) {
+        case '\r': { // Enter
+          const input = currentInput;
+          term.write('\r\n');
+          handleCommand(input, term);
+          commandHistoryRef.current = [input, ...commandHistoryRef.current].slice(0, 50);
+          setCommandHistory(commandHistoryRef.current);
+          setCurrentInput('');
+          historyIndexRef.current = -1;
+          setHistoryIndex(-1);
+          break;
+        }
+          
+        case '\x7f': // Backspace
+          if (currentInput.length > 0) {
+            term.write('\b \b');
+            setCurrentInput(prev => prev.slice(0, -1));
+          }
+          break;
+          
+        case '\t': // Tab
+          if (currentInput.trim()) {
+            handleTabCompletion(currentInput, term);
+          }
+          break;
+          
+        case '\x1b[A': // Up arrow
+          if (commandHistoryRef.current.length > 0 && historyIndexRef.current < commandHistoryRef.current.length - 1) {
+            const newIndex = historyIndexRef.current + 1;
+            const historyCommand = commandHistoryRef.current[newIndex];
+            historyIndexRef.current = newIndex;
+            setCurrentInput(historyCommand);
+            term.write('\x1b[2K\r$ ' + historyCommand);
+          }
+          break;
+          
+        case '\x1b[B': // Down arrow
+          if (historyIndexRef.current > 0) {
+            const newIndex = historyIndexRef.current - 1;
+            const historyCommand = commandHistoryRef.current[newIndex];
+            historyIndexRef.current = newIndex;
+            setCurrentInput(historyCommand);
+            term.write('\x1b[2K\r$ ' + historyCommand);
+          } else if (historyIndexRef.current === 0) {
+            historyIndexRef.current = -1;
+            setCurrentInput('');
+            term.write('\x1b[2K\r$ ');
+          }
+          break;
+          
+        case '\x03': // Ctrl+C
+          term.write('^C\r\n');
+          showPrompt(term);
+          break;
+          
+        case '\x0c': // Ctrl+L
+          term.clear();
+          showPrompt(term);
+          break;
+          
+        default:
+          if (printable) {
+            term.write(data);
+            setCurrentInput(prev => prev + data);
+          }
       }
     };
-  }, [isVisible, initializeTerminal]);
-
-  // Handle terminal data input
-  const handleTerminalData = useCallback((data: string) => {
-    if (terminalServiceRef.current && activeSessionId) {
-      terminalServiceRef.current.writeToSession(activeSessionId, data);
+    
+    // Handle window resize
+    const onResize = () => fitAddon.fit();
+    window.addEventListener('resize', onResize);
+    
+    // Set up event listeners
+    term.onData(onData);
+    
+    // Store terminal reference
+    terminalRef.current = term;
+    setTerminalInitialized(true);
+    
+    // Notify parent component
+    if (onTerminalInit) {
+      onTerminalInit(term);
     }
-  }, [activeSessionId]);
+    
+    // Cleanup function
+    return () => {
+      window.removeEventListener('resize', onResize);
+      term.dispose();
+    };
+  }, [isVisible, onTerminalInit]);
+  
+  // Show prompt with current working directory and optional input
+  const showPrompt = useCallback((term: Terminal, currentInput: string = '') => {
+    // Clear the current line and move cursor to start
+    term.write('\x1b[2K\r');
+    
+    // Write prompt with current working directory
+    const prompt = `\x1b[1;32m${cwdRef.current} $\x1b[0m`;
+    term.write(prompt);
+    
+    // Set current input if provided
+    if (currentInput) {
+      term.write(currentInput);
+      setCurrentInput(currentInput);
+    } else {
+      setCurrentInput('');
+    }
+    
+    // Ensure cursor is visible and focused
+    term.focus();
+  }, []);
 
-  // Handle terminal resize
-  const handleTerminalResize = useCallback((cols: number, rows: number) => {
+  // Update refs when state changes
+  useEffect(() => {
+    commandHistoryRef.current = commandHistory;
+    historyIndexRef.current = historyIndex;
+    isProcessingRef.current = isProcessing;
+  }, [commandHistory, historyIndex, isProcessing]);
+  
+  // Handle command execution
+  const handleCommand = useCallback(async (command: string, term: Terminal) => {
+    if (!command.trim()) return 0;
+    
+    setIsProcessing(true);
+    term.write('\r\n');
+    
+    const [cmd, ...args] = command.trim().split(/\s+/);
+    const handler = COMMANDS[cmd.toLowerCase()];
+    
     try {
-      if (!terminalServiceRef.current) {
-        console.warn('Terminal service not available');
+      if (handler) {
+        const exitCode = await handler(args, term, onClose);
+        if (exitCode !== 0) {
+          term.writeln(`\x1b[31mCommand failed with exit code ${exitCode}\x1b[0m`);
+        }
+        return exitCode;
+      } else {
+        // Execute system command using Node's child_process
+        return new Promise<number>((resolve) => {
+          const childProcess = require('child_process').spawn(cmd, args, {
+            cwd: cwdRef.current,
+            shell: true,
+            stdio: ['ignore', 'pipe', 'pipe']
+          });
+          
+          childProcess.stdout.on('data', (data: Buffer) => {
+            term.write(data);
+          });
+          
+          childProcess.stderr.on('data', (data: Buffer) => {
+            term.write(`\x1b[31m${data}\x1b[0m`);
+          });
+          
+          childProcess.on('close', (code: number) => {
+            resolve(code || 0);
+          });
+          
+          childProcess.on('error', (error: Error) => {
+            term.writeln(`\x1b[31mError: ${error.message}\x1b[0m`);
+            resolve(1);
+          });
+        });
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      term.writeln(`\x1b[31mError: ${errorMessage}\x1b[0m`);
+      return 1;
+    } finally {
+      setIsProcessing(false);
+      showPrompt(term, '');
+    }
+  }, [onClose, showPrompt]);
+
+  // Handle tab completion
+  const handleTabCompletion = useCallback(async (input: string, term: Terminal) => {
+    const parts = input.split(/\s+/);
+    const lastPart = parts[parts.length - 1] || '';
+    
+    if (!lastPart) return;
+    
+    try {
+      const dir = lastPart.includes(path.sep) ? path.dirname(lastPart) : '.';
+      const prefix = lastPart.includes(path.sep) ? path.basename(lastPart) : lastPart;
+      
+      const dirPath = path.join(cwdRef.current, dir);
+      const files = await fs.promises.readdir(dirPath);
+      
+      const matches = files.filter(file => file.startsWith(prefix));
+      
+      if (matches.length === 0) {
         return;
+      } else if (matches.length === 1) {
+        const match = matches[0];
+        const fullPath = path.join(dir, match);
+        let isDir = false;
+        
+        try {
+          const stats = await fs.promises.stat(path.join(dirPath, match));
+          isDir = stats.isDirectory();
+        } catch (error) {
+          console.error('Error getting file stats:', error);
+          return;
+        }
+        
+        parts[parts.length - 1] = isDir ? `${fullPath}${path.sep}` : fullPath;
+        const completed = parts.join(' ');
+        
+        setCurrentInput(completed);
+        term.write(match.slice(prefix.length) + (isDir ? path.sep : ''));
+      } else {
+        // Find common prefix
+        let commonPrefix = '';
+        const first = matches[0];
+        const last = matches[matches.length - 1];
+        const minLength = Math.min(first.length, last.length);
+        
+        for (let i = 0; i < minLength; i++) {
+          if (first[i] === last[i]) {
+            commonPrefix += first[i];
+          } else {
+            break;
+          }
+        }
+        
+        if (commonPrefix.length > prefix.length) {
+          parts[parts.length - 1] = lastPart.replace(new RegExp(`${prefix}$`), commonPrefix);
+          const completed = parts.join(' ');
+          setCurrentInput(completed);
+          term.write(commonPrefix.substring(prefix.length));
+        } else {
+          term.writeln('');
+          term.writeln(matches.join('  '));
+          showPrompt(term, input);
+        }
+      }
+    } catch (error) {
+      console.error('Tab completion error:', error);
+      term.writeln(`\x1b[31mError: ${error instanceof Error ? error.message : 'Unknown error'}\x1b[0m`);
+    }
+  }, [showPrompt]);
+  
+
+
+  const COMMANDS: Record<string, (args: string[], term: Terminal, onClose?: () => void) => Promise<number> | number> = {
+    help: async (_, term) => {
+      term.writeln('Available commands:');
+      term.writeln('  help     - Show this help message');
+      term.writeln('  clear    - Clear the terminal');
+      term.writeln('  ls       - List directory contents');
+      term.writeln('  cd <dir> - Change directory');
+      term.writeln('  pwd      - Print working directory');
+      term.writeln('  exit     - Close the terminal');
+      return 0;
+    },
+    clear: (_, term) => {
+      term.clear();
+      return 0;
+    },
+    ls: async (args, term) => {
+      try {
+        const dir = args[0] || '.';
+        const files = await fs.promises.readdir(path.join(cwdRef.current, dir));
+        term.writeln(files.join('  '));
+        return 0;
+      } catch (error) {
+        term.writeln(`\x1b[31mError: ${error instanceof Error ? error.message : 'Unknown error'}\x1b[0m`);
+        return 1;
+      }
+    },
+    cd: async (args, term) => {
+      if (!args[0]) {
+        term.writeln('Usage: cd <directory>');
+        return 1;
       }
       
-      if (!activeSessionId) {
-        console.warn('No active terminal session');
-        return;
+      try {
+        const newDir = path.resolve(cwdRef.current, args[0]);
+        const stats = await fs.promises.stat(newDir);
+        
+        if (!stats.isDirectory()) {
+          term.writeln(`\x1b[31mError: ${newDir} is not a directory\x1b[0m`);
+          return 1;
+        }
+        
+        setCwd(newDir);
+        return 0;
+      } catch (error) {
+        term.writeln(`\x1b[31mError: ${error instanceof Error ? error.message : 'Unknown error'}\x1b[0m`);
+        return 1;
       }
-
-      // @ts-ignore - Accessing private property
-      const terminalManager = terminalServiceRef.current.terminalManager;
-      if (!terminalManager) {
-        console.warn('Terminal manager not available');
-        return;
-      }
-
-      console.log(`Resizing terminal to ${cols}x${rows}`);
-      terminalManager.resizeSession(activeSessionId, cols, rows).catch(error => {
-        console.error('Failed to resize terminal:', error);
-      });
-    } catch (error) {
-      console.error('Error in handleTerminalResize:', error);
+    },
+    pwd: (_, term) => {
+      term.writeln(cwdRef.current);
+      return 0;
+    },
+    exit: (_, __, onClose) => {
+      onClose?.();
+      return 0;
     }
-  }, [activeSessionId]);
+  };
 
   if (!isVisible) return null;
 
-  // Prevent click events from bubbling up
-  const handlePanelClick = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-  }, []);
-
   return (
-    <div 
-      className="terminal-panel" 
-      onClick={handlePanelClick}
-      style={{
-        width: '100%',
-        height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-        background: 'transparent',
-        opacity: isVisible ? 1 : 0,
-        transition: 'opacity 0.2s ease-in-out',
-        position: 'relative',
-        zIndex: 1,
-      }}>
-      {/* Terminal panel header with close button */}
-      <div 
-        style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          justifyContent: 'space-between', 
-          padding: '6px 12px', 
-          backgroundColor: '#252526', 
-          borderBottom: '1px solid #333',
-          height: '32px',
-          boxSizing: 'border-box',
-          position: 'relative',
-          zIndex: 2,
-        }}
-        onClick={handlePanelClick}>
-        <div style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          gap: '8px',
-          fontSize: '12px',
-          fontWeight: 500,
-          color: '#cccccc'
-        }}>
-          <span>Terminal</span>
-        </div>
-        <div style={{ display: 'flex', gap: '4px' }}>
-          <button 
-            onClick={onClose} 
-            style={{ 
-              background: 'none', 
-              border: 'none', 
-              color: '#cccccc', 
-              fontSize: '16px', 
-              cursor: 'pointer', 
-              padding: '4px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: '24px',
-              height: '24px',
-              borderRadius: '4px',
-              transition: 'background-color 0.2s, color 0.2s'
-            }} 
-            onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#333', e.currentTarget.style.color = '#ffffff')}
-            onMouseOut={(e) => (e.currentTarget.style.backgroundColor = 'transparent', e.currentTarget.style.color = '#cccccc')}
-            title="Close Terminal"
-          >
-            ×
-          </button>
-        </div>
+    <div className="terminal-panel">
+      <div className="terminal-header">
+        <span>Terminal</span>
+        <button className="terminal-close" onClick={onClose}>&times;</button>
       </div>
-      {/* Container for the terminal UI */}
       <div 
         ref={containerRef} 
-        className="terminal-container" 
-        style={{ 
-          flex: 1, 
-          overflow: 'hidden',
+        className="terminal-container"
+        style={{
+          width: '100%',
+          height: '100%',
           backgroundColor: '#1e1e1e',
           padding: '8px',
-          boxSizing: 'border-box'
+          boxSizing: 'border-box',
+          overflow: 'hidden',
         }}
-      >
-        <Terminal 
-          onData={handleTerminalData}
-          onResize={handleTerminalResize}
-        />
-      </div>
+      />
     </div>
   );
 };
+
+// Export the component
+export default TerminalPanel;
