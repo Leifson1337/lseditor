@@ -57,8 +57,8 @@ cd open-cursor
 # 2. Abhängigkeiten installieren
 npm install
 
-# 3. Lokalen Dev-Server starten
-npm run dev
+# 3. LSEditor Starten
+npm start
 ````
 English:
 
@@ -121,5 +121,5 @@ cd open-cursor
 # 2. install dependencies
 npm install
 
-# 3. start local dev server
-npm run dev
+# 3. start LSEditor
+npm start
