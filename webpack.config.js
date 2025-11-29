@@ -57,7 +57,7 @@ const mainConfig = {
 
 const rendererConfig = {
   ...commonConfig,
-  target: 'electron-renderer',
+  target: 'web',
   entry: ['./src/global-shim.js', './src/index.tsx'],
   output: {
     path: path.resolve(__dirname, 'dist'),

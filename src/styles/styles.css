@@ -1,6 +1,6 @@
 /* Import all component styles */
-@import './Editor.css';
-@import './Terminal.css';
+@import './editor.css';
+@import './terminal.css';
 
 /* Global styles */
 :root {

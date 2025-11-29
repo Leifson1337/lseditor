@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import '../styles/Editor.css';
@@ -17,6 +17,8 @@ export const Editor: React.FC<EditorProps> = ({ filePath, content, isLoading, on
   const [language, setLanguage] = useState<string>('plaintext');
   // State for the current editor value
   const [value, setValue] = useState<string>(content);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const gutterRef = useRef<HTMLDivElement | null>(null);
 
   // Update editor value when content prop changes
   useEffect(() => {
@@ -54,6 +56,19 @@ export const Editor: React.FC<EditorProps> = ({ filePath, content, isLoading, on
     if (onChange) onChange(e.target.value);
   };
 
+  const lineCount = useMemo(() => Math.max(1, value.split(/\r?\n/).length), [value]);
+  const lineNumbers = useMemo(() => Array.from({ length: lineCount }, (_, idx) => idx + 1), [lineCount]);
+
+  const syncScroll = useCallback(() => {
+    if (gutterRef.current && textareaRef.current) {
+      gutterRef.current.scrollTop = textareaRef.current.scrollTop;
+    }
+  }, []);
+
+  useEffect(() => {
+    syncScroll();
+  }, [value, syncScroll]);
+
   return (
     <div className="editor-root">
       <div className="editor-header">
@@ -65,25 +80,23 @@ export const Editor: React.FC<EditorProps> = ({ filePath, content, isLoading, on
           // Show loading indicator while content is loading
           <div className="editor-loading">Loading...</div>
         ) : (
-          // Main editable textarea for code/content
-          <textarea
-            value={value}
-            onChange={handleChange}
-            className="editor-textarea"
-            style={{
-              width: '100%',
-              height: '100%',
-              fontSize: '14px',
-              fontFamily: 'Consolas, Monaco, "Andale Mono", "Ubuntu Mono", monospace',
-              background: '#1e1e1e',
-              color: '#d4d4d4',
-              border: 'none',
-              resize: 'none',
-              outline: 'none',
-              padding: '1rem',
-              boxSizing: 'border-box',
-            }}
-          />
+          <div className="editor-body-with-gutter">
+            <div className="editor-line-numbers" ref={gutterRef} aria-hidden="true">
+              {lineNumbers.map(number => (
+                <span key={`line-${number}`} className="editor-line-number">
+                  {number}
+                </span>
+              ))}
+            </div>
+            <textarea
+              ref={textareaRef}
+              value={value}
+              onChange={handleChange}
+              onScroll={syncScroll}
+              className="editor-textarea"
+              spellCheck={false}
+            />
+          </div>
         )}
         {/* Syntax preview (hidden by default, can be enabled if needed) */}
         <div className="editor-syntax-preview" style={{ display: 'none' }}>

@@ -91,7 +91,8 @@
 }
 
 .setting-item select,
-.setting-item input[type="range"] {
+.setting-item input[type="range"],
+.setting-item input[type="text"] {
   width: 100%;
   padding: 6px 8px;
   border: 1px solid var(--border-color);
@@ -102,7 +103,8 @@
 }
 
 .setting-item select:focus,
-.setting-item input[type="range"]:focus {
+.setting-item input[type="range"]:focus,
+.setting-item input[type="text"]:focus {
   outline: none;
   border-color: var(--accent-color);
 }
@@ -131,4 +133,30 @@
   border-radius: 50%;
   cursor: pointer;
   border: none;
-} 
+}
+
+.setting-inline {
+  display: flex;
+  gap: 8px;
+}
+
+.setting-inline button {
+  padding: 6px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: var(--hover-color);
+  color: var(--text-color);
+  cursor: pointer;
+}
+
+.setting-inline button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.settings-hint {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted-color, #9ca3af);
+}

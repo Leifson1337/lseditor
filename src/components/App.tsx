@@ -1,684 +1,600 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import Layout from './Layout';
+import { store, StoreSchema } from '../store/store';
 import { ProjectService } from '../services/ProjectService';
-import { UIService } from '../services/UIService';
-import { AIService } from '../services/AIService';
-import { TerminalService } from '../services/TerminalService';
-import { TerminalServer } from '../server/terminalServer';
 import { TerminalManager } from '../services/TerminalManager';
+import { TerminalService } from '../services/TerminalService';
+import { AIService } from '../services/AIService';
+import { UIService } from '../services/UIService';
+import { TerminalServer } from '../server/terminalServer';
+import '../styles/App.css';
+import { Terminal } from './Terminal';
+import { TerminalContainer } from './TerminalContainer';
+import { AIConfig } from '../types/AITypes';
+import { FileNode } from '../types/FileNode';
+import { EditorLayout } from './EditorLayout';
+import { ThemeProvider } from '../contexts/ThemeContext';
+import Titlebar from './Titlebar';
+import path from 'path';
 
-// Define types
-export interface FileNode {
-  id: string;
-  name: string;
-  type: 'file' | 'directory';
-  path: string;
-  children?: FileNode[];
-  content?: string;
-}
-
-export interface Project {
-  id: string;
-  name: string;
-  path: string;
-  type: 'project';
-  children?: FileNode[];
-}
-
-// Define the store interface
-export interface IStore<T> {
-  get: <K extends keyof T>(key: K) => T[K];
-  set: <K extends keyof T>(key: K, value: T[K]) => void;
-  delete: (key: keyof T) => void;
-  clear: () => void;
-  has: (key: keyof T) => boolean;
-  reset: (...keys: (keyof T)[]) => void;
-  store: T;
-  path: string;
-  openInEditor: () => void;
-}
-
-// Create a store instance
-const createStore = <T extends Record<string, any>>(options: any): IStore<T> => {
-  const store: any = {};
-
-  store.get = (key: string) => {
-    const value = localStorage.getItem(`store.${String(key)}`);
-    return value ? JSON.parse(value) : undefined;
-  };
-
-  store.set = (key: string, value: any) => {
-    localStorage.setItem(`store.${String(key)}`, JSON.stringify(value));
-  };
-
-  store.delete = (key: string) => {
-    localStorage.removeItem(`store.${String(key)}`);
-  };
-
-  store.clear = () => {
-    Object.keys(localStorage)
-      .filter(key => key.startsWith('store.'))
-      .forEach(key => localStorage.removeItem(key));
-  };
-
-  store.has = (key: string) => {
-    return localStorage.getItem(`store.${String(key)}`) !== null;
-  };
-
-  store.reset = (...keys: string[]) => {
-    if (keys.length === 0) {
-      store.clear();
-    } else {
-      keys.forEach(key => store.delete(key));
-    }
-  };
-
-  // Initialize with defaults
-  if (options?.defaults) {
-    Object.entries(options.defaults).forEach(([key, value]) => {
-      if (!store.has(key)) {
-        store.set(key, value);
-      }
-    });
-  }
-
-  store.store = new Proxy({} as T, {
-    get(_, prop) {
-      return store.get(prop);
-    },
-    set(_, prop, value) {
-      store.set(prop, value);
-      return true;
-    },
-    deleteProperty(_, prop) {
-      store.delete(prop);
-      return true;
-    },
-    ownKeys() {
-      return Object.keys(localStorage)
-        .filter(key => key.startsWith('store.'))
-        .map(key => key.replace('store.', ''));
-    },
-    getOwnPropertyDescriptor() {
-      return {
-        enumerable: true,
-        configurable: true
-      };
-    }
-  });
-
-  store.path = '';
-  store.openInEditor = () => {};
-
-  return store as IStore<T>;
-};
-
-// Define the store schema
-export interface IStoreSchema {
-  lastProjectPath?: string;
-  recentProjects: string[];
-  recentFiles: Array<{ path: string; timestamp: number }>;
-  theme: 'light' | 'dark' | 'system';
-  fontSize: number;
-  fontFamily: string;
-  terminal: {
+// Extend StoreSchema to include all required properties for the editor and terminal
+declare module '../store/store' {
+  interface StoreSchema {
+    theme: string;
     fontSize: number;
     fontFamily: string;
-    theme: string;
-  };
-  editor: {
-    lineNumbers: 'on' | 'off' | 'relative';
-    minimap: { enabled: boolean };
-    wordWrap: 'on' | 'off' | 'wordWrapColumn' | 'bounded';
-  };
-  ai: {
-    model: string;
-    temperature: number;
-    maxTokens: number;
-  };
+    terminal: {
+      fontSize: number;
+      fontFamily: string;
+      port: number;
+      defaultProfile: string;
+    };
+    editor: {
+      fontSize: number;
+      fontFamily: string;
+      wordWrap: boolean;
+      minimap: boolean;
+      lineNumbers: boolean;
+      content?: string;
+    };
+    lastProjectPath?: string;
+    recentProjects?: string[];
+  }
 }
 
-// Initialize the store
-const store = createStore<IStoreSchema>({
-  defaults: {
-    recentProjects: [],
-    recentFiles: [],
-    theme: 'system',
-    fontSize: 14,
-    fontFamily: '"Fira Code", "Consolas", "Monaco", monospace',
-    terminal: {
-      fontSize: 14,
-      fontFamily: '"Fira Code", "Consolas", "Monaco", monospace',
-      theme: 'default'
-    },
-    editor: {
-      lineNumbers: 'on',
-      minimap: { enabled: true },
-      wordWrap: 'on'
-    },
-    ai: {
-      model: 'gpt-4',
-      temperature: 0.7,
-      maxTokens: 2000
-    }
-  }
-});
-
-// Default AI configuration
-const defaultAIConfig = {
-  useLocalModel: false,
-  model: 'gpt-4',
-  temperature: 0.7,
-  maxTokens: 2000,
-  contextWindow: 4096,
-  stopSequences: ['\n\n', '```'],
-  topP: 1,
-  endpoint: 'https://api.openai.com/v1/chat/completions'
-};
-
-// Import components with proper types
-import { FileExplorer } from './FileExplorer';
-import { Editor } from './Editor';
-import { Terminal } from './Terminal';
-import { Tabs } from './Tabs';
-import { ProjectDialog } from './ProjectDialog';
-import { ThemeProvider } from './ThemeProvider';
-import { Layout } from './Layout';
-
-// Import styles
-import './App.css';
-
-// Extend Window interface to include Electron API
+// Extend the Electron interface for custom IPC handlers and window controls
 declare global {
   interface Window {
-    electron: {
+    electron?: {
       ipcRenderer: {
         invoke: (channel: string, ...args: any[]) => Promise<any>;
-        on: (channel: string, listener: (...args: any[]) => void) => void;
+        send: (channel: string, ...args: any[]) => void;
+        on: (channel: string, listener: (event: any, ...args: any[]) => void) => void;
         removeListener: (channel: string, listener: (...args: any[]) => void) => void;
       };
       windowControls: {
         minimize: () => void;
         maximize: () => void;
+        unmaximize: () => void;
         close: () => void;
+        isMaximized: () => Promise<boolean>;
+        onMaximize: (callback: () => void) => void;
+        onUnmaximize: (callback: () => void) => void;
+        removeMaximizeListener: (callback: () => void) => void;
+        removeUnmaximizeListener: (callback: () => void) => void;
       };
     };
-  }
-}
-
-// Define store schema
-interface StoreSchema {
-  lastProjectPath?: string;
-  recentProjects: string[];
-  recentFiles: Array<{ path: string; timestamp: number }>;
-  theme: 'light' | 'dark' | 'system';
-  fontSize: number;
-  fontFamily: string;
-  terminal: {
-    fontSize: number;
-    fontFamily: string;
-    theme: string;
-  };
-  editor: {
-    lineNumbers: 'on' | 'off' | 'relative';
-    minimap: { enabled: boolean };
-    wordWrap: 'on' | 'off' | 'wordWrapColumn' | 'bounded';
-  };
-  ai: {
-    model: string;
-    temperature: number;
-    maxTokens: number;
-  };
-}
-
-// Initialize store
-const store = new Store<StoreSchema>({
-  defaults: {
-    recentProjects: [],
-    recentFiles: [],
-    theme: 'system',
-    fontSize: 14,
-    fontFamily: '"Fira Code", "Consolas", "Monaco", monospace',
-    terminal: {
-      fontSize: 14,
-      fontFamily: '"Fira Code", "Consolas", "Monaco", monospace',
-      theme: 'default',
-    },
-    editor: {
-      lineNumbers: 'on',
-      minimap: { enabled: true },
-      wordWrap: 'on',
-    },
-    ai: {
-      model: 'gpt-4',
-      temperature: 0.7,
-      maxTokens: 2048,
-    },
-  },
-});
-
-// Error Boundary Component
-class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
-  constructor(props: { children: React.ReactNode }) {
-    super(props);
-    this.state = { hasError: false };
-  }
-
-  static getDerivedStateFromError() {
-    return { hasError: true };
-  }
-
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error('Error caught by boundary:', error, errorInfo);
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div className="error-boundary">
-          <h2>Something went wrong</h2>
-          <button onClick={() => window.location.reload()}>Reload App</button>
-        </div>
-      );
-    }
-
-    return this.props.children;
   }
 }
 
 const App: React.FC = () => {
-  // State management
-  const [fileStructure, setFileStructure] = useState<FileNode[]>([]);
-  const [openFiles, setOpenFiles] = useState<Array<{ path: string; content: string }>>([]);
-  const [activeFile, setActiveFile] = useState<string>('');
+  // State for editor content
   const [editorContent, setEditorContent] = useState<string>('');
-  const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(true);
-  const [terminalManager, setTerminalManager] = useState<TerminalManager | null>(null);
+  // State for currently open files
+  const [openFiles, setOpenFiles] = useState<string[]>([]);
+  // State for the active (focused) file
+  const [activeFile, setActiveFile] = useState<string>('');
+  // State for the current project path
   const [projectPath, setProjectPath] = useState<string>('');
+  // State to show/hide the project selection dialog
   const [showProjectDialog, setShowProjectDialog] = useState<boolean>(true);
-  const [recentProjects, setRecentProjects] = useState<string[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
+  // State for the file structure tree
+  const [fileStructure, setFileStructure] = useState<FileNode[]>([]);
+  // State for the terminal port
+  const [terminalPort, setTerminalPort] = useState<number>(3001);
+  // State to show/hide the terminal panel
+  const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(false);
+  // State for the terminal manager instance
+  const [terminalManager, setTerminalManager] = useState<TerminalManager | null>(null);
+  // State to signal app initialization
+  const [isInitialized, setIsInitialized] = useState<boolean>(false);
+  // State for path validity
+  const [isValidPath, setIsValidPath] = useState<boolean>(false);
+  const [pathFeedback, setPathFeedback] = useState<{ text: string; tone: 'info' | 'success' | 'error' } | null>(null);
+  // State to prevent multiple dialogs
+  const [isBrowseDialogOpen, setIsBrowseDialogOpen] = useState<boolean>(false);
+  // State for recent projects list
+  const [recentProjects, setRecentProjects] = useState<string[]>(() => {
+    return store.get('recentProjects') || [];
+  });
+  // State for showing settings
+  const [showSettings, setShowSettings] = useState(false);
+  const projectServiceRef = useRef<ProjectService | null>(null);
 
-  // Initialize services with proper types
-  const projectService = useMemo(() => new ProjectService(), []);
-  const uiService = useMemo(() => new UIService(), []);
-  const aiService = useMemo(() => new AIService(), []);
-  const terminalService = useMemo(() => new TerminalService(), []);
-  const terminalServer = useMemo(() => new TerminalServer(), []);
-
-  // Load recent projects from store
-  useEffect(() => {
-    const loadRecentProjects = async () => {
-      try {
-        const recent = store.get('recentProjects');
-        setRecentProjects(recent || []);
-      } catch (err) {
-        console.error('Error loading recent projects:', err);
-      }
-    };
-
-    loadRecentProjects();
-  }, []);
-
-  // Reset error state when project path changes
-  useEffect(() => {
-    if (projectPath) {
-      setError(null);
+  const refreshFileStructure = useCallback(async () => {
+    if (!projectServiceRef.current || !projectPath) return;
+    try {
+      const structure = await projectServiceRef.current.getFileStructure(projectPath);
+      setFileStructure(structure);
+    } catch (error) {
+      console.error('Failed to refresh file structure:', error);
     }
   }, [projectPath]);
 
-  // Initialize terminal when project is loaded
   useEffect(() => {
-    if (projectPath) {
-      const initTerminal = async () => {
-        try {
-          if (terminalManager) {
-            terminalManager.dispose();
-          }
+    console.log('App component mounted');
+    // Load initial settings from store
+    const theme = store.get('theme') || 'dark';
+    const fontSize = store.get('fontSize') || 14;
+    const fontFamily = store.get('fontFamily') || 'Consolas, monospace';
+    const savedProjectPath = store.get('lastProjectPath');
+    const editor = store.get('editor') || { wordWrap: true, minimap: true, lineNumbers: true };
 
-          await terminalServer.start();
-          const manager = new TerminalManager(terminalServer);
-          setTerminalManager(manager);
-        } catch (err) {
-          console.error('Failed to initialize terminal:', err);
-          setError('Failed to initialize terminal');
-        }
-      };
+    // Apply theme to root element
+    document.documentElement.setAttribute('data-theme', theme);
+    // Apply font settings to root element
+    document.documentElement.style.fontSize = `${fontSize}px`;
+    document.documentElement.style.fontFamily = fontFamily;
 
-      initTerminal();
-
-      return () => {
-        if (terminalManager) {
-          terminalManager.dispose();
-        }
-        terminalServer.stop();
-      };
+    // Load initial editor content from editor store
+    if (editor?.content) {
+      setEditorContent(editor.content);
     }
-  }, [projectPath, terminalServer, terminalManager]);
 
-  // Handle file close with confirmation for unsaved changes
-  const handleFileClose = useCallback(async (filePath: string) => {
-    try {
-      const file = openFiles.find(f => f.path === filePath);
-
-      if (file) {
-        // Check for unsaved changes
-        const originalContent = await window.electron.ipcRenderer.invoke('file:read', filePath);
-
-        if (file.content !== originalContent) {
-          // Show confirmation dialog
-          const shouldClose = window.confirm('You have unsaved changes. Close anyway?');
-          if (!shouldClose) return;
-        }
-
-        setOpenFiles(prev => {
-          const newFiles = prev.filter(f => f.path !== filePath);
-
-          // If the closed file was active, set a new active file
-          if (activeFile === filePath) {
-            const currentIndex = prev.findIndex(f => f.path === filePath);
-            const newActiveFile = newFiles[currentIndex] || newFiles[newFiles.length - 1];
-
-            if (newActiveFile) {
-              setActiveFile(newActiveFile.path);
-              setEditorContent(newActiveFile.content);
-            } else {
-              setActiveFile('');
-              setEditorContent('');
-            }
-          }
-
-          return newFiles;
-        });
-      }
-    } catch (error) {
-      console.error('Error checking file changes:', error);
-      // Continue with closing the file if there's an error checking changes
-      setOpenFiles(prev => prev.filter(f => f.path !== filePath));
-      if (activeFile === filePath) {
-        setActiveFile('');
-        setEditorContent('');
-      }
+    // If a project path was saved, pre-fill it in the input field
+    if (savedProjectPath) {
+      setProjectPath(savedProjectPath);
     }
-  }, [activeFile, openFiles]);
 
-  // Create new project
-  const createNewProject = useCallback(async (projectData: { name: string; path: string }) => {
-    try {
-      setIsLoading(true);
-
-      // Create project directory and structure
-      await window.electron.ipcRenderer.invoke('fs:ensureDir', projectData.path);
-
-      // Initialize project
-      const project = await projectService.createProject(projectData.name, projectData.path);
-      setProjectPath(project.path);
-      setFileStructure(project.children || []);
-      setShowProjectDialog(false);
-
-      // Clear any open files
-      setOpenFiles([]);
-      setActiveFile('');
-      setEditorContent('');
-
-      // Update recent projects
-      setRecentProjects(prev => {
-        const newRecent = [project.path, ...prev.filter(p => p !== project.path)].slice(0, 5);
-        store.set('recentProjects', newRecent);
-        return newRecent;
-      });
-
-      // Initialize terminal
-      if (terminalServer) {
-        try {
-          await terminalServer.start();
-          const manager = new TerminalManager(terminalServer);
-          setTerminalManager(manager);
-        } catch (error) {
-          console.error('Failed to initialize terminal:', error);
-          setError('Project created, but failed to initialize terminal');
-        }
-      }
-    } catch (error) {
-      console.error('Error creating project:', error);
-      setError(error instanceof Error ? error.message : 'Failed to create project');
-    } finally {
-      setIsLoading(false);
-    }
-  }, [projectService, terminalServer]);
-
-  // Load file content
-  const loadFileContent = useCallback(async (filePath: string) => {
-    if (!filePath) return;
-
-    try {
-      setIsLoading(true);
-      const content = await window.electron.ipcRenderer.invoke('file:read', filePath);
-      setEditorContent(content);
-      setActiveFile(filePath);
-
-      // Add to open files if not already open
-      setOpenFiles(prev => {
-        if (!prev.some(file => file.path === filePath)) {
-          return [...prev, { path: filePath, content }];
-        }
-        return prev.map(file =>
-          file.path === filePath ? { ...file, content } : file
-        );
-      });
-
-      // Save file to recent files in store
-      const recentFiles = store.get('recentFiles') || [];
-      const updatedRecentFiles = [
-        { path: filePath, timestamp: Date.now() },
-        ...recentFiles.filter((f: { path: string }) => f.path !== filePath).slice(0, 9)
-      ];
-      store.set('recentFiles', updatedRecentFiles);
-    } catch (err) {
-      console.error('Error loading file:', err);
-      setError('Failed to open file');
-    } finally {
-      setIsLoading(false);
-    }
+    // Set isInitialized to true when initialization is complete
+    setIsInitialized(true);
+    console.log('App initialization complete');
   }, []);
 
-  // Handle editor content change with debounce for auto-save
-  const handleEditorChange = useCallback((value: string) => {
-    setEditorContent(value);
-
-    // Update the content in open files
-    setOpenFiles(prev =>
-      prev.map(file =>
-        file.path === activeFile ? { ...file, content: value } : file
-      )
-    );
-
-    // Auto-save if file is open
-    if (activeFile) {
-      // Use setTimeout to debounce the save operation
-      if ((window as any).saveTimeout) {
-        clearTimeout((window as any).saveTimeout);
-      }
-
-      (window as any).saveTimeout = setTimeout(() => {
-        window.electron.ipcRenderer.send('file:save', {
-          path: activeFile,
-          content: value
-        }).catch((err: Error) => {
-          console.error('Error auto-saving file:', err);
-        });
-      }, 1000); // 1 second debounce
-    }
-  }, [activeFile]);
-
-  // Handle keyboard shortcuts
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Handle Cmd/Ctrl + O to open project
-      if ((e.metaKey || e.ctrlKey) && e.key === 'o') {
-        e.preventDefault();
-        setShowProjectDialog(true);
+    const handler = () => {
+      refreshFileStructure();
+    };
+    window.addEventListener('explorer:refresh', handler);
+    return () => window.removeEventListener('explorer:refresh', handler);
+  }, [refreshFileStructure]);
+
+  const promptForName = useCallback(async (title: string, defaultValue: string) => {
+    if (window.electron?.ipcRenderer) {
+      const response = await window.electron.ipcRenderer.invoke('dialog:inputBox', {
+        title,
+        value: defaultValue
+      });
+      if (response) {
+        return String(response).trim();
       }
-      // Handle Cmd/Ctrl + , to open settings
-      else if ((e.metaKey || e.ctrlKey) && e.key === ',') {
-        e.preventDefault();
-        // TODO: Open settings dialog
+    }
+    const fallback = window.prompt(title, defaultValue);
+    return fallback ? fallback.trim() : '';
+  }, []);
+
+  const createNewTextFile = useCallback(async () => {
+    if (!projectPath) {
+      alert('Open a project first.');
+      return;
+    }
+    const name = await promptForName('New file name', 'untitled.txt');
+    if (!name) return;
+    const target = path.isAbsolute(name) ? name : path.join(projectPath, name);
+    try {
+      await window.electron?.ipcRenderer?.invoke('fs:writeFile', target, '');
+      window.dispatchEvent(new Event('explorer:refresh'));
+      window.dispatchEvent(new CustomEvent('editor:openFile', { detail: target }));
+    } catch (error) {
+      alert(`Failed to create file: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }, [projectPath, promptForName]);
+
+  const createNewFolder = useCallback(async () => {
+    if (!projectPath) {
+      alert('Open a project first.');
+      return;
+    }
+    const name = await promptForName('New folder name', 'New Folder');
+    if (!name) return;
+    const target = path.isAbsolute(name) ? name : path.join(projectPath, name);
+    try {
+      await window.electron?.ipcRenderer?.invoke('fs:createDirectory', target);
+      window.dispatchEvent(new Event('explorer:refresh'));
+    } catch (error) {
+      alert(`Failed to create folder: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }, [projectPath, promptForName]);
+
+  const handleFileAction = useCallback(async (actionId: string, data?: any) => {
+    switch (actionId) {
+      case 'newTextFile':
+        await createNewTextFile();
+        break;
+      case 'newFolder':
+        await createNewFolder();
+        break;
+      case 'openRecent':
+        if (data?.path) {
+          openProject(data.path);
+        }
+        break;
+      case 'save':
+      case 'saveAll':
+      case 'closeEditor':
+        window.dispatchEvent(new CustomEvent('editor:menu', { detail: { menu: 'File', actionId, data } }));
+        break;
+      default:
+        window.dispatchEvent(new CustomEvent('editor:menu', { detail: { menu: 'File', actionId, data } }));
+        break;
+    }
+  }, [createNewTextFile, createNewFolder]);
+
+  const handleEditAction = useCallback((actionId: string, data?: any) => {
+    window.dispatchEvent(new CustomEvent('editor:menu', { detail: { menu: 'Edit', actionId, data } }));
+  }, []);
+
+  const handleGenericMenuAction = useCallback((menu: string, actionId: string, data?: any) => {
+    if (menu === 'View' && ['explorer', 'search', 'extensions', 'run', 'terminal'].includes(actionId)) {
+      const target = actionId === 'run' ? 'terminal' : actionId;
+      window.dispatchEvent(new CustomEvent('sidebar:switch', { detail: target }));
+    }
+    window.dispatchEvent(new CustomEvent('editor:menu', { detail: { menu, actionId, data } }));
+  }, []);
+
+  const handleHelpAction = useCallback(async (actionId: string) => {
+    if (actionId === 'about') {
+      try {
+        await window.electron?.ipcRenderer?.invoke('app:openAbout');
+      } catch (error) {
+        console.error('Failed to open about window', error);
       }
-      // Handle Cmd/Ctrl + S to save file
-      else if ((e.metaKey || e.ctrlKey) && e.key === 's') {
-        e.preventDefault();
-        if (activeFile && editorContent !== undefined) {
-          window.electron.ipcRenderer.send('file:save', {
-            path: activeFile,
-            content: editorContent
-          }).catch(err => {
-            console.error('Error saving file:', err);
-            setError('Failed to save file');
+      return;
+    }
+    window.dispatchEvent(new CustomEvent('editor:menu', { detail: { menu: 'Help', actionId } }));
+  }, []);
+
+  // Open a project at the given path
+  const openProject = async (path: string) => {
+    if (!path) return;
+    try {
+      // Check if the provided path is valid
+      const isValid = await window.electron?.ipcRenderer.invoke('fs:checkPathExists', path);
+      if (!isValid) {
+        alert('The specified path does not exist or is not a directory.');
+        return;
+      }
+    } catch (error) {
+      console.error('Error checking path validity:', error);
+      alert('Error checking path validity.');
+      return;
+    }
+
+    console.log('Opening project:', path);
+    setProjectPath(path);
+    setShowProjectDialog(false);
+    store.set('lastProjectPath', path);
+
+    // Update recent projects list
+    let updated = [path, ...recentProjects.filter(p => p !== path)];
+    if (updated.length > 8) updated = updated.slice(0, 8);
+    setRecentProjects(updated);
+    store.set('recentProjects', updated);
+
+    try {
+      // Initialize core services for the project
+      const projectService = new ProjectService(path);
+      projectServiceRef.current = projectService;
+      const uiService = new UIService();
+      const aiService = AIService.getInstance({
+        useLocalModel: false,
+        model: 'gpt-3.5-turbo',
+        temperature: 0.7,
+        maxTokens: 2048,
+        contextWindow: 4096,
+        stopSequences: ['\n\n', '```'],
+        topP: 1,
+        openAIConfig: {
+          apiKey: process.env.OPENAI_API_KEY || '',
+          model: 'gpt-3.5-turbo',
+          temperature: 0.7,
+          maxTokens: 2048
+        }
+      });
+
+      // Initialize terminal server and services
+      const terminalServer = new TerminalServer(terminalPort);
+      const terminalService = TerminalService.getInstance(
+        null,
+        aiService,
+        projectService,
+        uiService,
+        terminalServer,
+        store
+      );
+      // Initialize terminal manager
+      const manager = new TerminalManager(
+        terminalPort,
+        terminalService,
+        aiService,
+        projectService,
+        uiService
+      );
+      setTerminalManager(manager);
+
+      // Load file structure for the project
+      try {
+        const structure = await projectService.getFileStructure(path);
+        console.log('File structure loaded:', structure);
+        setFileStructure(structure);
+      } catch (error) {
+        console.error('Error loading file structure:', error);
+        // Set a default empty structure if loading fails
+        setFileStructure([]);
+      }
+    } catch (error) {
+      console.error('Error initializing project:', error);
+      // Show error in UI
+      alert(`Failed to open project: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
+  // Open the project selection dialog
+  const openProjectDialog = async () => {
+    if (isBrowseDialogOpen) return;
+    setIsBrowseDialogOpen(true);
+    try {
+      const dir = await window.electron?.ipcRenderer.invoke('dialog:openDirectory');
+      if (dir) {
+        setProjectPath(dir);
+        setIsValidPath(true);
+        setPathFeedback({ text: 'Folder selected. Click "Open" to continue.', tone: 'info' });
+      }
+    } finally {
+      setIsBrowseDialogOpen(false);
+    }
+  };
+
+  // Create a new project with a selected directory and name
+  const createNewProject = async () => {
+    if (isBrowseDialogOpen) return;
+    setIsBrowseDialogOpen(true);
+    try {
+      // Dialog to select directory for new project
+      const dir = await window.electron?.ipcRenderer.invoke('dialog:openDirectory', {
+        title: 'Select directory for new project'
+      });
+      if (!dir) return;
+
+      // Dialog to enter project name
+      const projectName = await window.electron?.ipcRenderer.invoke('dialog:inputBox', {
+        title: 'New Project',
+        prompt: 'Please enter a name for the new project:',
+        defaultValue: 'MyProject'
+      });
+      if (!projectName) return;
+
+      // Construct new project path
+      const newProjectPath = `${dir}/${projectName}`;
+      try {
+        // Check if the directory already exists
+        const exists = await window.electron?.ipcRenderer.invoke('fs:checkPathExists', newProjectPath);
+        if (exists) {
+          const overwrite = await window.electron?.ipcRenderer.invoke('dialog:showMessageBox', {
+            type: 'question',
+            buttons: ['Cancel', 'Overwrite'],
+            title: 'Directory already exists',
+            message: `The directory "${newProjectPath}" already exists. Do you want to overwrite it?`
           });
+          if (!overwrite || overwrite.response !== 1) return;
         }
+        // Create directory and basic structure
+        await window.electron?.ipcRenderer.invoke('fs:createDirectory', newProjectPath);
+        await window.electron?.ipcRenderer.invoke('fs:createDirectory', `${newProjectPath}/src`);
+        await window.electron?.ipcRenderer.invoke('fs:createDirectory', `${newProjectPath}/assets`);
+        await window.electron?.ipcRenderer.invoke('fs:writeFile', `${newProjectPath}/README.md`, `# ${projectName}\n\nA new project created with LSEditor.`);
+        // Open the new project
+        setProjectPath(newProjectPath);
+        setIsValidPath(true);
+        setPathFeedback({ text: 'Project created. Launching editor...', tone: 'success' });
+        openProject(newProjectPath);
+      } catch (error) {
+        console.error('Error creating project:', error);
+        alert(`Error creating project: ${error instanceof Error ? error.message : String(error)}`);
       }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [activeFile, editorContent]);
-
-  // Window control handlers
-  const handleMinimize = useCallback(() => {
-    if (window.electron?.windowControls?.minimize) {
-      window.electron.windowControls.minimize();
+    } finally {
+      setIsBrowseDialogOpen(false);
     }
-  }, []);
+  };
 
-  const handleMaximize = useCallback(() => {
-    if (window.electron?.windowControls?.maximize) {
-      window.electron.windowControls.maximize();
+  // Check if a given path is valid (exists and is a directory)
+  const checkPathValidity = async (pathValue: string) => {
+    const trimmed = pathValue?.trim();
+    if (!trimmed) {
+      setIsValidPath(false);
+      setPathFeedback({ text: 'Pick a folder to start or create a new project.', tone: 'info' });
+      return;
     }
-  }, []);
-
-  const handleClose = useCallback(() => {
-    if (window.electron?.windowControls?.close) {
-      window.electron.windowControls.close();
+    try {
+      const isValid = await window.electron?.ipcRenderer.invoke('fs:checkPathExists', trimmed);
+      setIsValidPath(!!isValid);
+      if (isValid) {
+        setPathFeedback({ text: 'Looks good! Hit "Open" to continue.', tone: 'success' });
+      } else {
+        setPathFeedback({ text: 'We could not find this folder. Double-check the path.', tone: 'error' });
+      }
+    } catch (error) {
+      console.error('Error checking path validity:', error);
+      setIsValidPath(false);
+      setPathFeedback({ text: 'Unable to verify the path. Please try again.', tone: 'error' });
     }
-  }, []);
+  };
 
-  // Cleanup on unmount
+  // Check path validity whenever the project path changes
   useEffect(() => {
-    return () => {
-      // Clear any pending save timeouts
-      if ((window as any).saveTimeout) {
-        clearTimeout((window as any).saveTimeout);
-      }
-      
-      // Cleanup terminal
-      if (terminalManager) {
-        terminalManager.dispose();
-      }
-      
-      if (terminalServer) {
-        terminalServer.stop().catch(err => {
-          console.error('Error stopping terminal server:', err);
-        });
-      }
-    };
-  }, [terminalManager, terminalServer]);
+    checkPathValidity(projectPath);
+  }, [projectPath]);
 
-  // Render the app with error boundary and theme provider
+  // Load file content from the given file path
+  const loadFileContent = async (filePath: string) => {
+    if (!filePath) return;
+    try {
+      if (window.electron?.ipcRenderer) {
+        const content = await window.electron.ipcRenderer.invoke('fs:readFile', filePath);
+        setEditorContent(content ?? '');
+      }
+    } catch (error) {
+      console.error('Error loading file:', error);
+      setEditorContent('Error loading file.');
+    }
+  };
+
+  // Save file content to the given file path
+  const saveFileContent = async (filePath: string, content: string) => {
+    if (!filePath) return;
+    try {
+      if (window.electron?.ipcRenderer) {
+        await window.electron.ipcRenderer.invoke('fs:writeFile', filePath, content);
+      }
+    } catch (error) {
+      console.error('Error saving file:', error);
+      alert('Error saving file!');
+    }
+  };
+
+  // Handle file open event
+  const handleFileOpen = (path: string) => {
+    console.log('Opening file:', path);
+    setActiveFile(path);
+    if (!openFiles.includes(path)) {
+      setOpenFiles([...openFiles, path]);
+    }
+    loadFileContent(path);
+  };
+
+  // Handle editor content change
+  const handleEditorChange = (value: string) => {
+    setEditorContent(value);
+    if (activeFile) {
+      saveFileContent(activeFile, value);
+    }
+  };
+
+  // Handle terminal open event
+  const handleTerminalOpen = () => {
+    if (terminalManager) {
+      terminalManager.connect();
+      setIsTerminalOpen(true);
+    }
+  };
+
+  // Handle terminal close event
+  const handleTerminalClose = () => {
+    if (terminalManager) {
+      terminalManager.disconnect();
+      setIsTerminalOpen(false);
+    }
+  };
+
+  // Remove a project from the recent projects list
+  const removeRecentProject = (path: string) => {
+    const updated = recentProjects.filter(p => p !== path);
+    setRecentProjects(updated);
+    store.set('recentProjects', updated);
+  };
+
+  console.log('App rendering, showProjectDialog:', showProjectDialog);
+
   return (
-    <ErrorBoundary>
-      <ThemeProvider>
-        <div className="app">
-          {/* Window Controls */}
-          <div className="window-controls">
-            <button onClick={handleMinimize} className="window-control minimize">
-              <span>_</span>
-            </button>
-            <button onClick={handleMaximize} className="window-control maximize">
-              <span>□</span>
-            </button>
-            <button onClick={handleClose} className="window-control close">
-              <span>×</span>
-            </button>
-        {/* Window Controls */}
-        <div className="window-controls">
-          <button onClick={handleMinimize} className="window-control minimize">
-            <span>_</span>
-          </button>
-          <button onClick={handleMaximize} className="window-control maximize">
-            <span>□</span>
-          </button>
-          <button onClick={handleClose} className="window-control close">
-            <span>×</span>
-          </button>
-        </div>
-        
-        {error && (
-          <div className="error-banner">
-            {error}
-            <button onClick={() => setError(null)}>Dismiss</button>
-          </div>
-        )}
-        
+    <ThemeProvider>
+      <div className="app">
+        {/* SettingsIcon is now placed in the MenuBar, no separate popup */}
         {showProjectDialog ? (
-          <ProjectDialog
-            isOpen={showProjectDialog}
-            onClose={() => setShowProjectDialog(false)}
-            onOpenProject={openProject}
-            onCreateProject={createNewProject}
-            recentProjects={recentProjects}
-            onSelectRecentProject={openProject}
-          />
+          <>
+            <Titlebar minimal />
+            <div className="project-dialog">
+              <h2>Open Project</h2>
+              <div className="project-input">
+                <input
+                  type="text"
+                  placeholder="Enter project path..."
+                  value={projectPath}
+                  onChange={(e) => setProjectPath(e.target.value)}
+                />
+                <button
+                  onClick={() => openProject(projectPath)}
+                  disabled={!isValidPath}
+                  title={!isValidPath ? "Please enter a valid path" : "Open project"}
+                >
+                  Open
+                </button>
+                <button
+                  onClick={openProjectDialog}
+                  disabled={isBrowseDialogOpen}
+                  title={isBrowseDialogOpen ? "Dialog is already open" : "Browse directory"}
+                >
+                  Browse...
+                </button>
+                <button
+                  onClick={createNewProject}
+                  disabled={isBrowseDialogOpen}
+                  title={isBrowseDialogOpen ? "Dialog is already open" : "Create new project"}
+                >
+                  New Project
+                </button>
+              </div>
+              {pathFeedback && (
+                <div className={`path-feedback ${pathFeedback.tone}`}>
+                  {pathFeedback.text}
+                </div>
+              )}
+              <div className="recent-projects">
+                <h3>Recently opened projects</h3>
+                {recentProjects.length > 0 ? (
+                  <ul>
+                    {recentProjects.map((project) => (
+                      <li key={project} style={{display:'flex',alignItems:'center',gap:8}}>
+                        <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis'}}>{project}</span>
+                        <button
+                          onClick={() => openProject(project)}
+                          title="Open project"
+                        >
+                          Open
+                        </button>
+                        <button
+                          title="Remove from list"
+                          onClick={() => removeRecentProject(project)}
+                          style={{color:'red'}}
+                        >
+                          ×
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>No recently opened projects.</p>
+                )}
+              </div>
+            </div>
+          </>
         ) : (
           <Layout
             fileStructure={fileStructure}
             projectPath={projectPath}
-            isTerminalOpen={isTerminalOpen}
-            onTerminalToggle={() => setIsTerminalOpen(!isTerminalOpen)}
+            onHelpAction={handleHelpAction}
+            onFileAction={handleFileAction}
+            onEditAction={handleEditAction}
+            onMenuAction={handleGenericMenuAction}
+            statusBar={{
+              activeFile,
+              terminalPort,
+              isTerminalConnected: Boolean(terminalManager),
+              errorCount: 0,
+              problemCount: 0,
+              portForwardCount: 0
+            }}
           >
-            <div className="editor-container">
-              <Tabs
-                files={openFiles}
-                activeFile={activeFile}
-                onFileSelect={loadFileContent}
-                onFileClose={handleFileClose}
-              />
-              
-              <Editor
-                content={editorContent}
-                onChange={handleEditorChange}
-                filePath={activeFile}
-                isLoading={isLoading}
-              />
-              
-              <Terminal
-                isOpen={isTerminalOpen}
-                onToggle={() => setIsTerminalOpen(!isTerminalOpen)}
-                terminalManager={terminalManager}
-                onData={(data) => terminalManager?.write(data)}
-                onExit={() => {
-                  terminalManager?.dispose();
-                  setTerminalManager(null);
-                }}
-              />
-            </div>
+            <EditorLayout
+              fileStructure={fileStructure}
+              projectPath={projectPath}
+              activeFile={activeFile}
+              onOpenFile={handleFileOpen}
+            />
           </Layout>
         )}
-        
-        {/* Status Bar */}
-        <div className="status-bar">
-          <div className="status-bar-item">
-            {projectPath ? `Project: ${projectPath}` : 'No project open'}
-          </div>
-          <div className="status-bar-item">
-            {activeFile ? `File: ${activeFile}` : 'No file selected'}
-          </div>
-          <div className="status-bar-item">
-            {isLoading ? 'Loading...' : 'Ready'}
-          </div>
-        </div>
       </div>
     </ThemeProvider>
-  </ErrorBoundary>
-);
+  );
+};
+
+export default App;

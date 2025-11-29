@@ -9,7 +9,7 @@ contextBridge.exposeInMainWorld('electron', {
     send: (...args) => ipcRenderer.send(...args),
     on: (channel, listener) => {
       // Wrapper-Funktion erstellen, um den ursprünglichen Listener zu speichern
-      const wrappedListener = (event, ...args) => listener(...args);
+      const wrappedListener = (event, ...args) => listener(event, ...args);
       
       // Listener und Wrapper in der Map speichern
       if (!listeners.has(channel)) {
@@ -30,7 +30,6 @@ contextBridge.exposeInMainWorld('electron', {
         
         // Listener aus der Map entfernen
         listeners.get(channel).delete(listener);
-        
         // Kanal aus der Map entfernen, wenn keine Listener mehr vorhanden sind
         if (listeners.get(channel).size === 0) {
           listeners.delete(channel);

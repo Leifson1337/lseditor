@@ -1,0 +1,78 @@
+.ai-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background-color: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.ai-toolbar.vertical {
+  flex-direction: column;
+  align-items: stretch;
+  border-bottom: none;
+  border-right: 1px solid var(--border-color);
+  width: 48px;
+  padding: 8px 4px;
+}
+
+.ai-toolbar-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background-color: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 13px;
+}
+
+.ai-toolbar.vertical .ai-toolbar-button {
+  padding: 8px;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+}
+
+.ai-toolbar-button:hover {
+  background-color: var(--hover-bg);
+  border-color: var(--accent-blue);
+}
+
+.ai-toolbar-button:active {
+  background-color: var(--accent-blue);
+  color: white;
+}
+
+.ai-toolbar-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.ai-toolbar-label {
+  font-weight: 500;
+}
+
+.ai-toolbar.vertical .ai-toolbar-label {
+  display: none;
+}
+
+/* Animation for AI actions */
+@keyframes aiActionPulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.ai-toolbar-button:hover .ai-toolbar-icon {
+  animation: aiActionPulse 0.3s ease-in-out;
+} 

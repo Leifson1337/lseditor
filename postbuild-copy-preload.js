@@ -1,8 +1,14 @@
 const fs = require('fs');
 const path = require('path');
 
-const src = path.join(__dirname, 'preload.js');
-const dest = path.join(__dirname, 'dist', 'preload.js');
+const filesToCopy = ['preload.js', 'logo.png'];
+const distDir = path.join(__dirname, 'dist');
 
-fs.copyFileSync(src, dest);
-console.log('preload.js copied to dist/preload.js');
+filesToCopy.forEach(file => {
+  const source = path.join(__dirname, file);
+  const destination = path.join(distDir, file);
+  if (fs.existsSync(source)) {
+    fs.copyFileSync(source, destination);
+    console.log(`${file} copied to dist/${file}`);
+  }
+});

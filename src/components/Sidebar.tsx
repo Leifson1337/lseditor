@@ -6,10 +6,12 @@ import { FaFolder, FaCode, FaBrain, FaGitAlt, FaTerminal, FaPuzzlePiece, FaGithu
 interface SidebarProps {
   onTabChange?: (tab: string) => void;
   activeTab?: string;
+  aiActive?: boolean;
+  terminalActive?: boolean;
 }
 
 // Sidebar provides navigation tabs for main app areas (Explorer, Git, GitHub, AI, Terminal, Extensions)
-const Sidebar: React.FC<SidebarProps> = ({ onTabChange, activeTab }) => {
+const Sidebar: React.FC<SidebarProps> = ({ onTabChange, activeTab, aiActive = false, terminalActive = false }) => {
   // State to control the visibility of the GitHub dropdown menu
   const [showGithubDropdown, setShowGithubDropdown] = useState(false);
   // Ref to the GitHub dropdown for outside click detection
@@ -34,53 +36,23 @@ const Sidebar: React.FC<SidebarProps> = ({ onTabChange, activeTab }) => {
 
   // List of sidebar tabs with their icons, labels, and actions
   const tabs = [
-    { 
-      id: 'explorer', 
-      icon: <FaFolder />, 
-      label: 'Explorer', 
-      action: () => {
-        console.log('Explorer tab clicked');
-        onTabChange?.('explorer');
-      } 
-    },
-    { 
-      id: 'github', 
-      icon: <FaGithub />, 
-      label: 'GitHub', 
-      action: () => {
-        console.log('GitHub tab clicked');
-        // Toggle GitHub dropdown instead of changing tab
-        setShowGithubDropdown(!showGithubDropdown);
-      } 
-    },
-    { 
-      id: 'ai', 
-      icon: <FaBrain />, 
-      label: 'AI', 
-      action: () => {
-        console.log('AI tab clicked');
-        onTabChange?.('ai');
-      } 
-    },
-    { 
-      id: 'terminal', 
-      icon: <FaTerminal />, 
-      label: 'Terminal', 
-      action: () => {
-        console.log('Terminal tab clicked');
-        onTabChange?.('terminal');
-      } 
-    },
-    { 
-      id: 'extensions', 
-      icon: <FaPuzzlePiece />, 
-      label: 'Extensions', 
-      action: () => {
-        console.log('Extensions tab clicked');
-        onTabChange?.('extensions');
-      } 
-    },
+    { id: 'explorer', icon: <FaFolder />, label: 'Explorer', action: () => onTabChange?.('explorer') },
+    { id: 'git', icon: <FaGitAlt />, label: 'Git', action: () => onTabChange?.('git') },
+    { id: 'github', icon: <FaGithub />, label: 'GitHub', action: () => setShowGithubDropdown(!showGithubDropdown) },
+    { id: 'ai', icon: <FaBrain />, label: 'AI', action: () => onTabChange?.('ai') },
+    { id: 'terminal', icon: <FaTerminal />, label: 'Terminal', action: () => onTabChange?.('terminal') },
+    { id: 'extensions', icon: <FaPuzzlePiece />, label: 'Extensions', action: () => onTabChange?.('extensions') },
   ];
+
+  const isTabActive = (tabId: string) => {
+    if (tabId === 'ai') {
+      return aiActive;
+    }
+    if (tabId === 'terminal') {
+      return terminalActive;
+    }
+    return activeTab === tabId;
+  };
 
   // Handle a GitHub dropdown action (e.g., Issues, PRs, Repos)
   const handleGithubAction = (action: string) => {
@@ -102,7 +74,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onTabChange, activeTab }) => {
         {tabs.map((tab) => (
           <button
             key={tab.id}
-            className={`sidebar-tab ${activeTab === tab.id ? 'active' : ''}`}
+            className={`sidebar-tab ${isTabActive(tab.id) ? 'active' : ''}`}
             onClick={tab.action}
             title={tab.label}
           >

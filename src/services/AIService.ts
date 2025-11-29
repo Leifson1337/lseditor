@@ -262,7 +262,7 @@ export class AIService extends EventEmitter {
       }
 
       // Read the file content
-      const fileContent = await safeIpcInvoke('readFile', filePath);
+      const fileContent = await safeIpcInvoke('fs:readFile', filePath);
       
       // Extract imports
       const imports = this.extractImports(fileContent);

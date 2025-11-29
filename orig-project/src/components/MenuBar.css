@@ -1,0 +1,248 @@
+.menu-bar {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  background: var(--bg-primary, #1e1e1e);
+  color: var(--text-primary, #fff);
+  border-bottom: 1px solid var(--border-color, #22223b);
+  position: relative;
+  justify-content: flex-start;
+  z-index: 10;
+  /* Verhindert Überlappung mit Sidebar */
+  margin-left: 56px; /* Breite der Sidebar (Icons) anpassen! */
+}
+
+@media (max-width: 800px) {
+  .menu-bar {
+    margin-left: 44px;
+  }
+}
+
+.menu-bar-center {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  height: 100%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  z-index: 1;
+  pointer-events: auto;
+}
+
+.menu-bar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding-right: 18px;
+}
+
+.menu-searchbar-wrapper {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  gap: 8px;
+}
+
+.menu-searchbar {
+  width: 320px;
+  max-width: 36vw;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1.5px solid var(--border-color, #22223b);
+  background: var(--bg-tertiary, #23243a);
+  color: var(--text-primary, #fff);
+  font-size: 1rem;
+  outline: none;
+  transition: border 0.15s, background 0.15s;
+  box-shadow: 0 2px 8px rgba(30,34,43,0.04);
+}
+
+.menu-searchbar:focus {
+  border: 1.5px solid #007acc;
+  background: #23243a;
+}
+
+.menu-searchbar-wrapper .settings-icon {
+  margin-left: 2px;
+  font-size: 1.25em;
+  color: var(--text-secondary,#aaa);
+  background: transparent;
+  border-radius: 50%;
+  transition: background 0.15s;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.menu-searchbar-wrapper .settings-icon:hover {
+  background: #23243a;
+  color: #007acc;
+}
+
+.menu-bar-menus {
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+.menu-item-container {
+  display: flex;
+  align-items: center;
+  position: relative;
+  height: 100%;
+}
+
+.menu-item-label {
+  padding: 0 16px;
+  font-size: 15px;
+  color: var(--text-primary, #fff);
+  cursor: pointer;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  user-select: none;
+}
+
+.menu-item-container.active .menu-item-label,
+.menu-item-label:hover {
+  background: #23243a;
+  color: #79aaff;
+}
+
+.menu-item {
+  background: none;
+  border: none;
+  color: var(--text-color);
+  padding: 4px 8px;
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: 4px;
+  margin-right: 2px;
+}
+
+.menu-item:hover {
+  background-color: var(--hover-color);
+}
+
+.menu-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  background-color: #1e1e1e;
+  border: 1px solid #333;
+  border-radius: 0 0 4px 4px;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  min-width: 220px;
+}
+
+.help-menu-dropdown {
+  right: 0;
+  left: auto;
+}
+
+.dropdown-item {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  text-align: left;
+  background: none;
+  border: none;
+  color: #ddd;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.dropdown-item:hover {
+  background-color: #2d2d2d;
+}
+
+.menu-divider {
+  height: 1px;
+  background-color: #333;
+  margin: 5px 0;
+}
+
+.shortcut {
+  margin-left: 20px;
+  color: #888;
+  font-size: 12px;
+}
+
+.toggle-item {
+  display: flex;
+  align-items: center;
+}
+
+.toggle-checkbox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-right: 8px;
+  border: 1px solid #555;
+  border-radius: 2px;
+}
+
+.toggle-item.checked .toggle-checkbox {
+  background-color: #0e639c;
+  border-color: #0e639c;
+  color: white;
+}
+
+.file-menu-dropdown {
+  left: 0;
+}
+
+.submenu-container {
+  position: relative;
+}
+
+.with-submenu {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.submenu-arrow {
+  margin-left: 10px;
+  font-size: 10px;
+}
+
+.submenu {
+  position: absolute;
+  left: 100%;
+  top: 0;
+  background-color: #1e1e1e;
+  border: 1px solid #333;
+  border-radius: 0 4px 4px 0;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+  z-index: 1001;
+  min-width: 220px;
+  display: none;
+}
+
+.submenu-container:hover .submenu {
+  display: block;
+}
+
+.dropdown-item.disabled {
+  color: #666;
+  cursor: default;
+}
+
+.dropdown-item.disabled:hover {
+  background-color: transparent;
+}
+
+@media (max-width: 700px) {
+  .menu-searchbar {
+    width: 160px;
+    font-size: 0.98rem;
+  }
+}

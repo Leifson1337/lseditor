@@ -1,5 +1,4 @@
 import { EventEmitter } from '../utils/EventEmitter';
-import path from 'path';
 
 // Sichere ipcRenderer-Initialisierung
 // ipcRenderer wird verwendet, um IPC-Aufrufe an den Hauptprozess zu senden
@@ -37,29 +36,9 @@ export interface DirectoryEntry {
 
 // ProjectService-Klasse
 // Diese Klasse verwaltet den Zugriff auf Projekte und Dateien im Workspace
-export interface Project {
-  id: string;
-  name: string;
-  path: string;
-  files: string[];
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-export interface Project {
-  id: string;
-  name: string;
-  path: string;
-  files: string[];
-  createdAt: Date;
-  updatedAt: Date;
-}
-
 export class ProjectService extends EventEmitter {
-  private projects: Map<string, Project> = new Map();
-  private currentProjectId: string | null = null;
-  private workspacePath: string;
-  private currentProject: string | null = null;
+  private workspacePath: string; // Pfad zum Workspace
+  private currentProject: string | null = null; // Aktuelles Projekt
   
   /**
    * Konstruktor für die ProjectService-Klasse
@@ -129,7 +108,7 @@ export class ProjectService extends EventEmitter {
    */
   public async getFileContent(filePath: string): Promise<string> {
     try {
-      return await safeIpcInvoke('readFile', filePath);
+      return await safeIpcInvoke('fs:readFile', filePath);
     } catch (error) {
       console.error('Error reading file:', error);
       return '';
@@ -143,7 +122,7 @@ export class ProjectService extends EventEmitter {
    */
   public async saveFile(filePath: string, content: string): Promise<void> {
     try {
-      await safeIpcInvoke('writeFile', filePath, content);
+      await safeIpcInvoke('fs:writeFile', filePath, content);
       this.emit('fileSaved', filePath);
     } catch (error) {
       console.error('Error saving file:', error);
@@ -157,7 +136,7 @@ export class ProjectService extends EventEmitter {
    */
   public async createFile(filePath: string, content: string = ''): Promise<void> {
     try {
-      await safeIpcInvoke('writeFile', filePath, content);
+      await safeIpcInvoke('fs:writeFile', filePath, content);
       this.emit('fileCreated', filePath);
     } catch (error) {
       console.error('Error creating file:', error);
@@ -170,7 +149,7 @@ export class ProjectService extends EventEmitter {
    */
   public async createDirectory(dirPath: string): Promise<void> {
     try {
-      await safeIpcInvoke('createDirectory', dirPath);
+      await safeIpcInvoke('fs:createDirectory', dirPath);
       this.emit('directoryCreated', dirPath);
     } catch (error) {
       console.error('Error creating directory:', error);
@@ -183,7 +162,7 @@ export class ProjectService extends EventEmitter {
    */
   public async deleteFile(filePath: string): Promise<void> {
     try {
-      await safeIpcInvoke('deleteFile', filePath);
+      await safeIpcInvoke('fs:deleteFile', filePath);
       this.emit('fileDeleted', filePath);
     } catch (error) {
       console.error('Error deleting file:', error);
@@ -196,7 +175,7 @@ export class ProjectService extends EventEmitter {
    */
   public async deleteDirectory(dirPath: string): Promise<void> {
     try {
-      await safeIpcInvoke('deleteDirectory', dirPath);
+      await safeIpcInvoke('fs:deleteDirectory', dirPath);
       this.emit('directoryDeleted', dirPath);
     } catch (error) {
       console.error('Error deleting directory:', error);
@@ -210,104 +189,14 @@ export class ProjectService extends EventEmitter {
    */
   public async renameFile(oldPath: string, newPath: string): Promise<void> {
     try {
-      await safeIpcInvoke('renameFile', oldPath, newPath);
+      await safeIpcInvoke('fs:renameFile', oldPath, newPath);
       this.emit('fileRenamed', { oldPath, newPath });
     } catch (error) {
       console.error('Error renaming file:', error);
     }
   }
   
-  /**
-   * Project management methods
-   */
-  public async loadProject(projectPath: string): Promise<Project> {
-    try {
-      const stats = await safeIpcInvoke('stat', projectPath);
-      if (!stats.isDirectory()) {
-        throw new Error('Project path is not a directory');
-      }
-
-      const project: Project = {
-        id: projectPath,
-        name: path.basename(projectPath),
-        path: projectPath,
-        files: await this.getDirectoryFiles(projectPath),
-        createdAt: new Date(stats.birthtime),
-        updatedAt: new Date(stats.mtime)
-      };
-
-      this.projects.set(project.id, project);
-      this.currentProjectId = project.id;
-      this.emit('projectLoaded', project);
-      return project;
-    } catch (error) {
-      console.error('Error loading project:', error);
-      throw error;
-    }
-  }
-
-  public async createProject(projectPath: string, projectName: string): Promise<Project> {
-    try {
-      await safeIpcInvoke('mkdir', projectPath, { recursive: true });
-      
-      const project: Project = {
-        id: projectPath,
-        name: projectName,
-        path: projectPath,
-        files: [],
-        createdAt: new Date(),
-        updatedAt: new Date()
-      };
-
-      this.projects.set(project.id, project);
-      this.currentProjectId = project.id;
-      this.emit('projectCreated', project);
-      return project;
-    } catch (error) {
-      console.error('Error creating project:', error);
-      throw error;
-    }
-  }
-
-  public getCurrentProject(): Project | null {
-    return this.currentProjectId ? this.projects.get(this.currentProjectId) || null : null;
-  }
-
-  private async getDirectoryFiles(dirPath: string): Promise<string[]> {
-    try {
-      const entries = await this.getDirectoryEntries(dirPath);
-      let files: string[] = [];
-      
-      for (const entry of entries) {
-        if (entry.isDirectory) {
-          const subFiles = await this.getDirectoryFiles(entry.path);
-          files = [...files, ...subFiles];
-        } else {
-          files.push(entry.path);
-        }
-      }
-      
-      return files;
-    } catch (error) {
-      console.error('Error getting directory files:', error);
-      return [];
-    }
-  }
-
-  // Alias for getFileContent to maintain backward compatibility
-  public async readFile(filePath: string): Promise<string> {
-    return this.getFileContent(filePath);
-  }
-
-  // Alias for saveFile to maintain backward compatibility
-  public async writeFile(filePath: string, content: string): Promise<void> {
-    return this.saveFile(filePath, content);
-  }
-
-  /**
-   * Gets the current workspace path
-   * @returns The current workspace path
-   */
+  // Gibt den Workspace-Pfad zurück
   public getWorkspacePath(): string {
     return this.workspacePath;
   }

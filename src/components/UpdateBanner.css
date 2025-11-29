@@ -1,0 +1,47 @@
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  background: linear-gradient(90deg, #263d59 0%, #1c293a 100%);
+  color: #f0f6ff;
+  border-bottom: 1px solid rgba(46, 125, 215, 0.4);
+}
+
+.update-banner__info {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+}
+
+.update-banner__info svg {
+  font-size: 18px;
+}
+
+.update-banner__small {
+  margin-left: 8px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.update-banner__actions {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.update-banner__actions button {
+  border: none;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.2s ease;
+}
+
+.update-banner__actions button:hover {
+  background: rgba(255, 255, 255, 0.25);
+}

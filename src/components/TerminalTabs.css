@@ -1,0 +1,47 @@
+.terminal-tabs-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.terminal-tabs {
+  display: flex;
+  background-color: #252526;
+  padding: 0 5px;
+}
+
+.terminal-tab {
+  padding: 10px 15px;
+  cursor: pointer;
+  border-right: 1px solid #1e1e1e;
+  position: relative;
+}
+
+.terminal-tab.active {
+  background-color: #1e1e1e;
+}
+
+.close-tab {
+  background: none;
+  border: none;
+  color: #fff;
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  transform: translateY(-50%);
+  cursor: pointer;
+}
+
+.add-tab {
+  background: none;
+  border: none;
+  color: #fff;
+  padding: 10px 15px;
+  cursor: pointer;
+}
+
+.terminal-content {
+  flex: 1;
+  min-height: 0;
+}

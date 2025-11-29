@@ -1,46 +1,30 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import './SettingsIcon.css';
 import { useTheme } from '../contexts/ThemeContext';
-import { store } from '../store/store';
+import { useAI } from '../contexts/AIContext';
 
 // Props for the SettingsIcon component
 interface SettingsIconProps {
   onClick?: () => void; // Optional callback for when the icon is clicked
-  className?: string;    // Optional className to apply to the root element
 }
 
 // SettingsIcon renders a gear icon that opens a dropdown for settings
-const SettingsIcon: React.FC<SettingsIconProps> = ({ onClick, className = '' }) => {
-  const [isOpen, setIsOpen] = useState(false); // State for dropdown visibility
-  const { theme, toggleTheme } = useTheme();   // Theme context for toggling theme
-  const [aiSettings, setAISettings] = useState({
-    model: 'gpt-4',
-    temperature: 0.7,
-    maxTokens: 2048,
-  });
+const SettingsIcon: React.FC<SettingsIconProps> = ({ onClick }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const { theme, toggleTheme } = useTheme();
+  const {
+    settings: aiSettings,
+    updateSettings: updateAISettings,
+    models,
+    refreshModels,
+    isFetchingModels,
+    connectionStatus
+  } = useAI();
+  const [baseUrlInput, setBaseUrlInput] = useState(aiSettings.baseUrl);
 
-  // Load settings from store on mount
   useEffect(() => {
-    const settings = store.get('ai');
-    if (settings) {
-      setAISettings(prev => ({
-        ...prev,
-        ...settings
-      }));
-    }
-  }, []);
-
-  // Update AI settings in both local state and store
-  const updateAISettings = (updates: Partial<typeof aiSettings>) => {
-    const newSettings = { ...aiSettings, ...updates };
-    setAISettings(newSettings);
-    
-    // Update the store with the new settings
-    store.set('ai', {
-      ...store.get('ai'),
-      ...updates
-    });
-  };
+    setBaseUrlInput(aiSettings.baseUrl);
+  }, [aiSettings.baseUrl]);
 
   // Handle click on the settings icon
   const handleClick = (e: React.MouseEvent) => {
@@ -53,8 +37,29 @@ const SettingsIcon: React.FC<SettingsIconProps> = ({ onClick, className = '' }) 
     setIsOpen(!isOpen);
   };
 
+  const commitBaseUrl = () => {
+    if (!baseUrlInput.trim()) {
+      return;
+    }
+    updateAISettings({ baseUrl: baseUrlInput });
+    refreshModels();
+  };
+
+  const renderConnectionStatus = () => {
+    switch (connectionStatus) {
+      case 'ready':
+        return 'Verbunden mit LM Studio';
+      case 'connecting':
+        return 'Verbinde…';
+      case 'error':
+        return 'Keine Verbindung';
+      default:
+        return 'Bereit';
+    }
+  };
+
   return (
-    <div className={`settings-container ${className}`.trim()}>
+    <div className="settings-container">
       <button 
         className="settings-button"
         onClick={handleClick}
@@ -99,16 +104,58 @@ const SettingsIcon: React.FC<SettingsIconProps> = ({ onClick, className = '' }) 
               </div>
             </div>
             <div className="settings-section">
-              <h4>AI</h4>
+              <h4>AI (LM Studio)</h4>
+              <div className="setting-item">
+                <label>API URL</label>
+                <input
+                  type="text"
+                  value={baseUrlInput}
+                  onChange={event => setBaseUrlInput(event.target.value)}
+                  onBlur={commitBaseUrl}
+                  onKeyDown={event => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      commitBaseUrl();
+                    }
+                  }}
+                />
+              </div>
               <div className="setting-item">
                 <label>Model</label>
-                <select 
-                  value={aiSettings.model}
-                  onChange={(e) => updateAISettings({ model: e.target.value })}
-                >
-                  <option value="gpt-4">GPT-4</option>
-                  <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
-                </select>
+                <div className="setting-inline">
+                  <select
+                    value={aiSettings.model}
+                    onChange={event => updateAISettings({ model: event.target.value })}
+                    disabled={!models.length}
+                  >
+                    {models.length === 0 && <option value="">Keine Modelle gefunden</option>}
+                    {models.map(model => (
+                      <option key={model} value={model}>
+                        {model}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" onClick={refreshModels} disabled={isFetchingModels}>
+                    {isFetchingModels ? 'Aktualisiere…' : 'Neu laden'}
+                  </button>
+                </div>
+                <small className="settings-hint">{renderConnectionStatus()}</small>
+              </div>
+              <div className="setting-item">
+                <label>Max Tokens pro Anfrage</label>
+                <input
+                  type="number"
+                  min={256}
+                  max={8192}
+                  step={128}
+                  value={aiSettings.maxTokens}
+                  onChange={event =>
+                    updateAISettings({ maxTokens: Math.max(256, Number(event.target.value) || 256) })
+                  }
+                />
+                <small className="settings-hint">
+                  Bei langen Antworten wird automatisch eine zweite Anfrage gestellt, falls das Limit erreicht wird.
+                </small>
               </div>
             </div>
           </div>

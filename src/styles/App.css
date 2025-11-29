@@ -178,7 +178,7 @@ body {
 .project-input {
   display: flex;
   gap: 8px;
-  margin-bottom: 24px;
+  margin-bottom: 12px;
 }
 
 .project-input input {
@@ -201,6 +201,28 @@ body {
 
 .project-input button:hover {
   background-color: var(--button-primary-hover);
+}
+
+.project-input button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.path-feedback {
+  font-size: 13px;
+  margin-bottom: 18px;
+}
+
+.path-feedback.info {
+  color: var(--text-muted);
+}
+
+.path-feedback.success {
+  color: #58d68d;
+}
+
+.path-feedback.error {
+  color: #ff7676;
 }
 
 .recent-projects {

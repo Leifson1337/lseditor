@@ -1,0 +1,54 @@
+<!--
+  index.html
+  Main HTML entry point for the LS Editor application.
+  Sets up the root container and loads the bundled scripts and styles.
+-->
+<!DOCTYPE html>
+<html lang="en">
+  <!-- 
+    Head section: contains metadata about the document.
+    Defines character encoding, viewport settings, and links to external stylesheets or scripts.
+  -->
+  <head>
+    <!-- Character encoding for the document -->
+    <meta charset="UTF-8" />
+    <!-- Viewport settings for responsive design -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Document title -->
+    <title>LS Editor</title>
+    <!-- 
+      Stylesheet: defines visual styling for the document.
+      In this case, we're using an internal stylesheet.
+    -->
+    <style>
+      /* Global styles for the document */
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        background-color: #1e1e1e;
+        color: #d4d4d4;
+        overflow: hidden;
+      }
+      /* Styles for the root container */
+      #root {
+        width: 100vw;
+        height: 100vh;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <!-- 
+    Body section: contains the content of the HTML document.
+    In this case, we're setting up a root container for our application.
+  -->
+  <body>
+    <!-- Root container for the application -->
+    <div id="root"></div>
+    <!-- 
+      Script tag: loads the bundled JavaScript code for the application.
+      In this case, we're loading a script from a relative path.
+    -->
+    <script src="../dist/index.js"></script>
+  </body>
+</html>
