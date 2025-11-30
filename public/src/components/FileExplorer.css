@@ -1,0 +1,75 @@
+.file-explorer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.file-explorer-header {
+  padding: 10px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.file-explorer-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.file-explorer-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 5px 0;
+}
+
+.file-explorer-item {
+  display: flex;
+  align-items: center;
+  padding: 5px 10px;
+  cursor: pointer;
+  color: var(--text-primary);
+  transition: background-color 0.2s;
+}
+
+.file-explorer-item:hover {
+  background-color: var(--hover-bg);
+}
+
+.file-explorer-item.active {
+  background-color: var(--accent-blue);
+  color: white;
+}
+
+.file-explorer-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-right: 5px;
+  color: var(--text-secondary);
+}
+
+.file-explorer-item.active .file-explorer-icon {
+  color: white;
+}
+
+.file-explorer-name {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-explorer-children {
+  display: flex;
+  flex-direction: column;
+}
+
+.empty-explorer {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 13px;
+} 

@@ -1,0 +1,261 @@
+.menu-bar {
+  display: flex;
+  align-items: center;
+  height: 48px;
+  background: var(--background-color, #1b1b1f);
+  color: var(--text-color, #f3f4fb);
+  border-bottom: 1px solid var(--border-color, #27293c);
+  position: relative;
+  z-index: 10;
+  padding: 0 18px 0 72px;
+  box-shadow: none;
+}
+
+.menu-bar-menus {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+}
+
+.menu-tab {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 12px;
+  cursor: pointer;
+  position: relative;
+  border-radius: 10px 10px 0 0;
+  transition: background 0.18s ease;
+}
+
+.menu-tab:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.menu-tab.active {
+  background: rgba(84, 112, 255, 0.2);
+}
+
+.menu-tab-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.menu-tab-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+}
+
+.menu-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 260px;
+  background: var(--panel-bg, #11121c);
+  border: 1px solid var(--border-color, #2a2a36);
+  border-radius: 12px;
+  padding: 10px;
+  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.45);
+  z-index: 999;
+  animation: dropdownFade 0.12s ease;
+}
+
+.menu-item-row {
+  width: 100%;
+  background: none;
+  border: none;
+  color: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-radius: 8px;
+  margin-bottom: 2px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  font-size: 13px;
+}
+
+.menu-item-row:hover {
+  background: rgba(123, 162, 255, 0.15);
+}
+
+.menu-item-row.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.menu-item-row.checked {
+  background: rgba(84, 112, 255, 0.12);
+}
+
+.menu-item-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.menu-item-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #9ea4b8;
+}
+
+.menu-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.menu-item-text small {
+  color: #8c90a5;
+  font-size: 11px;
+}
+
+.menu-item-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.menu-shortcut {
+  font-size: 11px;
+  color: #9ea4b8;
+}
+
+.menu-item-chip {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #2e7dd7;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.menu-divider {
+  height: 1px;
+  width: 100%;
+  background: #2c2f3f;
+  margin: 6px 0;
+}
+
+.menu-toggle {
+  width: 18px;
+  height: 18px;
+  border: 1px solid #3a3e52;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #f3f4fb;
+}
+
+.menu-toggle.checked {
+  background: #5561ff;
+  border-color: #5561ff;
+}
+
+.submenu-container {
+  position: relative;
+}
+
+.menu-submenu {
+  position: absolute;
+  left: calc(100% + 6px);
+  top: -4px;
+  min-width: 260px;
+  background: #11121c;
+  border: 1px solid #27293c;
+  border-radius: 12px;
+  padding: 8px;
+  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.45);
+  display: none;
+}
+
+.submenu-container:hover .menu-submenu {
+  display: block;
+}
+
+.submenu-arrow {
+  color: #777c91;
+}
+
+.recent-project-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+  display: inline-block;
+}
+
+.menu-item-indicator {
+  color: #ffb347;
+  font-size: 12px;
+}
+
+.menu-bar-center {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+}
+
+.menu-searchbar-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  width: 320px;
+  max-width: 36vw;
+}
+
+.menu-search-icon {
+  color: #9ea4b8;
+}
+
+.menu-searchbar {
+  background: transparent;
+  border: none;
+  color: #fff;
+  flex: 1;
+  font-size: 13px;
+  outline: none;
+}
+
+.menu-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+@keyframes dropdownFade {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 800px) {
+  .menu-bar {
+    padding-left: 56px;
+  }
+
+  .menu-searchbar-wrapper {
+    display: none;
+  }
+}

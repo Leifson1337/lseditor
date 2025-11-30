@@ -1,0 +1,90 @@
+.ai-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background-color: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.ai-toolbar.vertical {
+  flex-direction: column;
+  align-items: stretch;
+  border-bottom: none;
+  border-right: 1px solid var(--border-color);
+  width: 48px;
+  padding: 8px 4px;
+}
+
+.ai-toolbar-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background-color: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.18s ease;
+  font-size: 13px;
+  min-height: 36px;
+}
+
+.ai-toolbar.vertical .ai-toolbar-button {
+  padding: 8px;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-direction: column;
+}
+
+.ai-toolbar-button:hover {
+  background-color: rgba(123, 162, 255, 0.12);
+  border-color: var(--accent-blue);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.ai-toolbar-button:active {
+  background-color: var(--accent-blue);
+  color: #fff;
+}
+
+.ai-toolbar-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.ai-toolbar-label {
+  display: flex;
+  flex-direction: column;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.ai-toolbar-label small {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted, #9ea4b8);
+}
+
+.ai-toolbar.vertical .ai-toolbar-label {
+  display: none;
+}
+
+/* Animation for AI actions */
+@keyframes aiActionPulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.ai-toolbar-button:hover .ai-toolbar-icon {
+  animation: aiActionPulse 0.3s ease-in-out;
+} 
