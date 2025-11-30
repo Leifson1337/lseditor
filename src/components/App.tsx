@@ -429,10 +429,16 @@ const App: React.FC = () => {
   const loadFileContent = async (filePath: string) => {
     if (!filePath) return;
     try {
-      if (window.electron?.ipcRenderer) {
-        const content = await window.electron.ipcRenderer.invoke('fs:readFile', filePath);
-        setEditorContent(content ?? '');
+      const ipc = window.electron?.ipcRenderer;
+      if (!ipc) return;
+      const exists = await ipc.invoke('fs:checkPathExists', filePath);
+      if (!exists) {
+        console.warn(`File not found when trying to open: ${filePath}`);
+        setEditorContent('');
+        return;
       }
+      const content = await ipc.invoke('fs:readFile', filePath);
+      setEditorContent(content ?? '');
     } catch (error) {
       console.error('Error loading file:', error);
       setEditorContent('Error loading file.');

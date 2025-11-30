@@ -122,59 +122,75 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose, projectPa
       }
     };
 
-    const bufferInput = (data: string) => {
-      for (const char of data) {
+    const handleUserInput = (chunk: string) => {
+      if (!sessionIdRef.current || !ipc || !xtermRef.current) {
+        return;
+      }
+      const term = xtermRef.current;
+      let toSend = '';
+
+      for (const char of chunk) {
         if (char === '\u0003') {
           inputBufferRef.current = '';
-          break;
+          toSend += char;
+          continue;
         }
+
         if (char === '\u007f') {
           if (inputBufferRef.current.length > 0) {
             inputBufferRef.current = inputBufferRef.current.slice(0, -1);
+            toSend += char;
+            term.write('\b \b');
           }
           continue;
         }
+
         if (char === '\r' || char === '\n') {
           const trimmed = inputBufferRef.current.trim().toLowerCase();
           if (trimmed === 'cls') {
-            xterm.clear();
+            term.clear();
           }
           inputBufferRef.current = '';
+          toSend += '\r';
+          term.write('\r\n');
           continue;
         }
+
+        if (char === '\t') {
+          inputBufferRef.current += '\t';
+          toSend += '\t';
+          term.write('\t');
+          continue;
+        }
+
+        if (char >= ' ' && char <= '~') {
+          inputBufferRef.current += char;
+          toSend += char;
+          term.write(char);
+          continue;
+        }
+
         if (char === '\x1b') {
-          continue;
-        }
-        inputBufferRef.current += char;
-      }
-    };
-
-    const echoInputLocally = (data: string) => {
-      for (const char of data) {
-        if (char === '\u007f') {
-          xterm.write('\b \b');
-        } else if (char === '\r') {
-          xterm.write('\r\n');
-        } else if (char === '\t') {
-          xterm.write('\t');
-        } else if (char >= ' ' && char <= '~') {
-          xterm.write(char);
+          toSend += char;
         }
       }
-    };
 
-    const dataDisposable = xterm.onData(chunk => {
-      if (!sessionIdRef.current || !ipc || !chunk) {
+      if (!toSend) {
         return;
       }
 
-      bufferInput(chunk);
-      echoInputLocally(chunk);
-      const normalized = chunk.includes('\r') ? chunk.replace(/\r/g, '\r\n') : chunk;
+      const normalized = toSend.replace(/\r\n|\r|\n/g, '\r\n');
       ipc.send('terminal:write', {
         sessionId: sessionIdRef.current,
         data: normalized
       });
+    };
+
+    const dataDisposable = xterm.onData(chunk => {
+      if (!chunk) {
+        return;
+      }
+      handleUserInput(chunk);
     });
 
     const handleTerminalData = (_event: unknown, payload: { sessionId: string; data: string }) => {

@@ -172,11 +172,17 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   );
 
   const readFileContent = useCallback(async (targetPath: string) => {
-    if (!window.electron?.ipcRenderer) {
+    const ipc = window.electron?.ipcRenderer;
+    if (!ipc) {
       return '';
     }
     try {
-      const result = await window.electron.ipcRenderer.invoke('fs:readFile', targetPath);
+      const exists = await ipc.invoke('fs:checkPathExists', targetPath);
+      if (!exists) {
+        console.warn(`Attempted to open a missing file: ${targetPath}`);
+        return '';
+      }
+      const result = await ipc.invoke('fs:readFile', targetPath);
       return typeof result === 'string' ? result : '';
     } catch (error) {
       console.error('Failed to read file', targetPath, error);
@@ -548,6 +554,12 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                   onTabClose={handleTabClose}
                   onTabSelect={setActiveTab}
                 />
+                <div className="editor-path-display" title={activeTabData?.path || 'Keine Datei geöffnet'}>
+                  <span className="editor-path-label">Pfad:</span>
+                  <span className="editor-path-value">
+                    {activeTabData?.path || 'Keine Datei geöffnet'}
+                  </span>
+                </div>
                 <div className="editor-area">
                   {tabs.length > 0 && activeTab ? (
                     <Editor
