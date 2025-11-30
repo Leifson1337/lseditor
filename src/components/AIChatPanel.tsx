@@ -7,6 +7,12 @@ import './AIChatPanel.css';
 import { useAI } from '../contexts/AIContext';
 import { FileNode } from '../types/FileNode';
 import { marked } from 'marked';
+import {
+  collapseDuplicateProjectRoot,
+  normalizeProjectRoot,
+  stripFileProtocol,
+  stripRelativeDrivePrefix
+} from '../utils/pathUtils';
 
 marked.setOptions({ breaks: true });
 interface AIChatPanelProps {
@@ -184,19 +190,25 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     };
 
     const baseDirectory = resolveBaseDirectory();
+    const normalizedRoot = normalizeProjectRoot(projectPath || baseDirectory);
 
     return (targetPath: string) => {
-      const normalized = targetPath.replace(/\\/g, '/').trim();
-      if (!normalized) {
+      const trimmed = targetPath.replace(/\\/g, '/').trim();
+      if (!trimmed) {
         return baseDirectory;
       }
+      const sanitized = stripRelativeDrivePrefix(stripFileProtocol(trimmed));
+      let normalized = path.normalize(sanitized);
+      normalized = collapseDuplicateProjectRoot(normalized, normalizedRoot);
+
       if (path.isAbsolute(normalized)) {
         return path.normalize(normalized);
       }
       if (!baseDirectory) {
         return path.normalize(normalized);
       }
-      return path.normalize(path.join(baseDirectory, normalized));
+      const joined = path.normalize(path.join(baseDirectory, normalized));
+      return collapseDuplicateProjectRoot(joined, normalizedRoot);
     };
   }, [projectPath]);
 

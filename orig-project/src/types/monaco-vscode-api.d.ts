@@ -1,3 +1,0 @@
-declare module 'monaco-vscode-api' {
-  // ... existing type definitions ...
-} 

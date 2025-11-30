@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import path from 'path';
 import { Editor } from '@monaco-editor/react';
 import type { Monaco } from '@monaco-editor/react';
 import { FileExplorer } from './FileExplorer';
@@ -13,6 +14,12 @@ import { AIProvider } from '../contexts/AIContext';
 import '../styles/EditorLayout.css';
 import { FaRegFile } from 'react-icons/fa';
 import { Resizable } from 're-resizable';
+import {
+  collapseDuplicateProjectRoot,
+  normalizeProjectRoot,
+  stripFileProtocol,
+  stripRelativeDrivePrefix
+} from '../utils/pathUtils';
 
 // Props for the EditorLayout component
 interface EditorLayoutProps {
@@ -139,6 +146,31 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
     editorRef.current = editorInstance;
   }, []);
 
+  const normalizedProjectRoot = useMemo(() => normalizeProjectRoot(projectPath), [projectPath]);
+
+  const normalizeEditorFilePath = useCallback(
+    (targetPath: string) => {
+      const trimmed = targetPath?.trim();
+      if (!trimmed) return '';
+
+      const sanitized = stripRelativeDrivePrefix(stripFileProtocol(trimmed));
+      let normalized = path.normalize(sanitized);
+      normalized = collapseDuplicateProjectRoot(normalized, normalizedProjectRoot);
+
+      if (path.isAbsolute(normalized)) {
+        return normalized;
+      }
+
+      if (normalizedProjectRoot) {
+        const joined = path.normalize(path.join(normalizedProjectRoot, normalized));
+        return collapseDuplicateProjectRoot(joined, normalizedProjectRoot);
+      }
+
+      return collapseDuplicateProjectRoot(path.resolve(normalized), normalizedProjectRoot);
+    },
+    [normalizedProjectRoot]
+  );
+
   const readFileContent = useCallback(async (targetPath: string) => {
     if (!window.electron?.ipcRenderer) {
       return '';
@@ -155,7 +187,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   // Open a file in a new or existing tab and load its content
   const openFileInTab = useCallback(
     async (filePath: string) => {
-      const normalizedPath = filePath?.trim();
+      const normalizedPath = normalizeEditorFilePath(filePath);
       if (!normalizedPath) return;
 
       const existing = tabs.find(tab => tab.path === normalizedPath);
@@ -175,7 +207,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
       setTabs(prev => [...prev, newTab]);
       setActiveTab(newTab.id);
     },
-    [readFileContent, tabs]
+    [normalizeEditorFilePath, readFileContent, tabs]
   );
 
   // When activeFile changes, open the file in a tab
