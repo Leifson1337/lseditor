@@ -678,6 +678,20 @@ function setupIpcHandlers() {
  * Sets up IPC handlers for file system operations, including reading directories, files, and writing files.
  */
 function setupFsIpcHandlers() {
+  const DRIVE_PATTERN = /[A-Za-z]:[\\/]/g;
+
+  const normalizeFsPath = (candidate: string) => {
+    const resolved = path.resolve(candidate);
+    const matches = Array.from(resolved.matchAll(DRIVE_PATTERN));
+    if (matches.length > 1) {
+      const last = matches[matches.length - 1];
+      if (typeof last.index === 'number' && last.index > 0) {
+        return path.normalize(resolved.slice(last.index));
+      }
+    }
+    return path.normalize(resolved);
+  };
+
   // File system: read directory
   ipcMain.handle('fs:readDir', async (event, dirPath) => {
     try {
@@ -697,7 +711,7 @@ function setupFsIpcHandlers() {
       if (typeof filePath !== 'string' || !filePath.trim()) {
         throw new Error('Ungueltiger Dateipfad');
       }
-      const normalizedPath = path.isAbsolute(filePath) ? filePath : path.join(process.cwd(), filePath);
+      const normalizedPath = normalizeFsPath(filePath);
       return await fs.promises.readFile(normalizedPath, 'utf-8');
     } catch (error) {
       console.error('Failed to read file:', error);
@@ -711,7 +725,7 @@ function setupFsIpcHandlers() {
       if (typeof filePath !== 'string' || filePath.trim().length === 0) {
         throw new Error('Invalid file path');
       }
-      const targetPath = path.resolve(filePath);
+      const targetPath = normalizeFsPath(filePath);
       await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
       const data = typeof content === 'string' ? content : String(content ?? '');
       await fs.promises.writeFile(targetPath, data, 'utf-8');
@@ -725,7 +739,8 @@ function setupFsIpcHandlers() {
   // File system: check if path exists and is directory
   ipcMain.handle('fs:checkPathExistsAndIsDirectory', async (event, path) => {
     try {
-      const stats = await fs.promises.stat(path);
+      const normalized = normalizeFsPath(path);
+      const stats = await fs.promises.stat(normalized);
       return stats.isDirectory();
     } catch (error) {
       return false;
@@ -735,7 +750,8 @@ function setupFsIpcHandlers() {
   // File system: create directory recursively
   ipcMain.handle('fs:createDirectory', async (event, dirPath) => {
     try {
-      await fs.promises.mkdir(dirPath, { recursive: true });
+      const normalized = normalizeFsPath(dirPath);
+      await fs.promises.mkdir(normalized, { recursive: true });
       return true;
     } catch (error) {
       console.error('Error creating directory:', error);
@@ -746,7 +762,8 @@ function setupFsIpcHandlers() {
   // File system: delete file
   ipcMain.handle('fs:deleteFile', async (event, filePath) => {
     try {
-      await fs.promises.unlink(filePath);
+      const normalized = normalizeFsPath(filePath);
+      await fs.promises.unlink(normalized);
       return true;
     } catch (error) {
       console.error('Error deleting file:', error);
@@ -757,7 +774,8 @@ function setupFsIpcHandlers() {
   // File system: delete directory recursively
   ipcMain.handle('fs:deleteDirectory', async (event, dirPath) => {
     try {
-      await fs.promises.rm(dirPath, { recursive: true, force: true });
+      const normalized = normalizeFsPath(dirPath);
+      await fs.promises.rm(normalized, { recursive: true, force: true });
       return true;
     } catch (error) {
       console.error('Error deleting directory:', error);
@@ -768,7 +786,7 @@ function setupFsIpcHandlers() {
   // File system: rename file or directory
   ipcMain.handle('fs:renameFile', async (event, oldPath, newPath) => {
     try {
-      const sourcePath = path.resolve(String(oldPath ?? ''));
+      const sourcePath = normalizeFsPath(String(oldPath ?? ''));
       let targetPath = typeof newPath === 'string' && newPath.trim().length ? newPath.trim() : '';
       if (!targetPath) {
         throw new Error('Neuer Dateiname fehlt.');
@@ -776,6 +794,7 @@ function setupFsIpcHandlers() {
       if (!path.isAbsolute(targetPath)) {
         targetPath = path.join(path.dirname(sourcePath), targetPath);
       }
+      targetPath = normalizeFsPath(targetPath);
       await fs.promises.rename(sourcePath, targetPath);
       return true;
     } catch (error) {
