@@ -148,8 +148,12 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   async function renameFile(oldPath: string, newName: string): Promise<boolean> {
     if (window.electron?.ipcRenderer.invoke) {
       try {
-        await window.electron.ipcRenderer.invoke('fs:renameFile', oldPath, newName);
-        return true;
+        const result = await window.electron.ipcRenderer.invoke('fs:renameFile', oldPath, newName);
+        if (!result) {
+          alert('Rename failed. Please check the new name or permissions.');
+          return false;
+        }
+        return Boolean(result);
       } catch (e: any) {
         alert('Error renaming: ' + (typeof e === 'object' && 'message' in e ? (e as any).message : String(e)));
       }

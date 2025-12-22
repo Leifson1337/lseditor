@@ -20,6 +20,9 @@ import * as https from 'https';
 
 // Main window and service instances
 let mainWindow: BrowserWindow | null = null;
+let splashWindow: BrowserWindow | null = null;
+let splashShownAt = 0;
+const MIN_SPLASH_MS = 2000;
 let aiService: AIService;
 let uiService: UIService | undefined = undefined;
 
@@ -109,6 +112,13 @@ function resolveBasePromptPath(): string {
     candidates.push(path.join(appPath, 'config', 'base-prompt.md'));
   } catch {
     // Ignore app path resolution errors, we will fall back to process.cwd()
+  }
+
+  try {
+    candidates.push(path.join(process.resourcesPath, 'config', 'base-prompt.md'));
+    candidates.push(path.join(process.resourcesPath, 'app.asar.unpacked', 'config', 'base-prompt.md'));
+  } catch {
+    // Ignore resources path resolution errors
   }
 
   for (const candidate of candidates) {
@@ -584,6 +594,135 @@ ipcMain.handle('exec', async (_event, command: unknown, options?: { cwd?: string
   });
 });
 
+function createSplashWindow(): void {
+  if (splashWindow) {
+    return;
+  }
+
+  const logoDataUrl = getAppIconDataUrl();
+  const logoMarkup = logoDataUrl
+    ? `<img src="${logoDataUrl}" alt="LS Editor" />`
+    : `<div class="logo-fallback">LS</div>`;
+
+  const html = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html, body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        font-family: 'Segoe UI', system-ui, sans-serif;
+        background: #0b0f18;
+        overflow: hidden;
+      }
+      .splash {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        border-radius: 18px;
+        background: radial-gradient(circle at top, rgba(56,189,248,0.35), rgba(245,158,11,0.25)), #0b0f18;
+        color: #f8fafc;
+        box-shadow: 0 20px 40px rgba(6, 10, 20, 0.45);
+      }
+      .logo {
+        width: 88px;
+        height: 88px;
+        border-radius: 24px;
+        background: rgba(15, 23, 42, 0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 18px 30px rgba(0, 0, 0, 0.35);
+        overflow: hidden;
+      }
+      .logo img {
+        width: 70%;
+        height: 70%;
+        object-fit: contain;
+      }
+      .logo-fallback {
+        font-size: 24px;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+      }
+      .title {
+        font-size: 18px;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+      }
+      .subtitle {
+        font-size: 12px;
+        color: rgba(226, 232, 240, 0.7);
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+      }
+      .loader {
+        width: 120px;
+        height: 4px;
+        background: rgba(148, 163, 184, 0.25);
+        border-radius: 999px;
+        overflow: hidden;
+        position: relative;
+      }
+      .loader::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: -40%;
+        width: 40%;
+        height: 100%;
+        background: linear-gradient(90deg, rgba(245,158,11,0), rgba(245,158,11,0.9), rgba(56,189,248,0.8));
+        animation: slide 1.4s infinite ease-in-out;
+      }
+      @keyframes slide {
+        0% { left: -40%; }
+        100% { left: 100%; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="splash">
+      <div class="logo">${logoMarkup}</div>
+      <div class="title">LS Editor</div>
+      <div class="subtitle">Loading workspace</div>
+      <div class="loader"></div>
+    </div>
+  </body>
+</html>`;
+
+  splashWindow = new BrowserWindow({
+    width: 560,
+    height: 380,
+    frame: false,
+    transparent: false,
+    resizable: false,
+    movable: true,
+    alwaysOnTop: true,
+    show: false,
+    skipTaskbar: true,
+    backgroundColor: '#0b0f18',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true
+    }
+  });
+
+  splashWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  splashWindow.once('ready-to-show', () => {
+    splashShownAt = Date.now();
+    splashWindow?.show();
+  });
+  splashWindow.on('closed', () => {
+    splashWindow = null;
+  });
+}
+
 /**
  * Creates the main application window with custom settings and loads the index.html file.
  */
@@ -595,11 +734,28 @@ async function createWindow() {
     height: 800,
     frame: false, // Custom Titlebar
     icon: windowIcon ?? resolveAppIconPath(),
+    show: false,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js')
     }
+  });
+
+  mainWindow.once('ready-to-show', () => {
+    if (splashWindow) {
+      const elapsed = splashShownAt ? Date.now() - splashShownAt : MIN_SPLASH_MS;
+      const delay = Math.max(0, MIN_SPLASH_MS - elapsed);
+      setTimeout(() => {
+        if (splashWindow) {
+          splashWindow.close();
+          splashWindow = null;
+        }
+        mainWindow?.show();
+      }, delay);
+      return;
+    }
+    mainWindow?.show();
   });
 
   // Maximize the window
@@ -1183,6 +1339,7 @@ export {
 // Electron Lifecycle: Services und Fenster nach App-Start initialisieren
 app.whenReady().then(async () => {
   await initializeServices();
+  createSplashWindow();
   await createWindow();
   setupIpcHandlers();
   setupFsIpcHandlers();
@@ -1208,6 +1365,10 @@ app.whenReady().then(async () => {
 });
 
 app.on('before-quit', () => {
+  if (splashWindow) {
+    splashWindow.close();
+    splashWindow = null;
+  }
   terminalSessions.forEach(session => {
     try {
       session.process.kill();

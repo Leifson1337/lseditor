@@ -18,7 +18,10 @@
   margin-left: 12px;
   white-space: nowrap;
   flex-shrink: 0;
-  -webkit-app-region: no-drag;
+  -webkit-app-region: drag;
+  cursor: grab;
+  position: relative;
+  z-index: 2;
 }
 
 .titlebar > .menu-bar {
@@ -28,7 +31,9 @@
   height: 100%;
   display: flex;
   align-items: center;
-  -webkit-app-region: no-drag;
+  -webkit-app-region: drag;
+  position: relative;
+  z-index: 2;
 }
 
 .titlebar-buttons {
@@ -37,6 +42,8 @@
   margin-left: auto;
   gap: 2px;
   -webkit-app-region: no-drag;
+  position: relative;
+  z-index: 2;
 }
 
 .titlebar-btn {
@@ -66,7 +73,11 @@
 
 .titlebar-drag {
   position: absolute;
-  left: 0; top: 0; right: 0; bottom: 0;
-  z-index: 0;
-  pointer-events: none;
+  left: 0;
+  top: 0;
+  right: 0;
+  height: 10px;
+  z-index: 1;
+  -webkit-app-region: drag;
+  pointer-events: auto;
 }

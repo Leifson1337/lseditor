@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+﻿import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import path from 'path';
 import { FiRefreshCw, FiSend, FiPlus } from 'react-icons/fi';
 import { diffLines } from 'diff';
@@ -95,11 +95,51 @@ const tryParseJsonArray = (text: string) => {
   }
 };
 
-const truncateContent = (content: string) => {
-  if (content.length <= MAX_SNIPPET_LENGTH) {
-    return content;
+const formatSnippet = (content: string) => {
+  const lines = content.replace(/\r/g, '').split('\n');
+  const formatted: string[] = [];
+  let total = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = `${String(index + 1).padStart(4, ' ')}| ${lines[index]}`;
+    const nextTotal = total + line.length + 1;
+    if (nextTotal > MAX_SNIPPET_LENGTH) {
+      formatted.push('... (gekuerzt)');
+      break;
+    }
+    formatted.push(line);
+    total = nextTotal;
   }
-  return `${content.slice(0, MAX_SNIPPET_LENGTH)}\n... (gekürzt)`;
+  return formatted.join('\n');
+};
+
+const tokenizeQuestion = (question: string) => {
+  return question
+    .toLowerCase()
+    .split(/[^a-z0-9_\-./]+/g)
+    .map(token => token.trim())
+    .filter(token => token.length >= 3);
+};
+
+const scoreFilePath = (filePath: string, tokens: string[]) => {
+  const lower = filePath.toLowerCase();
+  let score = 0;
+  tokens.forEach(token => {
+    if (lower.includes(token)) {
+      score += token.length >= 6 ? 2 : 1;
+    }
+  });
+  return score;
+};
+
+const pickHeuristicFiles = (question: string, files: string[], limit: number) => {
+  const tokens = tokenizeQuestion(question);
+  if (!tokens.length) return [];
+  return files
+    .map(file => ({ file, score: scoreFilePath(file, tokens) }))
+    .filter(entry => entry.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(entry => entry.file);
 };
 
 interface PatchBlock {
@@ -143,6 +183,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     startNewConversation,
     removeConversation,
     sendMessage,
+    requestCompletion,
     cancelRequest,
     isThinking,
     isCancelling,
@@ -168,6 +209,8 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
   });
   const [autoContextStatus, setAutoContextStatus] = useState('');
   const [isAutoContextBusy, setIsAutoContextBusy] = useState(false);
+  const [autoContextFiles, setAutoContextFiles] = useState<string[]>([]);
+  const autoContextAbortRef = useRef<AbortController | null>(null);
   const [pendingEdits, setPendingEdits] = useState<PendingFileEdit[]>([]);
   const [selectedEditId, setSelectedEditId] = useState<string | null>(null);
   const [lastParsedMessageId, setLastParsedMessageId] = useState<string | null>(null);
@@ -321,7 +364,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       case 'ready':
         return 'Verbunden';
       case 'connecting':
-        return 'Verbindung wird aufgebaut…';
+        return 'Verbindung wird aufgebautÔÇª';
       case 'error':
         return 'Nicht verbunden';
       default:
@@ -357,37 +400,51 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     }
   }, [pendingEdits, selectedEditId]);
 
-  const sendWithAutoContext = async (question: string) => {
-    if (!autoContextEnabled || !availableFiles.length) {
-      await sendMessage(question);
-      return;
-    }
+  const requestAutoContextFiles = useCallback(
+    async (question: string) => {
+      if (!availableFiles.length) {
+        return [];
+      }
 
-    setIsAutoContextBusy(true);
-    setAutoContextStatus('Fordere relevante Dateien an…');
+      const preferredFiles = Array.from(
+        new Set([activeRelativePath, ...openRelativeFiles].filter(Boolean))
+      ).filter(file => availableFiles.includes(file));
 
-    try {
-      const preferredFiles = Array.from(new Set([activeRelativePath, ...openRelativeFiles].filter(Boolean)));
+      const heuristicFiles = pickHeuristicFiles(question, availableFiles, MAX_CONTEXT_FILES);
+      const fallbackSelection = Array.from(new Set([...preferredFiles, ...heuristicFiles])).slice(
+        0,
+        MAX_CONTEXT_FILES
+      );
+
       const fileListSection = availableFiles.map(file => `- ${file}`).join('\n');
 
       const selectionPrompt = [
         'Du bist ein KI-Code-Assistent.',
         'Ich gebe dir eine Liste aller Projektdateien.',
-        'Antworte JETZT ausschließlich mit einem JSON-Array (z.B. ["src/main.ts"]) mit maximal 5 Pfaden, die du für die Beantwortung der Frage benötigst.',
+        'Antworte NUR mit einem JSON-Array (z.B. ["src/main.ts"]) mit maximal 5 Pfaden, die du fuer die Frage brauchst.',
         'Wenn du keine Dateien brauchst, antworte mit [].',
-        preferredFiles.length ? `Aktive/zuletzt geöffnete Dateien: ${preferredFiles.join(', ')}` : '',
+        preferredFiles.length
+          ? `Aktive/zuletzt geoeffnete Dateien: ${preferredFiles.join(', ')}`
+          : '',
         `Projektdateien:\n${fileListSection}`,
         `Frage: ${question}`
       ]
         .filter(Boolean)
         .join('\n\n');
 
-      const selectionResponse = await sendMessage(question, { actualContent: selectionPrompt });
-      if (!selectionResponse) {
-        return;
-      }
+      const controller = new AbortController();
+      autoContextAbortRef.current = controller;
 
-      const requestedFiles = (() => {
+      try {
+        const selectionResponse = await requestCompletion(
+          [{ role: 'user', content: selectionPrompt }],
+          { signal: controller.signal }
+        );
+
+        if (!selectionResponse) {
+          return fallbackSelection;
+        }
+
         const parsedJson = tryParseJsonArray(selectionResponse);
         const candidates = parsedJson ?? selectionResponse.split(/[\r\n,]+/);
         const normalized = candidates
@@ -403,32 +460,57 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
             set.add(item);
           }
         });
-        preferredFiles.forEach(item => {
-          if (item) set.add(item);
+        preferredFiles.forEach(item => set.add(item));
+        heuristicFiles.forEach(item => {
+          if (set.size < MAX_CONTEXT_FILES) {
+            set.add(item);
+          }
         });
+
         return Array.from(set).slice(0, MAX_CONTEXT_FILES);
-      })();
+      } catch (error) {
+        console.warn('Auto context selection failed:', error);
+        return fallbackSelection;
+      } finally {
+        autoContextAbortRef.current = null;
+      }
+    },
+    [activeRelativePath, availableFiles, openRelativeFiles, requestCompletion]
+  );
+
+  const sendWithAutoContext = async (question: string) => {
+    if (!autoContextEnabled || !availableFiles.length) {
+      await sendMessage(question);
+      return;
+    }
+
+    setIsAutoContextBusy(true);
+    setAutoContextStatus('Auto Context: analysiere Anfrage ...');
+    setAutoContextFiles([]);
+
+    try {
+      const requestedFiles = await requestAutoContextFiles(question);
 
       if (!requestedFiles.length) {
-        await sendMessage('Auto Context → keine Dateien angefordert', {
-          actualContent: `Es wurden keine Dateien benötigt. Bitte beantworte die Frage: ${question}`,
-          displayContent: 'Auto Context → keine Dateien angefordert'
-        });
+        setAutoContextStatus('');
+        await sendMessage(question);
         return;
       }
 
-      setAutoContextStatus(`Übertrage ${requestedFiles.length} Datei(en)…`);
+      setAutoContextFiles(requestedFiles);
+      setAutoContextStatus(`Auto Context: lade ${requestedFiles.length} Datei(en) ...`);
 
       const sections: string[] = [];
       const accessibleFileNotes: string[] = [];
       let accumulated = 0;
+
       for (const relativePath of requestedFiles) {
         const absolutePath = fileMap.get(relativePath) ?? relativePath;
         try {
           const content = await window.electron?.ipcRenderer?.invoke('fs:readFile', absolutePath);
           if (typeof content === 'string') {
             accessibleFileNotes.push(`- ${relativePath} (${absolutePath})`);
-            const snippet = content.length > 0 ? truncateContent(content) : '(leer)';
+            const snippet = content.length > 0 ? formatSnippet(content) : '(leer)';
             const section = `### ${relativePath}\n\`\`\`\n${snippet}\n\`\`\``;
             if (accumulated + section.length > MAX_TOTAL_SNIPPET_LENGTH) {
               break;
@@ -442,28 +524,29 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       }
 
       if (!sections.length) {
-        await sendMessage('Auto Context → Dateien nicht lesbar', {
-          actualContent: `Die angeforderten Dateien konnten nicht gelesen werden. Beantworte bitte trotzdem die Frage: ${question}`,
-          displayContent: 'Auto Context → Dateien nicht lesbar'
-        });
+        await sendMessage(question);
         return;
       }
 
       const attachmentsSection = accessibleFileNotes.length
-        ? `Die folgenden Dateien stehen im Workspace zur Verfügung:\n${accessibleFileNotes.join('\n')}`
+        ? `Die folgenden Dateien stehen im Workspace zur Verfuegung:\n${accessibleFileNotes.join('\n')}`
         : '';
 
-      const inlineSection = `Wenn du nicht direkt auf diese Dateien zugreifen kannst, verwende die Inhalte:\n\n${sections.join(
-        '\n\n'
-      )}`;
+      const inlineSection = [
+        'Wenn du nicht direkt auf die Dateien zugreifen kannst, verwende die Inhalte:',
+        sections.join('\n\n')
+      ].join('\n\n');
 
-      const followUpPrompt = [attachmentsSection, inlineSection, `Nutze diese Informationen, um die ursprüngliche Frage zu beantworten:\n${question}`]
+      const contextPrompt = [
+        attachmentsSection,
+        inlineSection,
+        'Nutze die Zeilennummern in den Snippets fuer genaue Verweise.',
+        `Beantworte die Frage: ${question}`
+      ]
         .filter(Boolean)
         .join('\n\n');
 
-      await sendMessage(`Auto Context → ${requestedFiles.join(', ')}`, {
-        actualContent: followUpPrompt
-      });
+      await sendMessage(question, { injectSystemPrompt: contextPrompt });
     } finally {
       setAutoContextStatus('');
       setIsAutoContextBusy(false);
@@ -501,7 +584,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       setPendingEdits(prev => prev.filter(item => item.id !== edit.id));
     } catch (error) {
       console.error('Failed to apply edit', error);
-      alert(`Fehler beim Übernehmen: ${error instanceof Error ? error.message : String(error)}`);
+      alert(`Fehler beim ├£bernehmen: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -527,7 +610,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     });
 
     if (!rows.length) {
-      rows.push({ text: '(keine Änderungen)', type: 'context' });
+      rows.push({ text: '(keine ├änderungen)', type: 'context' });
     }
 
     return (
@@ -553,7 +636,16 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
             <button
               type="button"
               className={`ai-chat-toggle ${autoContextEnabled ? 'active' : ''}`}
-              onClick={() => setAutoContextEnabled(value => !value)}
+              onClick={() => {
+                setAutoContextEnabled(value => {
+                  const next = !value;
+                  if (!next) {
+                    setAutoContextFiles([]);
+                    setAutoContextStatus('');
+                  }
+                  return next;
+                });
+              }}
               title="Auto Context automatisch einschalten"
             >
               Auto Context
@@ -561,10 +653,26 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
           </div>
           <div className="ai-chat-header-right">
             <p className={`ai-chat-status ai-chat-status-${connectionStatus}`}>
-              {connectionLabel} · {settings.baseUrl}
+              {connectionLabel} ┬À {settings.baseUrl}
             </p>
           </div>
         </div>
+        {autoContextEnabled && (
+          <div className="ai-chat-context-strip">
+            <span className="ai-chat-context-label">Auto Context</span>
+            {autoContextFiles.length ? (
+              <div className="ai-chat-context-files">
+                {autoContextFiles.map(file => (
+                  <span key={file} className="ai-chat-context-chip" title={file}>
+                    {file}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <span className="ai-chat-context-empty">Keine Dateien geladen</span>
+            )}
+          </div>
+        )}
 
         <div className="ai-chat-conversation-bar">
           <div className="ai-chat-conversation-list">
@@ -589,9 +697,9 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                       event.stopPropagation();
                       removeConversation(conversation.id);
                     }}
-                    title="Chat löschen"
+                    title="Chat l├Âschen"
                   >
-                    ×
+                    ├ù
                   </button>
                 )}
               </div>
@@ -603,6 +711,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
             onClick={() => {
               setInput('');
               setAutoContextStatus('');
+              setAutoContextFiles([]);
               startNewConversation();
             }}
             title="Neuen Chat starten"
@@ -626,20 +735,6 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                 </option>
               ))}
             </select>
-            <div className="ai-chat-max-tokens">
-              <label htmlFor="ai-max-tokens">max tokens</label>
-              <input
-                id="ai-max-tokens"
-                type="number"
-                min={256}
-                max={8192}
-                step={128}
-                value={settings.maxTokens}
-                onChange={event =>
-                  updateSettings({ maxTokens: Math.max(256, Number(event.target.value) || 256) })
-                }
-              />
-            </div>
           </div>
           <button
             className="ai-chat-icon-button"
@@ -656,7 +751,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       <div className="ai-chat-messages">
         {messages.length === 0 ? (
           <div className="ai-chat-empty">
-            Starte eine Unterhaltung oder aktiviere Auto Context für automatische Code-Snippets.
+            Starte eine Unterhaltung oder aktiviere Auto Context f├╝r automatische Code-Snippets.
           </div>
         ) : (
           messages.map(message => (
@@ -679,11 +774,11 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       <div className="ai-chat-input">
         {(autoContextEnabled && autoContextStatus) || isCancelling ? (
           <div className="ai-chat-input-status">
-            {isCancelling ? 'Breche Anfrage ab…' : autoContextStatus}
+            {isCancelling ? 'Breche Anfrage abÔÇª' : autoContextStatus}
           </div>
         ) : null}
         <textarea
-          placeholder="Nachricht eingeben (Shift+Enter für neue Zeile)…"
+          placeholder="Nachricht eingeben (Shift+Enter f├╝r neue Zeile)ÔÇª"
           value={input}
           onChange={event => setInput(event.target.value)}
           onKeyDown={handleInputKeyDown}
@@ -694,7 +789,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
           {(isThinking || isAutoContextBusy) && (
             <span className="ai-chat-typing">
               <LuLoader2 className="ai-chat-spinner" />
-              Assistent arbeitet…
+              Assistent arbeitetÔÇª
             </span>
           )}
           <div className="ai-chat-input-buttons">
@@ -704,8 +799,11 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                 className="ai-chat-cancel-button"
                 onClick={() => {
                   cancelRequest();
+                  autoContextAbortRef.current?.abort();
+                  autoContextAbortRef.current = null;
                   setAutoContextStatus('');
                   setIsAutoContextBusy(false);
+                  setAutoContextFiles([]);
                 }}
               >
                 Abbrechen
@@ -723,8 +821,8 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
         <div className="ai-edit-panel">
           <div className="ai-edit-panel-header">
             <div>
-              <h4>Patch-Vorschläge</h4>
-              <p>Wähle eine Datei, prüfe das Diff und übernehme oder verwerfe sie.</p>
+              <h4>Patch-Vorschl├ñge</h4>
+              <p>W├ñhle eine Datei, pr├╝fe das Diff und ├╝bernehme oder verwerfe sie.</p>
             </div>
             <span className="ai-edit-count">{pendingEdits.length}</span>
           </div>

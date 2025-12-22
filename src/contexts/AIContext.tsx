@@ -42,6 +42,11 @@ interface SendMessageOptions {
   injectSystemPrompt?: string;
 }
 
+interface CompletionRequestOptions {
+  injectSystemPrompt?: string;
+  signal?: AbortSignal;
+}
+
 interface AIContextType {
   conversations: Conversation[];
   activeConversationId: string;
@@ -49,6 +54,10 @@ interface AIContextType {
   startNewConversation: () => void;
   removeConversation: (id: string) => void;
   sendMessage: (content: string, options?: SendMessageOptions) => Promise<string | undefined>;
+  requestCompletion: (
+    messages: { role: string; content: string }[],
+    options?: CompletionRequestOptions
+  ) => Promise<string | undefined>;
   cancelRequest: () => void;
   clearMessages: () => void;
   isThinking: boolean;
@@ -74,7 +83,7 @@ const defaultSettings: AISettings = {
   maxTokens: 2048
 };
 
-const DEFAULT_BASE_PROMPT = 'Du bist LS AI, der integrierte Assistent des LS Editors. Arbeite fokussiert im aktuellen Workspace, antworte knapp und liefere konkrete, umsetzbare Schritte für Code- und Dateiänderungen.';
+const DEFAULT_BASE_PROMPT = 'Du bist LS AI, der integrierte Assistent des LS Editors. Arbeite fokussiert im aktuellen Workspace, antworte knapp und liefere konkrete, umsetzbare Schritte fuer Code- und Dateiaenderungen.';
 
 const createId = () => {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -338,6 +347,37 @@ export const AIProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     [settings]
   );
 
+  const buildSystemMessages = useCallback(
+    async (injectSystemPrompt?: string) => {
+      const basePrompt = await loadBasePrompt();
+      const systemMessages: Array<{ role: string; content: string }> = [];
+      if (basePrompt) {
+        systemMessages.push({ role: 'system', content: basePrompt });
+      }
+      if (injectSystemPrompt) {
+        systemMessages.push({ role: 'system', content: injectSystemPrompt });
+      }
+      return systemMessages;
+    },
+    [loadBasePrompt]
+  );
+
+  const requestCompletion = useCallback(
+    async (
+      payloadMessages: { role: string; content: string }[],
+      options?: CompletionRequestOptions
+    ) => {
+      if (!settings.model) {
+        return undefined;
+      }
+      const systemMessages = await buildSystemMessages(options?.injectSystemPrompt);
+      const signal = options?.signal ?? new AbortController().signal;
+      const result = await performCompletion([...systemMessages, ...payloadMessages], signal);
+      return result?.content;
+    },
+    [buildSystemMessages, performCompletion, settings.model]
+  );
+
   const shouldContinue = useCallback(
     (result: CompletionResult) => {
       if (!result) return false;
@@ -387,11 +427,9 @@ export const AIProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       setIsCancelling(false);
       setLastError(undefined);
 
-      const basePrompt = await loadBasePrompt();
       const messagePayload = mapMessages(updatedMessages);
       const payloadMessages = [
-        ...(basePrompt ? [{ role: 'system', content: basePrompt }] : []),
-        ...(options?.injectSystemPrompt ? [{ role: 'system', content: options.injectSystemPrompt }] : []),
+        ...(await buildSystemMessages(options?.injectSystemPrompt)),
         ...messagePayload
       ];
 
@@ -439,7 +477,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode }> = ({ children }
 
         const systemMessage: Message = {
           id: createId(),
-          content: aborted ? 'Anfrage abgebrochen.' : `âš ï¸ ${message}`,
+          content: aborted ? 'Anfrage abgebrochen.' : `Fehler: ${message}`,
           sender: 'system',
           timestamp: new Date()
         };
@@ -456,7 +494,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode }> = ({ children }
         setIsThinking(false);
       }
     },
-    [conversations, getActiveConversation, isThinking, loadBasePrompt, mapMessages, performCompletion, settings.model, shouldContinue]
+    [buildSystemMessages, conversations, getActiveConversation, isThinking, mapMessages, performCompletion, settings.model, shouldContinue]
   );
 
   const value = useMemo<AIContextType>(
@@ -466,6 +504,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       setActiveConversation: setActiveConversationId,
       startNewConversation,
       sendMessage,
+      requestCompletion,
       cancelRequest,
       removeConversation,
       clearMessages,
@@ -484,6 +523,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       activeConversationId,
       startNewConversation,
       sendMessage,
+      requestCompletion,
       cancelRequest,
       removeConversation,
       clearMessages,

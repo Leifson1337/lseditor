@@ -9,6 +9,18 @@
   z-index: 10;
   padding: 0 18px 0 72px;
   box-shadow: none;
+  -webkit-app-region: drag;
+}
+
+.menu-tab,
+.menu-tab *,
+.menu-dropdown,
+.menu-item-row,
+.menu-searchbar-wrapper,
+.menu-searchbar,
+.menu-bar-right,
+.menu-bar-right * {
+  -webkit-app-region: no-drag;
 }
 
 .menu-bar-menus {

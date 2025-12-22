@@ -127,59 +127,55 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose, projectPa
         return;
       }
       const term = xtermRef.current;
-      let toSend = '';
+      let sendImmediate = '';
+      const pendingLines: string[] = [];
 
       for (const char of chunk) {
         if (char === '\u0003') {
           inputBufferRef.current = '';
-          toSend += char;
+          sendImmediate += char;
+          term.write('^C\r\n');
           continue;
         }
 
         if (char === '\u007f') {
           if (inputBufferRef.current.length > 0) {
             inputBufferRef.current = inputBufferRef.current.slice(0, -1);
-            toSend += char;
             term.write('\b \b');
           }
           continue;
         }
 
         if (char === '\r' || char === '\n') {
-          const trimmed = inputBufferRef.current.trim().toLowerCase();
-          if (trimmed === 'cls') {
+          const line = inputBufferRef.current;
+          const trimmed = line.trim().toLowerCase();
+          if (trimmed === 'cls' || trimmed === 'clear') {
             term.clear();
           }
           inputBufferRef.current = '';
-          toSend += '\r';
           term.write('\r\n');
+          pendingLines.push(line);
           continue;
         }
 
         if (char === '\t') {
           inputBufferRef.current += '\t';
-          toSend += '\t';
           term.write('\t');
           continue;
         }
 
         if (char >= ' ' && char <= '~') {
           inputBufferRef.current += char;
-          toSend += char;
           term.write(char);
           continue;
         }
-
-        if (char === '\x1b') {
-          toSend += char;
-        }
       }
 
-      if (!toSend) {
+      if (!sendImmediate && pendingLines.length === 0) {
         return;
       }
 
-      const normalized = toSend.replace(/\r\n|\r|\n/g, '\r\n');
+      const normalized = `${sendImmediate}${pendingLines.map(line => `${line}\r\n`).join('')}`;
       ipc.send('terminal:write', {
         sessionId: sessionIdRef.current,
         data: normalized
