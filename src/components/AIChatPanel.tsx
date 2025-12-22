@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import path from 'path';
 import { FiRefreshCw, FiSend, FiPlus } from 'react-icons/fi';
 import { diffLines } from 'diff';
@@ -364,7 +364,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       case 'ready':
         return 'Verbunden';
       case 'connecting':
-        return 'Verbindung wird aufgebautÔÇª';
+        return 'Verbindung wird aufgebaut...';
       case 'error':
         return 'Nicht verbunden';
       default:
@@ -584,7 +584,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       setPendingEdits(prev => prev.filter(item => item.id !== edit.id));
     } catch (error) {
       console.error('Failed to apply edit', error);
-      alert(`Fehler beim ├£bernehmen: ${error instanceof Error ? error.message : String(error)}`);
+      alert(`Fehler beim Übernehmen: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -610,7 +610,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     });
 
     if (!rows.length) {
-      rows.push({ text: '(keine ├änderungen)', type: 'context' });
+      rows.push({ text: '(keine Änderungen)', type: 'context' });
     }
 
     return (
@@ -653,7 +653,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
           </div>
           <div className="ai-chat-header-right">
             <p className={`ai-chat-status ai-chat-status-${connectionStatus}`}>
-              {connectionLabel} ┬À {settings.baseUrl}
+              {connectionLabel} - {settings.baseUrl}
             </p>
           </div>
         </div>
@@ -697,9 +697,9 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                       event.stopPropagation();
                       removeConversation(conversation.id);
                     }}
-                    title="Chat l├Âschen"
+                    title="Chat löschen"
                   >
-                    ├ù
+                    ×
                   </button>
                 )}
               </div>
@@ -751,7 +751,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       <div className="ai-chat-messages">
         {messages.length === 0 ? (
           <div className="ai-chat-empty">
-            Starte eine Unterhaltung oder aktiviere Auto Context f├╝r automatische Code-Snippets.
+            Starte eine Unterhaltung oder aktiviere Auto Context für automatische Code-Snippets.
           </div>
         ) : (
           messages.map(message => (
@@ -774,11 +774,11 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       <div className="ai-chat-input">
         {(autoContextEnabled && autoContextStatus) || isCancelling ? (
           <div className="ai-chat-input-status">
-            {isCancelling ? 'Breche Anfrage abÔÇª' : autoContextStatus}
+            {isCancelling ? 'Breche Anfrage ab...' : autoContextStatus}
           </div>
         ) : null}
         <textarea
-          placeholder="Nachricht eingeben (Shift+Enter f├╝r neue Zeile)ÔÇª"
+          placeholder="Nachricht eingeben (Shift+Enter für neue Zeile)..."
           value={input}
           onChange={event => setInput(event.target.value)}
           onKeyDown={handleInputKeyDown}
@@ -789,7 +789,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
           {(isThinking || isAutoContextBusy) && (
             <span className="ai-chat-typing">
               <LuLoader2 className="ai-chat-spinner" />
-              Assistent arbeitetÔÇª
+              Assistent arbeitet...
             </span>
           )}
           <div className="ai-chat-input-buttons">
@@ -821,8 +821,8 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
         <div className="ai-edit-panel">
           <div className="ai-edit-panel-header">
             <div>
-              <h4>Patch-Vorschl├ñge</h4>
-              <p>W├ñhle eine Datei, pr├╝fe das Diff und ├╝bernehme oder verwerfe sie.</p>
+              <h4>Patch-Vorschläge</h4>
+              <p>Wähle eine Datei, prüfe das Diff und übernehme oder verwerfe sie.</p>
             </div>
             <span className="ai-edit-count">{pendingEdits.length}</span>
           </div>

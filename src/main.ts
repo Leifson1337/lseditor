@@ -22,7 +22,7 @@ import * as https from 'https';
 let mainWindow: BrowserWindow | null = null;
 let splashWindow: BrowserWindow | null = null;
 let splashShownAt = 0;
-const MIN_SPLASH_MS = 2000;
+const MIN_SPLASH_MS = 4000;
 let aiService: AIService;
 let uiService: UIService | undefined = undefined;
 
@@ -741,6 +741,9 @@ async function createWindow() {
       preload: path.join(__dirname, 'preload.js')
     }
   });
+  if (splashWindow) {
+    mainWindow.setSkipTaskbar(true);
+  }
 
   mainWindow.once('ready-to-show', () => {
     if (splashWindow) {
@@ -751,6 +754,7 @@ async function createWindow() {
           splashWindow.close();
           splashWindow = null;
         }
+        mainWindow?.setSkipTaskbar(false);
         mainWindow?.show();
       }, delay);
       return;

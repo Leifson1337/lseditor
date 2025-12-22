@@ -22,7 +22,7 @@
   flex: 1 1 auto;
   box-sizing: border-box;
   overflow: hidden;
-  font-family: 'Space Grotesk', 'Segoe UI', sans-serif;
+  font-family: 'Space Grotesk', 'Segoe UI', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', sans-serif;
   color: var(--ai-text);
 }
 
@@ -252,6 +252,13 @@
 .ai-chat-icon-button:not(:disabled):hover {
   background: rgba(56, 189, 248, 0.2);
   transform: translateY(-1px);
+}
+
+.ai-chat-icon-button svg,
+.ai-chat-new-chat svg,
+.ai-chat-input-buttons svg {
+  width: 18px;
+  height: 18px;
 }
 
 .ai-chat-messages {
