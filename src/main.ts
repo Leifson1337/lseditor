@@ -755,15 +755,16 @@ async function createWindow() {
           splashWindow = null;
         }
         mainWindow?.setSkipTaskbar(false);
+        mainWindow?.maximize();
         mainWindow?.show();
       }, delay);
       return;
     }
+    mainWindow?.maximize();
     mainWindow?.show();
   });
 
-  // Maximize the window
-  mainWindow.maximize();
+  // Maximize the window (Moved to ready-to-show)
 
   // Listen for window maximize event and notify renderer
   mainWindow.on('maximize', () => {
@@ -838,16 +839,14 @@ function setupIpcHandlers() {
  * Sets up IPC handlers for file system operations, including reading directories, files, and writing files.
  */
 function setupFsIpcHandlers() {
-  const DRIVE_PATTERN = /[A-Za-z]:[\\/]/g;
-
+  // Improved path normalization for Windows
   const normalizeFsPath = (candidate: string) => {
-    const resolved = path.resolve(candidate);
-    const matches = Array.from(resolved.matchAll(DRIVE_PATTERN));
-    if (matches.length > 1) {
-      const last = matches[matches.length - 1];
-      if (typeof last.index === 'number' && last.index > 0) {
-        return path.normalize(resolved.slice(last.index));
-      }
+    if (!candidate) return '';
+    let resolved = path.resolve(candidate);
+    if (process.platform === 'win32') {
+      resolved = resolved.replace(/\//g, '\\');
+      const drivePattern = /^([a-zA-Z]:\\)\1/;
+      if (drivePattern.test(resolved)) resolved = resolved.replace(drivePattern, '$1');
     }
     return path.normalize(resolved);
   };

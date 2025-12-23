@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { FolderIcon, FileIcon, ChevronRightIcon, ChevronDownIcon } from './Icons';
+import { SiJavascript, SiTypescript, SiCss3, SiHtml5, SiPython, SiJson, SiMarkdown } from 'react-icons/si';
 import '../styles/FileExplorer.css';
 import path from 'path';
 
@@ -67,7 +68,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   // Tracks expanded (open) folders in the explorer
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   // Context menu state: coordinates and file path
-  const [contextMenu, setContextMenu] = useState<{x: number, y: number, file: string} | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, file: string } | null>(null);
   // File currently being renamed
   const [renamingFile, setRenamingFile] = useState<string | null>(null);
   // Value for the rename input
@@ -336,13 +337,13 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   function getFileIconByExtension(filename: string) {
     const ext = filename.split('.').pop()?.toLowerCase();
     switch (ext) {
-      case 'js': case 'jsx': return <span title="JavaScript" style={{color: '#f7e018'}}>[JS]</span>;
-      case 'ts': case 'tsx': return <span title="TypeScript" style={{color: '#3178c6'}}>[TS]</span>;
-      case 'json': return <span title="JSON" style={{color: '#cbcb41'}}>&#123;&#125;</span>;
-      case 'md': return <span title="Markdown" style={{color: '#519975'}}>[MD]</span>;
-      case 'css': return <span title="CSS" style={{color: '#563d7c'}}>[CSS]</span>;
-      case 'html': return <span title="HTML" style={{color: '#e34c26'}}>[HTML]</span>;
-      case 'py': return <span title="Python" style={{color: '#3572A5'}}>[PY]</span>;
+      case 'js': case 'jsx': return <SiJavascript title="JavaScript" style={{ color: '#f7e018' }} />;
+      case 'ts': case 'tsx': return <SiTypescript title="TypeScript" style={{ color: '#3178c6' }} />;
+      case 'json': return <SiJson title="JSON" style={{ color: '#cbcb41' }} />;
+      case 'md': return <SiMarkdown title="Markdown" style={{ color: '#519975' }} />;
+      case 'css': return <SiCss3 title="CSS" style={{ color: '#563d7c' }} />;
+      case 'html': return <SiHtml5 title="HTML" style={{ color: '#e34c26' }} />;
+      case 'py': return <SiPython title="Python" style={{ color: '#3572A5' }} />;
       default: return <FileIcon />;
     }
   }
@@ -452,7 +453,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   return (
     <div
       className="file-explorer-root"
-      style={{height:'100%',maxHeight:'100%',overflowY:'auto'}}
+      style={{ height: '100%', maxHeight: '100%', overflowY: 'auto' }}
       key={refreshKey}
       onContextMenu={handleRootContextMenu}
     >

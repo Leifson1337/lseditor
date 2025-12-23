@@ -7,7 +7,7 @@
   border-bottom: 1px solid var(--border-color, #27293c);
   position: relative;
   z-index: 10;
-  padding: 0 18px 0 72px;
+  padding: 0 18px 0 10px;
   box-shadow: none;
   -webkit-app-region: drag;
 }

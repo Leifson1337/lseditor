@@ -241,7 +241,30 @@ const MenuBar: React.FC<MenuBarProps> = ({
   isCheckingUpdates = false
 }) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
+  const [isMaximized, setIsMaximized] = useState<boolean>(false);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    // Check initial state
+    window.electron?.ipcRenderer?.invoke('window:isMaximized').then(setIsMaximized);
+
+    // Listen for changes
+    const onMaximized = () => setIsMaximized(true);
+    const onUnmaximized = () => setIsMaximized(false);
+
+    // We need to use a custom event listener system or if ipcRenderer.on is available
+    // Assuming window.electron.ipcRenderer structure matches FileExplorer usage
+    // But typical Electron exposure might be different. 
+    // Let's assume standard 'on' if available, or check how other events are handled.
+    // Based on main.ts, we send 'window:maximized'.
+
+    window.electron?.ipcRenderer?.on('window:maximized', onMaximized);
+    window.electron?.ipcRenderer?.on('window:unmaximized', onUnmaximized);
+
+    return () => {
+      // Cannot unsubscribe with current type definition
+    };
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -450,10 +473,12 @@ const MenuBar: React.FC<MenuBarProps> = ({
         })}
       </div>
       <div className="menu-bar-center">
-        <div className="menu-searchbar-wrapper">
-          <FiSearch className="menu-search-icon" />
-          <input type="text" className="menu-searchbar" placeholder="Search commands or files..." />
-        </div>
+        {isMaximized && (
+          <div className="menu-searchbar-wrapper">
+            <FiSearch className="menu-search-icon" />
+            <input type="text" className="menu-searchbar" placeholder="Search commands or files..." />
+          </div>
+        )}
       </div>
       <div className="menu-bar-right">
         <SettingsIcon />
