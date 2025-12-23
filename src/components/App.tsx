@@ -14,6 +14,7 @@ import { AIConfig } from '../types/AITypes';
 import { FileNode } from '../types/FileNode';
 import { EditorLayout } from './EditorLayout';
 import { ThemeProvider } from '../contexts/ThemeContext';
+import { TerminalSettingsDialog } from './TerminalSettingsDialog';
 import Titlebar from './Titlebar';
 import path from 'path';
 
@@ -99,6 +100,7 @@ const App: React.FC = () => {
   });
   // State for showing settings
   const [showSettings, setShowSettings] = useState(false);
+  const [showTerminalSettings, setShowTerminalSettings] = useState(false);
   const projectServiceRef = useRef<ProjectService | null>(null);
 
   const refreshFileStructure = useCallback(async () => {
@@ -225,6 +227,10 @@ const App: React.FC = () => {
   }, []);
 
   const handleGenericMenuAction = useCallback((menu: string, actionId: string, data?: any) => {
+    if (menu === 'Terminal' && actionId === 'terminalSettings') {
+      setShowTerminalSettings(true);
+      return;
+    }
     if (menu === 'View' && ['explorer', 'search', 'extensions', 'run', 'terminal'].includes(actionId)) {
       const target = actionId === 'run' ? 'terminal' : actionId;
       window.dispatchEvent(new CustomEvent('sidebar:switch', { detail: target }));
@@ -549,8 +555,8 @@ const App: React.FC = () => {
                 {recentProjects.length > 0 ? (
                   <ul>
                     {recentProjects.map((project) => (
-                      <li key={project} style={{display:'flex',alignItems:'center',gap:8}}>
-                        <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis'}}>{project}</span>
+                      <li key={project} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{project}</span>
                         <button
                           onClick={() => openProject(project)}
                           title="Open project"
@@ -560,7 +566,7 @@ const App: React.FC = () => {
                         <button
                           title="Remove from list"
                           onClick={() => removeRecentProject(project)}
-                          style={{color:'red'}}
+                          style={{ color: 'red' }}
                         >
                           ×
                         </button>
@@ -599,6 +605,17 @@ const App: React.FC = () => {
           </Layout>
         )}
       </div>
+      <TerminalSettingsDialog
+        isOpen={showTerminalSettings}
+        onClose={() => setShowTerminalSettings(false)}
+        initialFontSize={(store.get('terminal') as any)?.fontSize || 14}
+        initialFontFamily={(store.get('terminal') as any)?.fontFamily || 'Consolas, monospace'}
+        onSave={(fontSize, fontFamily) => {
+          const current = (store.get('terminal') as any) || {};
+          store.set('terminal', { ...current, fontSize, fontFamily });
+          setShowTerminalSettings(false);
+        }}
+      />
     </ThemeProvider>
   );
 };

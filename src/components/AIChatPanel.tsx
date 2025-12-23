@@ -103,7 +103,7 @@ const formatSnippet = (content: string) => {
     const line = `${String(index + 1).padStart(4, ' ')}| ${lines[index]}`;
     const nextTotal = total + line.length + 1;
     if (nextTotal > MAX_SNIPPET_LENGTH) {
-      formatted.push('... (gekuerzt)');
+      formatted.push('... (truncated)');
       break;
     }
     formatted.push(line);
@@ -362,13 +362,13 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
   const connectionLabel = useMemo(() => {
     switch (connectionStatus) {
       case 'ready':
-        return 'Verbunden';
+        return 'Connected';
       case 'connecting':
-        return 'Verbindung wird aufgebaut...';
+        return 'Connecting...';
       case 'error':
-        return 'Nicht verbunden';
+        return 'Not connected';
       default:
-        return 'Bereit';
+        return 'Ready';
     }
   }, [connectionStatus]);
 
@@ -419,15 +419,15 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       const fileListSection = availableFiles.map(file => `- ${file}`).join('\n');
 
       const selectionPrompt = [
-        'Du bist ein KI-Code-Assistent.',
-        'Ich gebe dir eine Liste aller Projektdateien.',
-        'Antworte NUR mit einem JSON-Array (z.B. ["src/main.ts"]) mit maximal 5 Pfaden, die du fuer die Frage brauchst.',
-        'Wenn du keine Dateien brauchst, antworte mit [].',
+        'You are an AI code assistant.',
+        'I am giving you a list of all project files.',
+        'Reply ONLY with a JSON array (e.g. ["src/main.ts"]) with at most 5 paths that you need to answer the question.',
+        'If you do not need any files, reply with [].',
         preferredFiles.length
-          ? `Aktive/zuletzt geoeffnete Dateien: ${preferredFiles.join(', ')}`
+          ? `Active/recently opened files: ${preferredFiles.join(', ')}`
           : '',
-        `Projektdateien:\n${fileListSection}`,
-        `Frage: ${question}`
+        `Project files:\n${fileListSection}`,
+        `Question: ${question}`
       ]
         .filter(Boolean)
         .join('\n\n');
@@ -485,7 +485,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     }
 
     setIsAutoContextBusy(true);
-    setAutoContextStatus('Auto Context: analysiere Anfrage ...');
+    setAutoContextStatus('Auto Context: analyzing request ...');
     setAutoContextFiles([]);
 
     try {
@@ -498,7 +498,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       }
 
       setAutoContextFiles(requestedFiles);
-      setAutoContextStatus(`Auto Context: lade ${requestedFiles.length} Datei(en) ...`);
+      setAutoContextStatus(`Auto Context: loading ${requestedFiles.length} file(s) ...`);
 
       const sections: string[] = [];
       const accessibleFileNotes: string[] = [];
@@ -510,7 +510,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
           const content = await window.electron?.ipcRenderer?.invoke('fs:readFile', absolutePath);
           if (typeof content === 'string') {
             accessibleFileNotes.push(`- ${relativePath} (${absolutePath})`);
-            const snippet = content.length > 0 ? formatSnippet(content) : '(leer)';
+            const snippet = content.length > 0 ? formatSnippet(content) : '(empty)';
             const section = `### ${relativePath}\n\`\`\`\n${snippet}\n\`\`\``;
             if (accumulated + section.length > MAX_TOTAL_SNIPPET_LENGTH) {
               break;
@@ -529,19 +529,19 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       }
 
       const attachmentsSection = accessibleFileNotes.length
-        ? `Die folgenden Dateien stehen im Workspace zur Verfuegung:\n${accessibleFileNotes.join('\n')}`
+        ? `The following files are available in the workspace:\n${accessibleFileNotes.join('\n')}`
         : '';
 
       const inlineSection = [
-        'Wenn du nicht direkt auf die Dateien zugreifen kannst, verwende die Inhalte:',
+        'If you cannot access the files directly, use the following content:',
         sections.join('\n\n')
       ].join('\n\n');
 
       const contextPrompt = [
         attachmentsSection,
         inlineSection,
-        'Nutze die Zeilennummern in den Snippets fuer genaue Verweise.',
-        `Beantworte die Frage: ${question}`
+        'Use line numbers in the snippets for precise references.',
+        `Answer the question: ${question}`
       ]
         .filter(Boolean)
         .join('\n\n');
@@ -610,7 +610,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     });
 
     if (!rows.length) {
-      rows.push({ text: '(keine Änderungen)', type: 'context' });
+      rows.push({ text: '(no changes)', type: 'context' });
     }
 
     return (
@@ -646,7 +646,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                   return next;
                 });
               }}
-              title="Auto Context automatisch einschalten"
+              title="Toggle Auto Context"
             >
               Auto Context
             </button>
@@ -669,7 +669,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                 ))}
               </div>
             ) : (
-              <span className="ai-chat-context-empty">Keine Dateien geladen</span>
+              <span className="ai-chat-context-empty">No files loaded</span>
             )}
           </div>
         )}
@@ -697,7 +697,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                       event.stopPropagation();
                       removeConversation(conversation.id);
                     }}
-                    title="Chat löschen"
+                    title="Delete Chat"
                   >
                     ×
                   </button>
@@ -714,7 +714,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
               setAutoContextFiles([]);
               startNewConversation();
             }}
-            title="Neuen Chat starten"
+            title="Start New Chat"
           >
             <FiPlus />
           </button>
@@ -728,7 +728,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
               onChange={event => updateSettings({ model: event.target.value })}
               disabled={!models.length}
             >
-              {models.length === 0 && <option value="">Keine Modelle gefunden</option>}
+              {models.length === 0 && <option value="">No models found</option>}
               {models.map(model => (
                 <option key={model} value={model}>
                   {model}
@@ -740,7 +740,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
             className="ai-chat-icon-button"
             type="button"
             onClick={refreshModels}
-            title="Modelle neu laden"
+            title="Reload Models"
             disabled={isFetchingModels}
           >
             {isFetchingModels ? <LuLoader2 className="ai-chat-spinner" /> : <FiRefreshCw />}
@@ -751,7 +751,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       <div className="ai-chat-messages">
         {messages.length === 0 ? (
           <div className="ai-chat-empty">
-            Starte eine Unterhaltung oder aktiviere Auto Context für automatische Code-Snippets.
+            Start a conversation or enable Auto Context for automatic code snippets.
           </div>
         ) : (
           messages.map(message => (
@@ -774,11 +774,11 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       <div className="ai-chat-input">
         {(autoContextEnabled && autoContextStatus) || isCancelling ? (
           <div className="ai-chat-input-status">
-            {isCancelling ? 'Breche Anfrage ab...' : autoContextStatus}
+            {isCancelling ? 'Cancelling request...' : autoContextStatus}
           </div>
         ) : null}
         <textarea
-          placeholder="Nachricht eingeben (Shift+Enter für neue Zeile)..."
+          placeholder="Enter message (Shift+Enter for new line)..."
           value={input}
           onChange={event => setInput(event.target.value)}
           onKeyDown={handleInputKeyDown}
@@ -789,7 +789,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
           {(isThinking || isAutoContextBusy) && (
             <span className="ai-chat-typing">
               <LuLoader2 className="ai-chat-spinner" />
-              Assistent arbeitet...
+              Assistant is working...
             </span>
           )}
           <div className="ai-chat-input-buttons">
@@ -806,12 +806,12 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                   setAutoContextFiles([]);
                 }}
               >
-                Abbrechen
+                Cancel
               </button>
             )}
             <button type="button" onClick={handleSend} disabled={inputDisabled || !input.trim()}>
               <FiSend />
-              Antworten
+              Reply
             </button>
           </div>
         </div>
@@ -821,8 +821,8 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
         <div className="ai-edit-panel">
           <div className="ai-edit-panel-header">
             <div>
-              <h4>Patch-Vorschläge</h4>
-              <p>Wähle eine Datei, prüfe das Diff und übernehme oder verwerfe sie.</p>
+              <h4>Patch Suggestions</h4>
+              <p>Select a file, check the diff, and apply or reject it.</p>
             </div>
             <span className="ai-edit-count">{pendingEdits.length}</span>
           </div>

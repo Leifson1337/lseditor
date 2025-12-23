@@ -38,7 +38,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, onOpen, onRename, onDel
     <li onClick={onOpen}>Open</li>
     <li onClick={onRename}>Rename</li>
     <li onClick={onDelete}>Delete</li>
-    {isHtml && onLiveUpdate && <li onClick={onLiveUpdate}>Live-Update</li>}
+    {isHtml && onLiveUpdate && <li onClick={onLiveUpdate}>Live Update</li>}
     <li onClick={onClose}>Cancel</li>
   </ul>
 );
@@ -237,7 +237,10 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
       return;
     }
 
-    const success = await renameFile(absoluteOriginal, trimmed);
+    const dir = path.dirname(absoluteOriginal);
+    const newPath = path.join(dir, trimmed);
+
+    const success = await renameFile(absoluteOriginal, newPath);
     resetRenameState();
     if (success) {
       setRefreshKey(k => k + 1);

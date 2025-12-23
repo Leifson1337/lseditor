@@ -129,11 +129,17 @@
   line-height: 1.5;
   user-select: none;
   overflow: hidden;
+  opacity: 1;
+  visibility: visible;
+  z-index: 10;
 }
 
 .editor-line-number {
   display: block;
   height: 1.5em;
+  /* 14px * 1.5 = 21px */
+  color: #6f727a;
+  padding-right: 8px;
 }
 
 .editor-textarea {
@@ -266,12 +272,12 @@
   flex-direction: column;
 }
 
-.cm-split-view > .cm-editor {
+.cm-split-view>.cm-editor {
   flex: 1;
   border-right: 1px solid var(--split-border, #333);
 }
 
-.cm-split-view > .cm-editor:last-child {
+.cm-split-view>.cm-editor:last-child {
   border-right: none;
 }
 
@@ -322,12 +328,12 @@
   overflow-y: auto;
 }
 
-.cm-tooltip-autocomplete > div {
+.cm-tooltip-autocomplete>div {
   padding: 4px 8px;
   cursor: pointer;
 }
 
-.cm-tooltip-autocomplete > div:hover {
+.cm-tooltip-autocomplete>div:hover {
   background-color: var(--autocomplete-hover, #444);
 }
 

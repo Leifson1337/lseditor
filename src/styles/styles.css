@@ -9,26 +9,26 @@
   --bg-secondary: #252526;
   --bg-tertiary: #2d2d2d;
   --bg-hover: #2a2d2e;
-  
+
   /* Accent Colors */
   --accent-blue: #007acc;
   --accent-green: #4ec9b0;
   --accent-purple: #c586c0;
-  
+
   /* Text Colors */
   --text-primary: #d4d4d4;
   --text-secondary: #858585;
   --text-disabled: #6b6b6b;
-  
+
   /* Border Colors */
   --border-primary: #3c3c3c;
   --border-hover: #505050;
-  
+
   /* AI-specific Colors */
   --ai-suggestion: rgba(0, 122, 204, 0.1);
   --ai-highlight: rgba(78, 201, 176, 0.1);
   --ai-error: rgba(255, 85, 85, 0.1);
-  
+
   /* UI Elements */
   --sidebar-width: 48px;
   --ai-panel-width: 300px;
@@ -146,8 +146,13 @@ body {
 }
 
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Status Colors */
@@ -363,8 +368,13 @@ body {
 
 /* Animations */
 @keyframes aiHighlight {
-  0% { background-color: var(--ai-suggestion); }
-  100% { background-color: transparent; }
+  0% {
+    background-color: var(--ai-suggestion);
+  }
+
+  100% {
+    background-color: transparent;
+  }
 }
 
 .ai-highlight {
@@ -710,11 +720,7 @@ body {
 }
 
 /* Code Editor Specific */
-.monaco-editor,
-.monaco-editor .margin,
-.monaco-editor .monaco-scrollable-element {
-  all: unset !important;
-}
+
 
 /* AI Suggestions in Editor */
 .monaco-editor .ai-suggestion {

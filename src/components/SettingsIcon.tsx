@@ -48,33 +48,33 @@ const SettingsIcon: React.FC<SettingsIconProps> = ({ onClick }) => {
   const renderConnectionStatus = () => {
     switch (connectionStatus) {
       case 'ready':
-        return 'Verbunden mit LM Studio';
+        return 'Connected to LM Studio';
       case 'connecting':
-        return 'Verbinde…';
+        return 'Connecting...';
       case 'error':
-        return 'Keine Verbindung';
+        return 'No Connection';
       default:
-        return 'Bereit';
+        return 'Ready';
     }
   };
 
   return (
     <div className="settings-container">
-      <button 
+      <button
         className="settings-button"
         onClick={handleClick}
         title="Settings"
       >
         {/* Gear icon (SVG) */}
-        <svg 
-          xmlns="http://www.w3.org/2000/svg" 
-          width="18" 
-          height="18" 
-          viewBox="0 0 24 24" 
-          fill="none" 
-          stroke="currentColor" 
-          strokeWidth="2" 
-          strokeLinecap="round" 
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
           strokeLinejoin="round"
         >
           <circle cx="12" cy="12" r="3" />
@@ -128,7 +128,7 @@ const SettingsIcon: React.FC<SettingsIconProps> = ({ onClick }) => {
                     onChange={event => updateAISettings({ model: event.target.value })}
                     disabled={!models.length}
                   >
-                    {models.length === 0 && <option value="">Keine Modelle gefunden</option>}
+                    {models.length === 0 && <option value="">No models found</option>}
                     {models.map(model => (
                       <option key={model} value={model}>
                         {model}
@@ -136,13 +136,13 @@ const SettingsIcon: React.FC<SettingsIconProps> = ({ onClick }) => {
                     ))}
                   </select>
                   <button type="button" onClick={refreshModels} disabled={isFetchingModels}>
-                    {isFetchingModels ? 'Aktualisiere…' : 'Neu laden'}
+                    {isFetchingModels ? 'Refreshing...' : 'Refresh'}
                   </button>
                 </div>
                 <small className="settings-hint">{renderConnectionStatus()}</small>
               </div>
               <div className="setting-item">
-                <label>Max Tokens pro Anfrage</label>
+                <label>Max Tokens per Request</label>
                 <input
                   type="number"
                   min={256}
@@ -154,7 +154,7 @@ const SettingsIcon: React.FC<SettingsIconProps> = ({ onClick }) => {
                   }
                 />
                 <small className="settings-hint">
-                  Bei langen Antworten wird automatisch eine zweite Anfrage gestellt, falls das Limit erreicht wird.
+                  Automatically sends a second request if the token limit is reached for long responses.
                 </small>
               </div>
             </div>

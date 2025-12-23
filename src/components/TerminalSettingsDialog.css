@@ -1,0 +1,119 @@
+.terminal-settings-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+}
+
+.terminal-settings-dialog {
+    background-color: var(--bg-secondary, #252526);
+    border: 1px solid var(--border-primary, #333);
+    border-radius: 6px;
+    width: 400px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    display: flex;
+    flex-direction: column;
+}
+
+.terminal-settings-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-primary, #333);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.terminal-settings-header h3 {
+    margin: 0;
+    font-size: 14px;
+    color: var(--text-primary, #d4d4d4);
+}
+
+.terminal-settings-header .close-button {
+    background: none;
+    border: none;
+    color: var(--text-secondary, #808080);
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+}
+
+.terminal-settings-header .close-button:hover {
+    color: var(--text-primary, #d4d4d4);
+}
+
+.terminal-settings-content {
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.form-group label {
+    font-size: 12px;
+    color: var(--text-primary, #d4d4d4);
+}
+
+.form-group input {
+    background-color: var(--bg-tertiary, #333);
+    border: 1px solid var(--border-primary, #3c3c3c);
+    color: var(--text-primary, #d4d4d4);
+    padding: 6px 8px;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 13px;
+}
+
+.form-group input:focus {
+    outline: none;
+    border-color: var(--accent-primary, #007acc);
+}
+
+.terminal-settings-actions {
+    padding: 12px 16px;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    border-top: 1px solid var(--border-primary, #333);
+    background-color: var(--bg-secondary, #252526);
+}
+
+.terminal-settings-actions button {
+    padding: 6px 14px;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+    border: 1px solid transparent;
+}
+
+.cancel-button {
+    background-color: transparent;
+    color: var(--text-primary, #d4d4d4);
+    border: 1px solid var(--border-primary, #3c3c3c) !important;
+}
+
+.cancel-button:hover {
+    background-color: var(--bg-hover, #2a2d2e);
+}
+
+.save-button {
+    background-color: var(--accent-primary, #007acc);
+    color: #fff;
+}
+
+.save-button:hover {
+    background-color: var(--accent-secondary, #0098ff);
+}

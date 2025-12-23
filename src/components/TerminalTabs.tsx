@@ -54,6 +54,17 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({ projectPath, onClose
     }
   }, [tabs, activeTab]);
 
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ type: string }>).detail;
+      if (detail && detail.type === 'newTerminal') {
+        addTab();
+      }
+    };
+    window.addEventListener('terminal:action', handler as EventListener);
+    return () => window.removeEventListener('terminal:action', handler as EventListener);
+  }, [addTab]);
+
   return (
     <div className="terminal-tabs-container">
       <div className="terminal-tabs">

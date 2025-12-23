@@ -7,6 +7,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { FiRotateCw, FiTrash2, FiX, FiFolder } from 'react-icons/fi';
 import '@xterm/xterm/css/xterm.css';
 import './TerminalPanel.css';
+import { store } from '../store/store';
 
 interface TerminalPanelProps {
   onClose: () => void;
@@ -40,7 +41,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose, projectPa
   const inputBufferRef = useRef('');
 
   const [status, setStatus] = useState<TerminalStatus>('idle');
-  const [statusMessage, setStatusMessage] = useState('Terminal wird gestartet ...');
+  const [statusMessage, setStatusMessage] = useState('Starting terminal...');
   const [sessionNonce, setSessionNonce] = useState(0);
 
   const sanitizedProjectPath = useMemo(() => {
@@ -61,7 +62,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose, projectPa
     setSessionNonce(value => value + 1);
   }, []);
 
-  const displayPath = sanitizedProjectPath ?? 'App-Verzeichnis';
+  const displayPath = sanitizedProjectPath ?? 'App Directory';
   const canOpenFolder = Boolean(sanitizedProjectPath);
 
   useEffect(() => {
@@ -70,22 +71,22 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose, projectPa
     if (!ipc) {
       console.error('IPC renderer not available - terminal cannot start');
       setStatus('error');
-      setStatusMessage('IPC nicht verfügbar');
+      setStatusMessage('IPC not available');
       return;
     }
 
     if (!containerRef.current) {
       console.error('Terminal container not mounted');
       setStatus('error');
-      setStatusMessage('Kein Terminal-Container');
+      setStatusMessage('No terminal container');
       return;
     }
 
     const xterm = new XTerm({
       allowProposedApi: true,
       cursorBlink: true,
-      fontFamily: 'Consolas, DejaVu Sans Mono, monospace',
-      fontSize: 14,
+      fontFamily: (store.get('terminal') as any)?.fontFamily || 'Consolas, DejaVu Sans Mono, monospace',
+      fontSize: (store.get('terminal') as any)?.fontSize || 14,
       theme: {
         background: '#1e1e1e',
         foreground: '#d4d4d4',
@@ -198,9 +199,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose, projectPa
     const handleTerminalExit = (_event: unknown, payload: { sessionId: string; exitCode: number }) => {
       if (payload.sessionId === sessionIdRef.current) {
         xterm.writeln('');
-        xterm.writeln(`\x1b[31mProzess beendet (Code ${payload.exitCode}).\x1b[0m`);
+        xterm.writeln(`\x1b[31mProcess exited (Code ${payload.exitCode}).\x1b[0m`);
         setStatus('closed');
-        setStatusMessage('Terminalprozess beendet');
+        setStatusMessage('Terminal process exited');
         sessionIdRef.current = null;
       }
     };
@@ -221,13 +222,13 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose, projectPa
 
     const startSession = async () => {
       setStatus('connecting');
-      setStatusMessage('Starte Terminal ...');
+      setStatusMessage('Starting terminal...');
       try {
         let cwdToUse = sanitizedProjectPath;
         if (cwdToUse) {
           const exists = await ipc.invoke('fs:checkPathExists', cwdToUse);
           if (!exists) {
-            xterm.writeln(`\x1b[33mHinweis: ${cwdToUse} nicht gefunden. Verwende Standardpfad.\x1b[0m`);
+            xterm.writeln(`\x1b[33mInfo: ${cwdToUse} not found. Using default path.\x1b[0m`);
             cwdToUse = undefined;
           }
         }
@@ -247,14 +248,14 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose, projectPa
 
         sessionIdRef.current = response.sessionId;
         setStatus('ready');
-        setStatusMessage(cwdToUse ? `Verbunden mit ${cwdToUse}` : 'Verbunden');
+        setStatusMessage(cwdToUse ? `Connected to ${cwdToUse}` : 'Connected');
         xterm.focus();
       } catch (error) {
         console.error('Failed to create terminal session:', error);
         const message = error instanceof Error ? error.message : String(error);
-        xterm.writeln(`\x1b[31mFehler beim Starten des Terminals:\x1b[0m ${message}`);
+        xterm.writeln(`\x1b[31mError starting terminal:\x1b[0m ${message}`);
         setStatus('error');
-        setStatusMessage('Terminal konnte nicht gestartet werden');
+        setStatusMessage('Terminal failed to start');
       }
     };
 
@@ -280,7 +281,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose, projectPa
       fitAddonRef.current = null;
       inputBufferRef.current = '';
       setStatus('idle');
-      setStatusMessage('Terminal geschlossen');
+      setStatusMessage('Terminal closed');
     };
   }, [sanitizedProjectPath, sessionNonce]);
 
@@ -331,9 +332,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose, projectPa
           if (detail.payload?.path) {
             const command = buildRunCommand(detail.payload.path);
             if (command && sendCommandToShell(command)) {
-              setStatusMessage(`Starte ${detail.payload.path}`);
+              setStatusMessage(`Starting ${detail.payload.path}`);
             } else {
-              setStatusMessage('Konnte Befehl nicht ausführen.');
+              setStatusMessage('Could not execute command.');
             }
           }
           break;
@@ -384,16 +385,16 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose, projectPa
             className="terminal-button subtle"
             onClick={handleOpenFolder}
             disabled={!canOpenFolder}
-            title="Ordner im Explorer öffnen"
+            title="Open folder in Explorer"
           >
             <FiFolder />
-            Ordner
+            Folder
           </button>
           <button
             type="button"
             className="terminal-button subtle"
             onClick={handleClear}
-            title="Terminal-Ausgabe löschen"
+            title="Clear terminal output"
           >
             <FiTrash2 />
             Clear
@@ -402,19 +403,19 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose, projectPa
             type="button"
             className="terminal-button subtle"
             onClick={requestRestart}
-            title="Terminal neu starten"
+            title="Restart terminal"
           >
             <FiRotateCw />
-            Neu
+            New
           </button>
           <button
             type="button"
             className="terminal-button danger"
             onClick={handleCloseClick}
-            title="Terminal schließen"
+            title="Close terminal"
           >
             <FiX />
-            Schließen
+            Close
           </button>
         </div>
       </div>
