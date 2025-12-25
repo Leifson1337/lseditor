@@ -1,0 +1,64 @@
+.extension-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 8px;
+    height: 100%;
+}
+
+.extension-action-btn {
+    background: transparent;
+    border: none;
+    color: #cccccc;
+    padding: 4px 8px;
+    cursor: pointer;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s, color 0.2s;
+    font-size: 14px;
+}
+
+.extension-action-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #ffffff;
+}
+
+.extension-action-overflow {
+    position: relative;
+}
+
+.extension-action-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    background: #252526;
+    border: 1px solid #454545;
+    border-radius: 4px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+    z-index: 1000;
+    min-width: 150px;
+    margin-top: 4px;
+}
+
+.extension-dropdown-item {
+    padding: 8px 12px;
+    color: #cccccc;
+    cursor: pointer;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.extension-dropdown-item:hover {
+    background: #37373d;
+    color: #ffffff;
+}
+
+/* Codicon support if available */
+.codicon {
+    font-family: codicon;
+    font-style: normal;
+    font-weight: normal;
+    text-transform: none;
+}

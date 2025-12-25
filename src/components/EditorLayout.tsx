@@ -20,7 +20,8 @@ import {
   stripFileProtocol,
   stripRelativeDrivePrefix
 } from '../utils/pathUtils';
-import { registerExtension } from '@codingame/monaco-vscode-api/extensions';
+import { ExtensionHostKind, registerExtension } from '@codingame/monaco-vscode-api/extensions';
+import { pathToFileURL } from 'url';
 
 // Props for the EditorLayout component
 interface EditorLayoutProps {
@@ -142,9 +143,32 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   const activeTabContent = activeTabData?.content || '';
   const editorLanguage = getLanguageFromPath(activeTabData?.path || activeTabData?.title) || initialLanguage;
   const editorRef = useRef<any>(null);
+  type ExtensionRegistration = {
+    dispose?: () => void | Promise<void>;
+    registerFileUrl?: (filePath: string, url: string) => any;
+  };
+
+  const registeredExtensionsRef = useRef<Map<string, ExtensionRegistration>>(new Map());
+
+  const normalizeExtensionManifest = (manifest: any, directoryName: string) => {
+    const fallbackParts = directoryName.split('.');
+    const name = manifest?.name || (fallbackParts.length > 1 ? fallbackParts.slice(1).join('.') : directoryName);
+    const publisher = manifest?.publisher || (fallbackParts.length > 1 ? fallbackParts[0] : 'local');
+    const engines = {
+      ...(manifest?.engines ?? {}),
+      vscode: manifest?.engines?.vscode ?? '*'
+    };
+
+    return {
+      ...manifest,
+      name,
+      publisher,
+      engines
+    };
+  };
 
   // Function to load and register extensions from a directory
-  const loadExtensionsFromDir = async (dirPath: string) => {
+  const loadExtensionsFromDir = async (dirPath: string, seenExtensions: Set<string>) => {
     const ipc = window.electron?.ipcRenderer;
     if (!ipc) return;
 
@@ -154,23 +178,48 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
 
       const entries = await ipc.invoke('fs:readDir', dirPath);
       for (const entry of entries) {
-        if (entry.isDirectory) {
-          const extDir = path.join(dirPath, entry.name);
-          const packageJsonPath = path.join(extDir, 'package.json');
+        if (!entry.isDirectory) continue;
+        const extDir = path.join(dirPath, entry.name);
+        const packageJsonPath = path.join(extDir, 'package.json');
+        const extensionJsonPath = path.join(extDir, 'extension.json');
 
-          try {
-            const pkgExists = await ipc.invoke('fs:exists', packageJsonPath);
-            if (pkgExists) {
-              const pkgContent = await ipc.invoke('fs:readFile', packageJsonPath);
-              if (pkgContent) {
-                const manifest = JSON.parse(pkgContent);
-                console.log(`Registering extension: ${manifest.name} from ${dirPath}`);
-                registerExtension(manifest, undefined);
+        try {
+          let manifestContent: string | null = null;
+          if (await ipc.invoke('fs:exists', packageJsonPath)) {
+            manifestContent = await ipc.invoke('fs:readFile', packageJsonPath);
+          } else if (await ipc.invoke('fs:exists', extensionJsonPath)) {
+            manifestContent = await ipc.invoke('fs:readFile', extensionJsonPath);
+          }
+
+          if (!manifestContent) continue;
+
+          const manifest = normalizeExtensionManifest(JSON.parse(manifestContent), entry.name);
+          const extensionId = `${manifest.publisher}.${manifest.name}`;
+          if (seenExtensions.has(extensionId)) continue;
+          seenExtensions.add(extensionId);
+
+          if (!registeredExtensionsRef.current.has(extensionId)) {
+            const hostKind = manifest.browser && !manifest.main
+              ? ExtensionHostKind.LocalWebWorker
+              : ExtensionHostKind.LocalProcess;
+            const registration = registerExtension(
+              manifest,
+              hostKind,
+              { path: `/extensions/${extensionId}` }
+            ) as unknown as ExtensionRegistration;
+            registeredExtensionsRef.current.set(extensionId, registration);
+
+            if (registration.registerFileUrl) {
+              const files: string[] = await ipc.invoke('fs:listFilesRecursive', extDir);
+              for (const filePath of files) {
+                const relativePath = `/${path.relative(extDir, filePath).replace(/\\/g, '/')}`;
+                const fileUrl = pathToFileURL(filePath).toString();
+                registration.registerFileUrl(relativePath, fileUrl);
               }
             }
-          } catch (e) {
-            console.warn(`Failed to load extension at ${extDir}`, e);
           }
+        } catch (e) {
+          console.warn(`Failed to load extension at ${extDir}`, e);
         }
       }
     } catch (err) {
@@ -180,24 +229,38 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
 
   // Function to load and register extensions
   const loadExtensions = useCallback(async () => {
-    if (!projectPath) return;
+    const seenExtensions = new Set<string>();
 
-    // Load project-specific extensions
-    const projectExtensionsDir = path.join(projectPath, 'extensions');
-    await loadExtensionsFromDir(projectExtensionsDir);
+    if (projectPath) {
+      // Load project-specific extensions
+      const projectExtensionsDir = path.join(projectPath, 'extensions');
+      await loadExtensionsFromDir(projectExtensionsDir, seenExtensions);
+    }
 
-    // Load built-in VS Code extensions from /vscode-main
-    // Since we are in src/components/, vscode-main is likely at the project root
-    // But let's use the projectPath as a base if it's the root of the editor repo
-    // Assuming projectPath is the workspace, but the editor source might be elsewhere.
-    // However, usually vscode-main is next to lseditor or inside it.
-    // Based on list_dir, vscode-main is in c:\Users\User\Desktop\Projekte\LSE\lseditor\vscode-main
-    const vsCodeMainExtensionsDir = 'c:\\Users\\User\\Desktop\\Projekte\\LSE\\lseditor\\vscode-main\\extensions';
-    await loadExtensionsFromDir(vsCodeMainExtensionsDir);
+    const appRoot = typeof process !== 'undefined' && typeof process.cwd === 'function' ? process.cwd() : '';
+    if (appRoot) {
+      const vsCodeMainExtensionsDir = path.join(appRoot, 'vscode-main', 'extensions');
+      await loadExtensionsFromDir(vsCodeMainExtensionsDir, seenExtensions);
+    }
+
+    for (const [extensionId, registration] of registeredExtensionsRef.current.entries()) {
+      if (!seenExtensions.has(extensionId)) {
+        await Promise.resolve(registration.dispose?.());
+        registeredExtensionsRef.current.delete(extensionId);
+      }
+    }
   }, [projectPath]);
 
   useEffect(() => {
     loadExtensions();
+  }, [loadExtensions]);
+
+  useEffect(() => {
+    const handler = () => {
+      loadExtensions();
+    };
+    window.addEventListener('extensions:changed', handler);
+    return () => window.removeEventListener('extensions:changed', handler);
   }, [loadExtensions]);
 
   const handleEditorMount = useCallback((editorInstance: any) => {

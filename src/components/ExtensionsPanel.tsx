@@ -230,6 +230,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
           setSelectedExtension(null);
         }
         await loadExtensions();
+        window.dispatchEvent(new CustomEvent('extensions:changed'));
       } else {
         setError('Fehler beim Deinstallieren.');
       }
@@ -260,6 +261,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
 
       if (result?.success) {
         await loadExtensions();
+        window.dispatchEvent(new CustomEvent('extensions:changed'));
       } else {
         setError(`Fehler beim Installieren: ${result?.error || 'Unbekannter Fehler'}`);
       }
@@ -296,17 +298,32 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
 
       const manifest = {
         name: normalizedName,
+        publisher: 'local',
         displayName: createName.trim() || normalizedName,
         version: DEFAULT_EXTENSION_VERSION,
         description: createDescription.trim(),
+        engines: {
+          vscode: '*'
+        },
+        activationEvents: ['*'],
         main: './index.js'
       };
 
       await safeInvoke('fs:writeFile', path.join(extensionDir, 'package.json'), JSON.stringify(manifest, null, 2));
+      const entrypoint = [
+        "exports.activate = () => {",
+        "  // Extension entrypoint",
+        "};",
+        "",
+        "exports.deactivate = () => {};",
+        ""
+      ].join('\n');
+      await safeInvoke('fs:writeFile', path.join(extensionDir, 'index.js'), entrypoint);
       setShowCreateForm(false);
       setCreateName('');
       setCreateDescription('');
       await loadExtensions();
+      window.dispatchEvent(new CustomEvent('extensions:changed'));
     } catch (err) {
       console.error('Create error:', err);
     } finally {

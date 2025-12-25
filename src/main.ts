@@ -67,6 +67,50 @@ if (process.platform === 'win32') {
   }
 }
 
+// --- SECURITY UTILITIES ---
+
+/**
+ * Improved path normalization for Windows and cross-platform consistency.
+ */
+const normalizeFsPath = (candidate: string) => {
+  if (!candidate) return '';
+  let resolved = path.resolve(candidate);
+  if (process.platform === 'win32') {
+    resolved = resolved.replace(/\//g, '\\');
+    const drivePattern = /^([a-zA-Z]:\\)\1/;
+    if (drivePattern.test(resolved)) resolved = resolved.replace(drivePattern, '$1');
+  }
+  return path.normalize(resolved);
+};
+
+/**
+ * Checks if a path is safe to access (basic path traversal protection).
+ */
+const isPathSafe = (untrustedPath: string): boolean => {
+  if (!untrustedPath) return false;
+  const normalized = normalizeFsPath(untrustedPath);
+
+  if (normalized.includes('\0')) return false;
+
+  const blockedPaths = [
+    'C:\\Windows',
+    'C:\\System32',
+    '/etc/passwd',
+    '/etc/shadow'
+  ];
+
+  return !blockedPaths.some(p => normalized.toLowerCase().startsWith(p.toLowerCase()));
+};
+
+/**
+ * Validates and normalizes a path. Throws if unsafe.
+ */
+const validatePath = (p: any): string => {
+  if (typeof p !== 'string' || !p.trim()) throw new Error('Invalid path');
+  if (!isPathSafe(p)) throw new Error(`Access denied: Path ${p} is outside allowed boundaries`);
+  return normalizeFsPath(p);
+};
+
 interface TerminalCreateOptions {
   cols?: number;
   rows?: number;
@@ -78,9 +122,10 @@ interface TerminalCreateOptions {
 function resolveWorkingDirectory(requested?: string): string {
   if (requested && requested.trim().length > 0) {
     try {
-      const stats = fs.statSync(requested);
+      const normalized = validatePath(requested);
+      const stats = fs.statSync(normalized);
       if (stats.isDirectory()) {
-        return requested;
+        return normalized;
       }
     } catch {
       // Ignore invalid paths and fall back to process.cwd()
@@ -534,7 +579,8 @@ ipcMain.handle('window:close', (event) => {
 // --- FS CHECK PATH EXISTS ---
 ipcMain.handle('fs:checkPathExists', async (event, pathToCheck: string) => {
   try {
-    await fs.promises.access(pathToCheck, fs.constants.F_OK);
+    const normalized = validatePath(pathToCheck);
+    await fs.promises.access(normalized, fs.constants.F_OK);
     return true;
   } catch {
     return false;
@@ -558,13 +604,18 @@ ipcMain.handle('ai:getBasePrompt', async () => {
   }
 });
 
-ipcMain.handle('exec', async (_event, command: unknown, options?: { cwd?: string }) => {
+ipcMain.handle('exec', async (event, command: unknown, options?: { cwd?: string }) => {
+  // SECURITY: Only allow exec from the main window
+  if (mainWindow && event.sender !== mainWindow.webContents) {
+    throw new Error('Unauthorized execution request: Sender mismatch');
+  }
+
   if (typeof command !== 'string' || command.trim().length === 0) {
-    throw new Error('Ungültiger Befehl');
+    throw new Error('Ungueltiger Befehl');
   }
 
   const cwd = typeof options?.cwd === 'string' && options.cwd.trim().length
-    ? options.cwd
+    ? validatePath(options.cwd)
     : process.cwd();
 
   return new Promise((resolve, reject) => {
@@ -739,9 +790,27 @@ async function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, 'preload.js')
+      preload: path.join(__dirname, 'preload.js'),
+      sandbox: true
     }
   });
+
+  // SECURITY: Prevent navigation to outside URLs
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith('file://') && !url.startsWith('http://localhost')) {
+      event.preventDefault();
+      shell.openExternal(url);
+    }
+  });
+
+  // SECURITY: Redirect window.open to external browser
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http')) {
+      shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+
   if (splashWindow) {
     mainWindow.setSkipTaskbar(true);
   }
@@ -840,22 +909,11 @@ function setupIpcHandlers() {
  * Sets up IPC handlers for file system operations, including reading directories, files, and writing files.
  */
 function setupFsIpcHandlers() {
-  // Improved path normalization for Windows
-  const normalizeFsPath = (candidate: string) => {
-    if (!candidate) return '';
-    let resolved = path.resolve(candidate);
-    if (process.platform === 'win32') {
-      resolved = resolved.replace(/\//g, '\\');
-      const drivePattern = /^([a-zA-Z]:\\)\1/;
-      if (drivePattern.test(resolved)) resolved = resolved.replace(drivePattern, '$1');
-    }
-    return path.normalize(resolved);
-  };
-
   // File system: read directory
   ipcMain.handle('fs:readDir', async (event, dirPath) => {
     try {
-      const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+      const normalized = validatePath(dirPath);
+      const entries = await fs.promises.readdir(normalized, { withFileTypes: true });
       return entries.map(e => ({
         name: e.name,
         isDirectory: e.isDirectory()
@@ -868,10 +926,7 @@ function setupFsIpcHandlers() {
   // File system: read file
   ipcMain.handle('fs:readFile', async (_event, filePath) => {
     try {
-      if (typeof filePath !== 'string' || !filePath.trim()) {
-        throw new Error('Ungueltiger Dateipfad');
-      }
-      const normalizedPath = normalizeFsPath(filePath);
+      const normalizedPath = validatePath(filePath);
       return await fs.promises.readFile(normalizedPath, 'utf-8');
     } catch (error) {
       console.error('Failed to read file:', error);
@@ -882,10 +937,7 @@ function setupFsIpcHandlers() {
   // File system: write file
   ipcMain.handle('fs:writeFile', async (_event, filePath, content) => {
     try {
-      if (typeof filePath !== 'string' || filePath.trim().length === 0) {
-        throw new Error('Invalid file path');
-      }
-      const targetPath = normalizeFsPath(filePath);
+      const targetPath = validatePath(filePath);
       await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
       const data = typeof content === 'string' ? content : String(content ?? '');
       await fs.promises.writeFile(targetPath, data, 'utf-8');
@@ -899,7 +951,7 @@ function setupFsIpcHandlers() {
   // File system: check if path exists
   ipcMain.handle('fs:exists', async (event, pathToCheck) => {
     try {
-      const normalized = normalizeFsPath(pathToCheck);
+      const normalized = validatePath(pathToCheck);
       await fs.promises.access(normalized);
       return true;
     } catch (error) {
@@ -910,7 +962,7 @@ function setupFsIpcHandlers() {
   // File system: check if path exists and is directory
   ipcMain.handle('fs:checkPathExistsAndIsDirectory', async (event, path) => {
     try {
-      const normalized = normalizeFsPath(path);
+      const normalized = validatePath(path);
       const stats = await fs.promises.stat(normalized);
       return stats.isDirectory();
     } catch (error) {
@@ -921,7 +973,7 @@ function setupFsIpcHandlers() {
   // File system: create directory recursively
   ipcMain.handle('fs:createDirectory', async (event, dirPath) => {
     try {
-      const normalized = normalizeFsPath(dirPath);
+      const normalized = validatePath(dirPath);
       await fs.promises.mkdir(normalized, { recursive: true });
       return true;
     } catch (error) {
@@ -933,7 +985,7 @@ function setupFsIpcHandlers() {
   // File system: delete file
   ipcMain.handle('fs:deleteFile', async (event, filePath) => {
     try {
-      const normalized = normalizeFsPath(filePath);
+      const normalized = validatePath(filePath);
       await fs.promises.unlink(normalized);
       return true;
     } catch (error) {
@@ -1079,15 +1131,17 @@ function setupFsIpcHandlers() {
 // --- Fehlende IPC-Handler für Renderer-Kommunikation ---
 ipcMain.handle('getDirectoryEntries', async (event, dirPath) => {
   try {
-    const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+    const normalized = validatePath(dirPath);
+    const entries = await fs.promises.readdir(normalized, { withFileTypes: true });
     return entries.map(entry => ({
       name: entry.name,
       isDirectory: entry.isDirectory(),
       isFile: entry.isFile(),
-      path: path.join(dirPath, entry.name)
+      path: path.join(normalized, entry.name)
     }));
   } catch (error) {
-    return { error: String(error) };
+    console.warn(`Failed to get directory entries for ${dirPath}:`, error);
+    return [];
   }
 });
 
@@ -1277,7 +1331,7 @@ ipcMain.handle('editor:findInFiles', async (event, searchText, searchPath, optio
 
   try {
     // Recursive search in files
-    const files = await getAllFilesRecursive(searchPath);
+    const files = await getAllFilesRecursive(searchPath, { ignore: ['node_modules', '.git'] });
     const results = [];
 
     for (const file of files) {
@@ -1307,6 +1361,17 @@ ipcMain.handle('editor:findInFiles', async (event, searchText, searchPath, optio
   } catch (error) {
     console.error('Error searching in files:', error);
     return { success: false, error: String(error) };
+  }
+});
+
+// File system: list files recursively (used for extension registration)
+ipcMain.handle('fs:listFilesRecursive', async (_event, dirPath, options?: { ignore?: string[] }) => {
+  try {
+    const normalized = validatePath(dirPath);
+    return await getAllFilesRecursive(normalized, options);
+  } catch (error) {
+    console.error('Failed to list files recursively:', error);
+    return [];
   }
 });
 
@@ -1498,9 +1563,10 @@ app.on('before-quit', () => {
 /**
  * Helper function for recursively listing all files in a directory.
  */
-function getAllFilesRecursive(dir: string): Promise<string[]> {
+function getAllFilesRecursive(dir: string, options?: { ignore?: string[] }): Promise<string[]> {
   return new Promise((resolve, reject) => {
     const results: string[] = [];
+    const ignore = new Set((options?.ignore ?? []).map(entry => entry.toLowerCase()));
     fs.readdir(dir, { withFileTypes: true }, (err, entries) => {
       if (err) {
         return reject(err);
@@ -1515,15 +1581,14 @@ function getAllFilesRecursive(dir: string): Promise<string[]> {
         const fullPath = path.join(dir, entry.name);
 
         if (entry.isDirectory()) {
-          // Skip node_modules and .git
-          if (entry.name === 'node_modules' || entry.name === '.git') {
+          if (ignore.has(entry.name.toLowerCase())) {
             if (--pending === 0) {
               resolve(results);
             }
             continue;
           }
 
-          getAllFilesRecursive(fullPath).then(files => {
+          getAllFilesRecursive(fullPath, options).then(files => {
             results.push(...files);
             if (--pending === 0) {
               resolve(results);

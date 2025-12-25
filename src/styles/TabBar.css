@@ -1,14 +1,25 @@
 .tab-bar {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   background: #23272e;
   border-bottom: 1px solid #333;
   height: 36px;
-  overflow-x: auto;
-  white-space: nowrap;
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+  overflow: hidden;
+}
+
+.tabs-scroll-container {
+  display: flex;
+  flex: 1;
+  overflow-x: auto;
+  scrollbar-width: none;
+  height: 100%;
+}
+
+.tabs-scroll-container::-webkit-scrollbar {
+  display: none;
 }
 
 .tab {
