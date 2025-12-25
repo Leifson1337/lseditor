@@ -975,10 +975,23 @@ function setupFsIpcHandlers() {
   });
 
   // Extension system: search marketplace
-  ipcMain.handle('extension:search', async (event, query) => {
+  ipcMain.handle('extension:search', async (event, query, offset = 0) => {
     return new Promise((resolve) => {
-      const url = `https://open-vsx.org/api/-/search?q=${encodeURIComponent(query)}`;
-      https.get(url, (res) => {
+      const url = `https://open-vsx.org/api/-/search?query=${encodeURIComponent(query)}&size=50&offset=${offset}`;
+      console.log(`[ExtensionSearch] Searching Marketplace: ${url}`);
+      const options = {
+        headers: {
+          'User-Agent': 'LSEditor/1.0.0'
+        }
+      };
+
+      https.get(url, options, (res) => {
+        if (res.statusCode !== 200) {
+          console.error(`Open VSX search failed with status: ${res.statusCode}`);
+          resolve({ extensions: [] });
+          return;
+        }
+
         let data = '';
         res.on('data', (chunk) => { data += chunk; });
         res.on('end', () => {

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import path from 'path';
-import { FaCube, FaPlusCircle, FaSyncAlt, FaSearch, FaDownload, FaStore } from 'react-icons/fa';
+import { FaCube, FaPlusCircle, FaSyncAlt, FaSearch, FaDownload, FaStore, FaTimes } from 'react-icons/fa';
 import './ExtensionsPanel.css';
 
 interface ExtensionInfo {
@@ -68,6 +68,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
   const [installingIds, setInstallingIds] = useState<Set<string>>(new Set());
   const [selectedExtension, setSelectedExtension] = useState<ExtensionInfo | OpenVSXExtension | null>(null);
   const [isUninstalling, setIsUninstalling] = useState<string | null>(null);
+  const [marketplaceResultsCount, setMarketplaceResultsCount] = useState<number>(0);
 
   const baseExtensionsPath = useMemo(() => {
     if (!projectPath) return null;
@@ -147,6 +148,74 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
     loadExtensions().catch(err => console.error('Extension load error:', err));
   }, [loadExtensions]);
 
+  // Marketplace search effector
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const trimmed = searchQuery.trim();
+      if (trimmed.length > 2) {
+        searchMarketplace(trimmed);
+      } else if (trimmed.length === 0) {
+        setMarketplaceExtensions([]);
+        setMarketplaceResultsCount(0);
+      }
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const searchMarketplace = async (query: string, offset = 0) => {
+    if (!query) {
+      setMarketplaceExtensions([]);
+      setMarketplaceResultsCount(0);
+      return;
+    }
+
+    setIsSearching(true);
+    if (offset === 0) {
+      setMarketplaceExtensions([]);
+    }
+
+    try {
+      const data = await safeInvoke<{ extensions: any[]; totalSize?: number }>('extension:search', query, offset);
+
+      if (data && data.extensions) {
+        const results: OpenVSXExtension[] = data.extensions.map((ext: any) => ({
+          namespace: ext.namespace,
+          name: ext.name,
+          version: ext.version,
+          description: ext.description,
+          displayName: ext.displayName || ext.name,
+          downloadUrl: ext.files.download,
+          iconUrl: ext.files.icon
+        }));
+
+        if (offset === 0) {
+          setMarketplaceExtensions(results);
+        } else {
+          setMarketplaceExtensions(prev => [...prev, ...results]);
+        }
+        setMarketplaceResultsCount(data.totalSize || (offset === 0 ? results.length : marketplaceResultsCount));
+      } else {
+        if (offset === 0) {
+          setMarketplaceExtensions([]);
+          setMarketplaceResultsCount(0);
+        }
+      }
+    } catch (err) {
+      console.error('Marketplace search error:', err);
+      setError('Fehler bei der Marketplace-Suche.');
+      if (offset === 0) setMarketplaceResultsCount(0);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const loadMoreMarketplace = () => {
+    if (marketplaceExtensions.length < marketplaceResultsCount) {
+      searchMarketplace(searchQuery.trim(), marketplaceExtensions.length);
+    }
+  };
+
   const handleUninstall = async (info: ExtensionInfo) => {
     if (!baseExtensionsPath) return;
 
@@ -169,114 +238,6 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
       setError('Deinstallation fehlgeschlagen.');
     } finally {
       setIsUninstalling(null);
-    }
-  };
-
-  const handleCreateExtension = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!baseExtensionsPath) {
-      setError('Kein Projekt geöffnet.');
-      return;
-    }
-
-    const normalizedName = sanitizeExtensionName(createName || '');
-    if (!normalizedName) {
-      setError('Bitte einen gültigen Namen angeben.');
-      return;
-    }
-
-    setIsCreating(true);
-    setError(null);
-
-    try {
-      await safeInvoke('fs:createDirectory', baseExtensionsPath);
-
-      const extensionDir = path.join(baseExtensionsPath, normalizedName);
-      const exists = await safeInvoke<boolean>('fs:checkPathExistsAndIsDirectory', extensionDir);
-      if (exists) {
-        setError('Eine Extension mit diesem Namen existiert bereits.');
-        setIsCreating(false);
-        return;
-      }
-
-      await safeInvoke('fs:createDirectory', extensionDir);
-
-      const manifest = {
-        name: normalizedName,
-        displayName: createName.trim() || normalizedName,
-        version: DEFAULT_EXTENSION_VERSION,
-        description: createDescription.trim(),
-        main: './index.js',
-        createdAt: new Date().toISOString()
-      };
-
-      await safeInvoke('fs:writeFile', path.join(extensionDir, 'package.json'), JSON.stringify(manifest, null, 2));
-      await safeInvoke(
-        'fs:writeFile',
-        path.join(extensionDir, 'index.js'),
-        `module.exports = function activate() {\n  console.log('Extension ${manifest.displayName} activated');\n};\n`
-      );
-      await safeInvoke(
-        'fs:writeFile',
-        path.join(extensionDir, 'README.md'),
-        `# ${manifest.displayName}\n\n${manifest.description || 'Neue Extension.'}\n`
-      );
-
-      setShowCreateForm(false);
-      setCreateName('');
-      setCreateDescription('');
-      await loadExtensions();
-    } catch (createError) {
-      console.error('Failed to create extension:', createError);
-      setError('Extension konnte nicht erstellt werden.');
-    } finally {
-      setIsCreating(false);
-    }
-  };
-
-  // Marketplace search effector
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (searchQuery.trim().length > 2) {
-        searchMarketplace(searchQuery.trim());
-      } else if (searchQuery.trim().length === 0) {
-        setMarketplaceExtensions([]);
-      }
-    }, 500);
-
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
-
-  const searchMarketplace = async (query: string) => {
-    if (!query) {
-      setMarketplaceExtensions([]);
-      return;
-    }
-
-    setIsSearching(true);
-    setMarketplaceExtensions([]); // Clear old results
-    try {
-      const data = await safeInvoke<{ extensions: any[] }>('extension:search', query);
-
-      if (data && data.extensions) {
-        const results: OpenVSXExtension[] = data.extensions.map((ext: any) => ({
-          namespace: ext.namespace,
-          name: ext.name,
-          version: ext.version,
-          description: ext.description,
-          displayName: ext.displayName || ext.name,
-          downloadUrl: ext.files.download,
-          iconUrl: ext.files.icon
-        }));
-        setMarketplaceExtensions(results);
-      } else {
-        setMarketplaceExtensions([]);
-      }
-    } catch (err) {
-      console.error('Marketplace search error:', err);
-      setError('Fehler bei der Marketplace-Suche.');
-    } finally {
-      setIsSearching(false);
     }
   };
 
@@ -317,6 +278,39 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
   const handleOpenExtension = (info: ExtensionInfo) => {
     if (onOpenExtension) {
       onOpenExtension(info.manifestPath);
+    }
+  };
+
+  const handleCreateExtension = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!baseExtensionsPath) return;
+
+    const normalizedName = sanitizeExtensionName(createName || '');
+    if (!normalizedName) return;
+
+    setIsCreating(true);
+    try {
+      await safeInvoke('fs:createDirectory', baseExtensionsPath);
+      const extensionDir = path.join(baseExtensionsPath, normalizedName);
+      await safeInvoke('fs:createDirectory', extensionDir);
+
+      const manifest = {
+        name: normalizedName,
+        displayName: createName.trim() || normalizedName,
+        version: DEFAULT_EXTENSION_VERSION,
+        description: createDescription.trim(),
+        main: './index.js'
+      };
+
+      await safeInvoke('fs:writeFile', path.join(extensionDir, 'package.json'), JSON.stringify(manifest, null, 2));
+      setShowCreateForm(false);
+      setCreateName('');
+      setCreateDescription('');
+      await loadExtensions();
+    } catch (err) {
+      console.error('Create error:', err);
+    } finally {
+      setIsCreating(false);
     }
   };
 
@@ -447,15 +441,6 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
             {error && <div className="extensions-panel__error">{error}</div>}
             {isLoading && !extensions.length && <div className="extensions-panel__loading">Lade Extensions...</div>}
 
-            {!isLoading && extensions.length === 0 && !showCreateForm && (
-              <div className="extensions-panel__empty">
-                <p>Noch keine Extensions gefunden.</p>
-                <button type="button" onClick={() => setShowCreateForm(true)}>
-                  Neue Extension erstellen
-                </button>
-              </div>
-            )}
-
             <ul className="extensions-panel__list">
               {extensions.map(extension => (
                 <li
@@ -482,13 +467,28 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
         ) : (
           <div className="extensions-panel__marketplace">
             <div className="extensions-panel__search">
-              <input
-                type="text"
-                placeholder="Marketplace durchsuchen..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && searchMarketplace(searchQuery)}
-              />
+              <div className="extensions-panel__search-container">
+                <input
+                  type="text"
+                  placeholder="Marketplace durchsuchen..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && searchMarketplace(searchQuery)}
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    className="extensions-panel__search-clear"
+                    onClick={() => {
+                      setSearchQuery('');
+                      setMarketplaceExtensions([]);
+                      setMarketplaceResultsCount(0);
+                    }}
+                  >
+                    <FaTimes size={10} />
+                  </button>
+                )}
+              </div>
               <button type="button" onClick={() => searchMarketplace(searchQuery)}>
                 <FaSearch />
               </button>
@@ -498,7 +498,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
 
             {!isSearching && marketplaceExtensions.length > 0 && (
               <div className="extensions-panel__search-info">
-                {marketplaceExtensions.length} Ergebnisse gefunden
+                {marketplaceResultsCount} Ergebnisse gefunden
               </div>
             )}
 
@@ -545,6 +545,13 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
                   </li>
                 );
               })}
+              {marketplaceExtensions.length < marketplaceResultsCount && searchQuery.trim().length > 0 && !isSearching && (
+                <div className="extensions-panel__load-more">
+                  <button type="button" onClick={loadMoreMarketplace}>
+                    Mehr laden...
+                  </button>
+                </div>
+              )}
               {!isSearching && searchQuery.trim().length > 0 && marketplaceExtensions.length === 0 && (
                 <div className="extensions-panel__empty">Keine Erweiterungen für "{searchQuery}" gefunden.</div>
               )}
