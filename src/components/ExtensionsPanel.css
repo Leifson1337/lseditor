@@ -213,6 +213,27 @@
   color: var(--text-primary);
 }
 
+.extensions-panel__search input {
+  flex: 1;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  padding: 6px 30px 6px 10px;
+  /* Right padding for clear button */
+  border-radius: 4px;
+  outline: none;
+  font-size: 12px;
+}
+
+.extensions-panel__incompatible-badge {
+  font-size: 10px;
+  color: #ff9800;
+  background-color: rgba(255, 152, 0, 0.1);
+  padding: 2px 6px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 152, 0, 0.3);
+}
+
 .extensions-panel__search button {
   background: none;
   border: none;

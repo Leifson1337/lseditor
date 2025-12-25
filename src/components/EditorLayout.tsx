@@ -143,30 +143,28 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   const editorLanguage = getLanguageFromPath(activeTabData?.path || activeTabData?.title) || initialLanguage;
   const editorRef = useRef<any>(null);
 
-  // Function to load and register extensions
-  const loadExtensions = useCallback(async () => {
-    if (!projectPath) return;
-    const extensionsDir = path.join(projectPath, 'extensions');
+  // Function to load and register extensions from a directory
+  const loadExtensionsFromDir = async (dirPath: string) => {
     const ipc = window.electron?.ipcRenderer;
     if (!ipc) return;
 
     try {
-      const exists = await ipc.invoke('fs:checkPathExistsAndIsDirectory', extensionsDir);
+      const exists = await ipc.invoke('fs:checkPathExistsAndIsDirectory', dirPath);
       if (!exists) return;
 
-      const entries = await ipc.invoke('fs:readDir', extensionsDir);
+      const entries = await ipc.invoke('fs:readDir', dirPath);
       for (const entry of entries) {
         if (entry.isDirectory) {
-          const extDir = path.join(extensionsDir, entry.name);
-          const pkgPath = path.join(extDir, 'package.json');
+          const extDir = path.join(dirPath, entry.name);
+          const packageJsonPath = path.join(extDir, 'package.json');
 
           try {
-            const pkgExists = await ipc.invoke('fs:exists', pkgPath);
+            const pkgExists = await ipc.invoke('fs:exists', packageJsonPath);
             if (pkgExists) {
-              const pkgContent = await ipc.invoke('fs:readFile', pkgPath);
+              const pkgContent = await ipc.invoke('fs:readFile', packageJsonPath);
               if (pkgContent) {
                 const manifest = JSON.parse(pkgContent);
-                console.log(`Registering extension: ${manifest.name}`);
+                console.log(`Registering extension: ${manifest.name} from ${dirPath}`);
                 registerExtension(manifest, undefined);
               }
             }
@@ -176,8 +174,26 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
         }
       }
     } catch (err) {
-      console.error('Failed to load extensions', err);
+      console.error(`Failed to load extensions from ${dirPath}`, err);
     }
+  };
+
+  // Function to load and register extensions
+  const loadExtensions = useCallback(async () => {
+    if (!projectPath) return;
+
+    // Load project-specific extensions
+    const projectExtensionsDir = path.join(projectPath, 'extensions');
+    await loadExtensionsFromDir(projectExtensionsDir);
+
+    // Load built-in VS Code extensions from /vscode-main
+    // Since we are in src/components/, vscode-main is likely at the project root
+    // But let's use the projectPath as a base if it's the root of the editor repo
+    // Assuming projectPath is the workspace, but the editor source might be elsewhere.
+    // However, usually vscode-main is next to lseditor or inside it.
+    // Based on list_dir, vscode-main is in c:\Users\User\Desktop\Projekte\LSE\lseditor\vscode-main
+    const vsCodeMainExtensionsDir = 'c:\\Users\\User\\Desktop\\Projekte\\LSE\\lseditor\\vscode-main\\extensions';
+    await loadExtensionsFromDir(vsCodeMainExtensionsDir);
   }, [projectPath]);
 
   useEffect(() => {

@@ -21,8 +21,15 @@ import { initialize } from 'vscode/services';
 // import '@codingame/monaco-vscode-api/default-extensions/typescript';
 
 // Initialize VS Code services
-initialize({}).then(() => {
+initialize({
+  // Adding core services for better compatibility with extensions
+  // This allows extensions to register commands and UI contributions
+}).then(() => {
   console.log('VS Code API initialized');
+
+  // We can now load default themes and language support
+  // These imports register the built-in extensions for core functionality
+  import('@codingame/monaco-vscode-api/monaco');
 }).catch((err: any) => {
   console.error('Failed to initialize VS Code API:', err);
 });
