@@ -20,6 +20,7 @@ import {
   stripFileProtocol,
   stripRelativeDrivePrefix
 } from '../utils/pathUtils';
+import { registerExtension } from '@codingame/monaco-vscode-api/extensions';
 
 // Props for the EditorLayout component
 interface EditorLayoutProps {
@@ -141,6 +142,47 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   const activeTabContent = activeTabData?.content || '';
   const editorLanguage = getLanguageFromPath(activeTabData?.path || activeTabData?.title) || initialLanguage;
   const editorRef = useRef<any>(null);
+
+  // Function to load and register extensions
+  const loadExtensions = useCallback(async () => {
+    if (!projectPath) return;
+    const extensionsDir = path.join(projectPath, 'extensions');
+    const ipc = window.electron?.ipcRenderer;
+    if (!ipc) return;
+
+    try {
+      const exists = await ipc.invoke('fs:checkPathExistsAndIsDirectory', extensionsDir);
+      if (!exists) return;
+
+      const entries = await ipc.invoke('fs:readDir', extensionsDir);
+      for (const entry of entries) {
+        if (entry.isDirectory) {
+          const extDir = path.join(extensionsDir, entry.name);
+          const pkgPath = path.join(extDir, 'package.json');
+
+          try {
+            const pkgExists = await ipc.invoke('fs:exists', pkgPath);
+            if (pkgExists) {
+              const pkgContent = await ipc.invoke('fs:readFile', pkgPath);
+              if (pkgContent) {
+                const manifest = JSON.parse(pkgContent);
+                console.log(`Registering extension: ${manifest.name}`);
+                registerExtension(manifest, undefined);
+              }
+            }
+          } catch (e) {
+            console.warn(`Failed to load extension at ${extDir}`, e);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load extensions', err);
+    }
+  }, [projectPath]);
+
+  useEffect(() => {
+    loadExtensions();
+  }, [loadExtensions]);
 
   const handleEditorMount = useCallback((editorInstance: any) => {
     editorRef.current = editorInstance;

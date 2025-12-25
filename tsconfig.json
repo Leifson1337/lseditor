@@ -2,7 +2,10 @@
   "compilerOptions": {
     "target": "ES2020",
     "module": "CommonJS",
-    "lib": ["ES2020", "DOM"],
+    "lib": [
+      "ES2020",
+      "DOM"
+    ],
     "outDir": "./dist",
     "rootDir": "./src",
     "strict": true,
@@ -10,17 +13,37 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "jsx": "react",
-    "types": ["node", "jest"],
+    "types": [
+      "node",
+      "jest"
+    ],
     "moduleResolution": "node",
     "resolveJsonModule": true,
-    "typeRoots": ["./node_modules/@types", "./src/types"],
+    "typeRoots": [
+      "./node_modules/@types",
+      "./src/types"
+    ],
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"],
-      "electron": ["node_modules/electron/electron.d.ts"],
-      "vscode": ["src/types/vscode.d.ts"]
+      "@/*": [
+        "src/*"
+      ],
+      "electron": [
+        "node_modules/electron/electron.d.ts"
+      ],
+      "vscode/*": [
+        "node_modules/@codingame/monaco-vscode-api/*"
+      ],
+      "vscode": [
+        "node_modules/@codingame/monaco-vscode-api"
+      ]
     }
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
-} 
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

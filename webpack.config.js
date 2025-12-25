@@ -91,7 +91,7 @@ const rendererConfig = {
       'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development')
     }),
     new webpack.ProvidePlugin({
-      process: 'process/browser',
+      process: 'process/browser.js',
       Buffer: ['buffer', 'Buffer'],
       global: require.resolve('global')
     }),
@@ -103,7 +103,24 @@ const rendererConfig = {
     new MonacoWebpackPlugin({
       languages: ['javascript', 'typescript', 'html', 'css', 'json', 'markdown']
     })
-  ]
+  ],
+  experiments: {
+    topLevelAwait: true
+  }
 };
 
-module.exports = [mainConfig, rendererConfig]; 
+rendererConfig.module.rules.push({
+  test: /\.m?js/,
+  resolve: {
+    fullySpecified: false
+  }
+});
+
+rendererConfig.resolve.alias = {
+  ...rendererConfig.resolve.alias,
+  'vscode': path.resolve(__dirname, 'node_modules/@codingame/monaco-vscode-api'),
+  'process': 'process/browser.js'
+};
+
+module.exports = [mainConfig, rendererConfig];
+

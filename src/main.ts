@@ -14,6 +14,7 @@ import { AIConfig } from './types/AITypes';
 import 'prismjs';
 import 'prismjs/themes/prism.css';
 import * as fs from 'fs';
+import AdmZip from 'adm-zip';
 import { spawn as spawnProcess, exec as execProcess, ExecException, ChildProcessWithoutNullStreams } from 'child_process';
 import { randomUUID } from 'crypto';
 import * as https from 'https';
@@ -895,6 +896,17 @@ function setupFsIpcHandlers() {
     }
   });
 
+  // File system: check if path exists
+  ipcMain.handle('fs:exists', async (event, pathToCheck) => {
+    try {
+      const normalized = normalizeFsPath(pathToCheck);
+      await fs.promises.access(normalized);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  });
+
   // File system: check if path exists and is directory
   ipcMain.handle('fs:checkPathExistsAndIsDirectory', async (event, path) => {
     try {
@@ -959,6 +971,94 @@ function setupFsIpcHandlers() {
     } catch (error) {
       console.error('Error renaming file:', error);
       return false;
+    }
+  });
+
+  // Extension system: search marketplace
+  ipcMain.handle('extension:search', async (event, query) => {
+    return new Promise((resolve) => {
+      const url = `https://open-vsx.org/api/-/search?q=${encodeURIComponent(query)}`;
+      https.get(url, (res) => {
+        let data = '';
+        res.on('data', (chunk) => { data += chunk; });
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(data));
+          } catch (e) {
+            console.error('Failed to parse Open VSX response:', e);
+            resolve({ extensions: [] });
+          }
+        });
+      }).on('error', (err) => {
+        console.error('Open VSX search error:', err);
+        resolve({ extensions: [] });
+      });
+    });
+  });
+
+  // Extension system: install extension from URL
+  ipcMain.handle('extension:install', async (event, { url, fileName, targetDir }) => {
+    try {
+      const tempPath = path.join(app.getPath('temp'), fileName);
+      const targetPath = normalizeFsPath(targetDir);
+
+      // Ensure target directory exists
+      await fs.promises.mkdir(targetPath, { recursive: true });
+
+      // Download the file
+      const file = fs.createWriteStream(tempPath);
+      await new Promise<void>((resolve, reject) => {
+        https.get(url, (response) => {
+          if (response.statusCode === 301 || response.statusCode === 302) {
+            // Handle redirect
+            https.get(response.headers.location!, (res2) => {
+              res2.pipe(file);
+              file.on('finish', () => {
+                file.close();
+                resolve();
+              });
+            }).on('error', (err) => {
+              fs.unlink(tempPath, () => reject(err));
+            });
+          } else {
+            response.pipe(file);
+            file.on('finish', () => {
+              file.close();
+              resolve();
+            });
+          }
+        }).on('error', (err) => {
+          fs.unlink(tempPath, () => reject(err));
+        });
+      });
+
+      // Extract the .vsix (which is a zip)
+      const zip = new AdmZip(tempPath);
+      // Open VSX/VS Code extensions usually have everything in a 'extension' folder inside the zip
+      // We want to extract the contents of that folder.
+      const zipEntries = zip.getEntries();
+      for (const entry of zipEntries) {
+        if (entry.entryName.startsWith('extension/')) {
+          const targetEntryPath = entry.entryName.replace('extension/', '');
+          if (targetEntryPath) {
+            const fullTargetPath = path.join(targetPath, targetEntryPath);
+            if (entry.isDirectory) {
+              await fs.promises.mkdir(fullTargetPath, { recursive: true });
+            } else {
+              await fs.promises.mkdir(path.dirname(fullTargetPath), { recursive: true });
+              await fs.promises.writeFile(fullTargetPath, entry.getData());
+            }
+          }
+        }
+      }
+
+      // Clean up temp file
+      await fs.promises.unlink(tempPath);
+
+      return { success: true };
+    } catch (error) {
+      console.error('Failed to install extension:', error);
+      return { success: false, error: String(error) };
     }
   });
 }

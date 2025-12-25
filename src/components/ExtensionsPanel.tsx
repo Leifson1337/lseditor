@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import path from 'path';
-import { FaCube, FaFolderOpen, FaPlusCircle, FaSyncAlt } from 'react-icons/fa';
+import { FaCube, FaPlusCircle, FaSyncAlt, FaSearch, FaDownload, FaStore } from 'react-icons/fa';
 import './ExtensionsPanel.css';
 
 interface ExtensionInfo {
@@ -10,6 +10,17 @@ interface ExtensionInfo {
   description?: string;
   location: string;
   manifestPath: string;
+  publisher?: string;
+}
+
+interface OpenVSXExtension {
+  namespace: string;
+  name: string;
+  version: string;
+  description: string;
+  displayName: string;
+  downloadUrl: string;
+  iconUrl?: string;
 }
 
 interface ExtensionsPanelProps {
@@ -41,6 +52,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
   projectPath,
   onOpenExtension
 }) => {
+  const [activeView, setActiveView] = useState<'installed' | 'marketplace'>('installed');
   const [extensions, setExtensions] = useState<ExtensionInfo[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,10 +61,16 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
   const [createDescription, setCreateDescription] = useState('');
   const [isCreating, setIsCreating] = useState(false);
 
+  // Marketplace states
+  const [searchQuery, setSearchQuery] = useState('');
+  const [marketplaceExtensions, setMarketplaceExtensions] = useState<OpenVSXExtension[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [installingIds, setInstallingIds] = useState<Set<string>>(new Set());
+  const [selectedExtension, setSelectedExtension] = useState<ExtensionInfo | OpenVSXExtension | null>(null);
+  const [isUninstalling, setIsUninstalling] = useState<string | null>(null);
+
   const baseExtensionsPath = useMemo(() => {
-    if (!projectPath) {
-      return null;
-    }
+    if (!projectPath) return null;
     return path.join(projectPath, EXTENSIONS_DIR_NAME);
   }, [projectPath]);
 
@@ -81,17 +99,24 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
       const collected: ExtensionInfo[] = [];
 
       for (const entry of entries) {
-        if (!entry.isDirectory) {
-          continue;
-        }
+        if (!entry.isDirectory) continue;
+
         const extensionDir = path.join(baseExtensionsPath, entry.name);
         const manifestPath = path.join(extensionDir, 'extension.json');
+        const packageJsonPath = path.join(extensionDir, 'package.json');
         let manifest: any = null;
 
         try {
-          const manifestContent = await safeInvoke<string>('fs:readFile', manifestPath);
-          if (manifestContent) {
-            manifest = JSON.parse(manifestContent);
+          const extExists = await safeInvoke<boolean>('fs:exists', manifestPath);
+          if (extExists) {
+            const content = await safeInvoke<string>('fs:readFile', manifestPath);
+            if (content) manifest = JSON.parse(content);
+          } else {
+            const pkgExists = await safeInvoke<boolean>('fs:exists', packageJsonPath);
+            if (pkgExists) {
+              const content = await safeInvoke<string>('fs:readFile', packageJsonPath);
+              if (content) manifest = JSON.parse(content);
+            }
           }
         } catch (manifestError) {
           console.warn('Failed to read extension manifest:', manifestError);
@@ -99,11 +124,12 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
 
         collected.push({
           id: entry.name,
-          name: manifest?.name ?? entry.name,
+          name: manifest?.displayName ?? manifest?.name ?? entry.name,
           version: manifest?.version,
           description: manifest?.description,
           location: extensionDir,
-          manifestPath
+          manifestPath: manifestPath,
+          publisher: manifest?.publisher
         });
       }
 
@@ -121,16 +147,41 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
     loadExtensions().catch(err => console.error('Extension load error:', err));
   }, [loadExtensions]);
 
+  const handleUninstall = async (info: ExtensionInfo) => {
+    if (!baseExtensionsPath) return;
+
+    const confirm = window.confirm(`Möchtest du die Extension "${info.name}" wirklich deinstallieren?`);
+    if (!confirm) return;
+
+    setIsUninstalling(info.id);
+    try {
+      const result = await safeInvoke<boolean>('fs:deleteDirectory', info.location);
+      if (result) {
+        if (selectedExtension && 'id' in selectedExtension && selectedExtension.id === info.id) {
+          setSelectedExtension(null);
+        }
+        await loadExtensions();
+      } else {
+        setError('Fehler beim Deinstallieren.');
+      }
+    } catch (err) {
+      console.error('Uninstall error:', err);
+      setError('Deinstallation fehlgeschlagen.');
+    } finally {
+      setIsUninstalling(null);
+    }
+  };
+
   const handleCreateExtension = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!baseExtensionsPath) {
-      setError('Kein Projekt geoeffnet.');
+      setError('Kein Projekt geöffnet.');
       return;
     }
 
     const normalizedName = sanitizeExtensionName(createName || '');
     if (!normalizedName) {
-      setError('Bitte einen gueltigen Namen angeben.');
+      setError('Bitte einen gültigen Namen angeben.');
       return;
     }
 
@@ -151,23 +202,24 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
       await safeInvoke('fs:createDirectory', extensionDir);
 
       const manifest = {
-        name: createName.trim() || normalizedName,
+        name: normalizedName,
+        displayName: createName.trim() || normalizedName,
         version: DEFAULT_EXTENSION_VERSION,
         description: createDescription.trim(),
         main: './index.js',
         createdAt: new Date().toISOString()
       };
 
-      await safeInvoke('fs:writeFile', path.join(extensionDir, 'extension.json'), JSON.stringify(manifest, null, 2));
+      await safeInvoke('fs:writeFile', path.join(extensionDir, 'package.json'), JSON.stringify(manifest, null, 2));
       await safeInvoke(
         'fs:writeFile',
         path.join(extensionDir, 'index.js'),
-        `module.exports = function activate() {\n  console.log('Extension ${manifest.name} activated');\n};\n`
+        `module.exports = function activate() {\n  console.log('Extension ${manifest.displayName} activated');\n};\n`
       );
       await safeInvoke(
         'fs:writeFile',
         path.join(extensionDir, 'README.md'),
-        `# ${manifest.name}\n\n${manifest.description || 'Neue Extension.'}\n`
+        `# ${manifest.displayName}\n\n${manifest.description || 'Neue Extension.'}\n`
       );
 
       setShowCreateForm(false);
@@ -182,19 +234,191 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
     }
   };
 
+  // Marketplace search effector
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (searchQuery.trim().length > 2) {
+        searchMarketplace(searchQuery.trim());
+      } else if (searchQuery.trim().length === 0) {
+        setMarketplaceExtensions([]);
+      }
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const searchMarketplace = async (query: string) => {
+    if (!query) {
+      setMarketplaceExtensions([]);
+      return;
+    }
+
+    setIsSearching(true);
+    setMarketplaceExtensions([]); // Clear old results
+    try {
+      const data = await safeInvoke<{ extensions: any[] }>('extension:search', query);
+
+      if (data && data.extensions) {
+        const results: OpenVSXExtension[] = data.extensions.map((ext: any) => ({
+          namespace: ext.namespace,
+          name: ext.name,
+          version: ext.version,
+          description: ext.description,
+          displayName: ext.displayName || ext.name,
+          downloadUrl: ext.files.download,
+          iconUrl: ext.files.icon
+        }));
+        setMarketplaceExtensions(results);
+      } else {
+        setMarketplaceExtensions([]);
+      }
+    } catch (err) {
+      console.error('Marketplace search error:', err);
+      setError('Fehler bei der Marketplace-Suche.');
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const handleInstall = async (ext: OpenVSXExtension) => {
+    if (!baseExtensionsPath) {
+      setError('Kein Projekt geöffnet.');
+      return;
+    }
+
+    const extId = `${ext.namespace}.${ext.name}`;
+    setInstallingIds(prev => new Set(prev).add(extId));
+
+    try {
+      const targetDir = path.join(baseExtensionsPath, extId);
+      const result = await safeInvoke<{ success: boolean; error?: string }>('extension:install', {
+        url: ext.downloadUrl,
+        fileName: `${extId}-${ext.version}.vsix`,
+        targetDir
+      });
+
+      if (result?.success) {
+        await loadExtensions();
+      } else {
+        setError(`Fehler beim Installieren: ${result?.error || 'Unbekannter Fehler'}`);
+      }
+    } catch (err) {
+      console.error('Installation error:', err);
+      setError('Installation fehlgeschlagen.');
+    } finally {
+      setInstallingIds(prev => {
+        const next = new Set(prev);
+        next.delete(extId);
+        return next;
+      });
+    }
+  };
+
   const handleOpenExtension = (info: ExtensionInfo) => {
     if (onOpenExtension) {
       onOpenExtension(info.manifestPath);
     }
   };
 
+  if (selectedExtension) {
+    const isMarketplace = 'downloadUrl' in selectedExtension;
+    const isInstalled = isMarketplace
+      ? extensions.some(e => e.id === `${(selectedExtension as OpenVSXExtension).namespace}.${(selectedExtension as OpenVSXExtension).name}`)
+      : true;
+
+    return (
+      <div className="extensions-panel extensions-panel--detail">
+        <div className="extensions-panel__header">
+          <button
+            type="button"
+            className="extensions-panel__back-button"
+            onClick={() => setSelectedExtension(null)}
+          >
+            ← Zurück
+          </button>
+        </div>
+        <div className="extensions-panel__detail-content">
+          <div className="extensions-panel__detail-header">
+            {isMarketplace && (selectedExtension as OpenVSXExtension).iconUrl && (
+              <img src={(selectedExtension as OpenVSXExtension).iconUrl} className="extensions-panel__detail-icon" alt="" />
+            )}
+            <div className="extensions-panel__detail-title">
+              <h2>{isMarketplace ? (selectedExtension as OpenVSXExtension).displayName : (selectedExtension as ExtensionInfo).name}</h2>
+              <p className="extensions-panel__detail-publisher">
+                {isMarketplace
+                  ? `@${(selectedExtension as OpenVSXExtension).namespace}`
+                  : `by ${(selectedExtension as ExtensionInfo).publisher || 'unbekannt'}`}
+              </p>
+            </div>
+          </div>
+
+          <div className="extensions-panel__detail-actions">
+            {isMarketplace ? (
+              isInstalled ? (
+                <span className="extensions-panel__installed-badge">Installiert</span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => handleInstall(selectedExtension as OpenVSXExtension)}
+                  disabled={installingIds.has(`${(selectedExtension as OpenVSXExtension).namespace}.${(selectedExtension as OpenVSXExtension).name}`)}
+                  className="extensions-panel__install-button"
+                >
+                  {installingIds.has(`${(selectedExtension as OpenVSXExtension).namespace}.${(selectedExtension as OpenVSXExtension).name}`)
+                    ? <FaSyncAlt className="spin" />
+                    : <FaDownload />}
+                  {' Install'}
+                </button>
+              )
+            ) : (
+              <button
+                type="button"
+                className="extensions-panel__uninstall-button"
+                onClick={() => handleUninstall(selectedExtension as ExtensionInfo)}
+                disabled={isUninstalling === (selectedExtension as ExtensionInfo).id}
+              >
+                Deinstallieren
+              </button>
+            )}
+
+            {!isMarketplace && (
+              <button type="button" onClick={() => handleOpenExtension(selectedExtension as ExtensionInfo)} className="extensions-panel__secondary-button">
+                Manifest öffnen
+              </button>
+            )}
+          </div>
+
+          <div className="extensions-panel__detail-body">
+            <p className="extensions-panel__detail-description">
+              {selectedExtension.description || 'Keine Beschreibung verfügbar.'}
+            </p>
+
+            <div className="extensions-panel__detail-meta">
+              <span>Version: {selectedExtension.version || 'unbekannt'}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="extensions-panel">
       <div className="extensions-panel__header">
-        <div className="extensions-panel__title">
-          <FaCube />
-          <span>Extensions</span>
-          <span className="extensions-panel__count">{extensions.length}</span>
+        <div className="extensions-panel__tabs">
+          <button
+            type="button"
+            className={`extensions-panel__tab ${activeView === 'installed' ? 'active' : ''}`}
+            onClick={() => setActiveView('installed')}
+          >
+            <FaCube /> Eingebaut
+          </button>
+          <button
+            type="button"
+            className={`extensions-panel__tab ${activeView === 'marketplace' ? 'active' : ''}`}
+            onClick={() => setActiveView('marketplace')}
+          >
+            <FaStore /> Marketplace
+          </button>
         </div>
         <div className="extensions-panel__actions">
           <button
@@ -204,7 +428,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
             title="Neu laden"
             disabled={isLoading}
           >
-            <FaSyncAlt />
+            <FaSyncAlt className={isLoading ? 'spin' : ''} />
           </button>
           <button
             type="button"
@@ -217,53 +441,129 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
         </div>
       </div>
 
-      {error && <div className="extensions-panel__error">{error}</div>}
+      <div className="extensions-panel__content">
+        {activeView === 'installed' ? (
+          <>
+            {error && <div className="extensions-panel__error">{error}</div>}
+            {isLoading && !extensions.length && <div className="extensions-panel__loading">Lade Extensions...</div>}
 
-      {isLoading && <div className="extensions-panel__loading">Lade Extensions...</div>}
-
-      {!isLoading && extensions.length === 0 && (
-        <div className="extensions-panel__empty">
-          <p>Noch keine Extensions gefunden.</p>
-          <button type="button" onClick={() => setShowCreateForm(true)}>
-            Neue Extension erstellen
-          </button>
-        </div>
-      )}
-
-      {!isLoading && extensions.length > 0 && (
-        <ul className="extensions-panel__list">
-          {extensions.map(extension => (
-            <li key={extension.id} className="extensions-panel__item">
-              <div className="extensions-panel__item-main">
-                <div className="extensions-panel__item-name">{extension.name}</div>
-                <div className="extensions-panel__item-meta">
-                  <span>Version: {extension.version ?? 'unbekannt'}</span>
-                </div>
-                {extension.description && (
-                  <div className="extensions-panel__item-description">{extension.description}</div>
-                )}
-              </div>
-              <div className="extensions-panel__item-actions">
-                <button type="button" onClick={() => handleOpenExtension(extension)}>
-                  <FaFolderOpen /> Manifest oeffnen
+            {!isLoading && extensions.length === 0 && !showCreateForm && (
+              <div className="extensions-panel__empty">
+                <p>Noch keine Extensions gefunden.</p>
+                <button type="button" onClick={() => setShowCreateForm(true)}>
+                  Neue Extension erstellen
                 </button>
               </div>
-            </li>
-          ))}
-        </ul>
-      )}
+            )}
+
+            <ul className="extensions-panel__list">
+              {extensions.map(extension => (
+                <li
+                  key={extension.id}
+                  className="extensions-panel__item"
+                  onClick={() => setSelectedExtension(extension)}
+                >
+                  <div className="extensions-panel__item-main">
+                    <div className="extensions-panel__item-name">
+                      {extension.name}
+                      {extension.publisher && <span className="extensions-panel__item-publisher">by {extension.publisher}</span>}
+                    </div>
+                    <div className="extensions-panel__item-meta">
+                      <span>v{extension.version ?? 'unbekannt'}</span>
+                    </div>
+                    {extension.description && (
+                      <div className="extensions-panel__item-description">{extension.description}</div>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : (
+          <div className="extensions-panel__marketplace">
+            <div className="extensions-panel__search">
+              <input
+                type="text"
+                placeholder="Marketplace durchsuchen..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && searchMarketplace(searchQuery)}
+              />
+              <button type="button" onClick={() => searchMarketplace(searchQuery)}>
+                <FaSearch />
+              </button>
+            </div>
+
+            {isSearching && <div className="extensions-panel__loading">Suche im Marketplace...</div>}
+
+            {!isSearching && marketplaceExtensions.length > 0 && (
+              <div className="extensions-panel__search-info">
+                {marketplaceExtensions.length} Ergebnisse gefunden
+              </div>
+            )}
+
+            <ul className="extensions-panel__list">
+              {marketplaceExtensions.map(ext => {
+                const extId = `${ext.namespace}.${ext.name}`;
+                const isInstalling = installingIds.has(extId);
+                const isInstalled = extensions.some(e => e.id === extId);
+
+                return (
+                  <li
+                    key={extId}
+                    className="extensions-panel__item marketplace"
+                    onClick={() => setSelectedExtension(ext)}
+                  >
+                    {ext.iconUrl && <img src={ext.iconUrl} alt="" className="extensions-panel__item-icon" />}
+                    <div className="extensions-panel__item-main">
+                      <div className="extensions-panel__item-name">
+                        {ext.displayName}
+                        <span className="extensions-panel__item-publisher">@{ext.namespace}</span>
+                      </div>
+                      <div className="extensions-panel__item-meta">
+                        <span>v{ext.version}</span>
+                      </div>
+                      <div className="extensions-panel__item-description">{ext.description}</div>
+                    </div>
+                    <div className="extensions-panel__item-actions">
+                      {isInstalled ? (
+                        <span className="extensions-panel__installed-badge">Installiert</span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleInstall(ext);
+                          }}
+                          disabled={isInstalling}
+                          className="extensions-panel__install-button"
+                        >
+                          {isInstalling ? <FaSyncAlt className="spin" /> : <FaDownload />}
+                        </button>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+              {!isSearching && searchQuery.trim().length > 0 && marketplaceExtensions.length === 0 && (
+                <div className="extensions-panel__empty">Keine Erweiterungen für "{searchQuery}" gefunden.</div>
+              )}
+            </ul>
+          </div>
+        )}
+      </div>
 
       {showCreateForm && (
         <div className="extensions-panel__create">
           <form onSubmit={handleCreateExtension}>
-            <h3>Neue Extension</h3>
+            <h3>Neue lokale Extension</h3>
             <label>
-              Name
+              Anzeigename
               <input
                 type="text"
                 value={createName}
                 onChange={event => setCreateName(event.target.value)}
-                placeholder="Meine Extension"
+                placeholder="Meine tolle Extension"
                 required
               />
             </label>
@@ -272,7 +572,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
               <textarea
                 value={createDescription}
                 onChange={event => setCreateDescription(event.target.value)}
-                placeholder="Kurzbeschreibung..."
+                placeholder="Was macht diese Erweiterung?"
                 rows={3}
               />
             </label>

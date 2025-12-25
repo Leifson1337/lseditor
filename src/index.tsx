@@ -14,6 +14,19 @@ import './styles/styles.css';
 import './styles/App.css';
 import { AIProvider } from './contexts/AIContext';
 
+// monaco-vscode-api initialization
+import { initialize } from 'vscode/services';
+// import '@codingame/monaco-vscode-api/default-extensions/theme-defaults';
+// import '@codingame/monaco-vscode-api/default-extensions/javascript';
+// import '@codingame/monaco-vscode-api/default-extensions/typescript';
+
+// Initialize VS Code services
+initialize({}).then(() => {
+  console.log('VS Code API initialized');
+}).catch((err: any) => {
+  console.error('Failed to initialize VS Code API:', err);
+});
+
 // Setze das Theme auf dark
 document.documentElement.setAttribute('data-theme', 'dark');
 
