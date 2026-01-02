@@ -10,31 +10,50 @@ interface SidebarProps {
   terminalActive?: boolean;
 }
 
+import { ExtensionService } from '../services/ExtensionService';
+
 // Sidebar provides navigation tabs for main app areas (Explorer, Git, GitHub, AI, Terminal, Extensions)
 const Sidebar: React.FC<SidebarProps> = ({ onTabChange, activeTab, aiActive = false, terminalActive = false }) => {
-  // State to control the visibility of the GitHub dropdown menu
   const [showGithubDropdown, setShowGithubDropdown] = useState(false);
-  // Ref to the GitHub dropdown for outside click detection
   const githubDropdownRef = useRef<HTMLDivElement>(null);
+  const [extensionTabs, setExtensionTabs] = useState<{ id: string; label: string; iconUrl?: string }[]>([]);
+  useEffect(() => {
+    // Subscribe to extension changes
+    const unsubscribe = ExtensionService.getInstance().subscribe(async () => {
+      // Whenever contributions change, re-fetch the sidebar items
+      const items = ExtensionService.getInstance().getSidebarItems();
+
+      // Resolve icons
+      const itemsWithIcons = await Promise.all(items.map(async (item) => {
+        let iconUrl = undefined;
+        if (item.icon) {
+          iconUrl = await ExtensionService.getInstance().resolveIcon(item.extensionId, item.icon);
+        }
+        return { ...item, iconUrl };
+      }));
+
+      setExtensionTabs(itemsWithIcons.map(item => ({
+        id: item.id,
+        label: item.title,
+        iconUrl: item.iconUrl
+      })));
+    });
+    return unsubscribe;
+  }, []);
 
   useEffect(() => {
-    console.log('Sidebar component mounted');
-    console.log('Sidebar activeTab:', activeTab);
-
-    // Close GitHub dropdown when clicking outside the dropdown element
+    // ... items ...
     const handleClickOutside = (event: MouseEvent) => {
       if (githubDropdownRef.current && !githubDropdownRef.current.contains(event.target as Node)) {
         setShowGithubDropdown(false);
       }
     };
-
     document.addEventListener('mousedown', handleClickOutside);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [activeTab]);
 
-  // List of sidebar tabs with their icons, labels, and actions
   const tabs = [
     { id: 'explorer', icon: <FaFolder />, label: 'Explorer', action: () => onTabChange?.('explorer') },
     { id: 'git', icon: <FaGitAlt />, label: 'Git', action: () => onTabChange?.('git') },
@@ -42,6 +61,13 @@ const Sidebar: React.FC<SidebarProps> = ({ onTabChange, activeTab, aiActive = fa
     { id: 'ai', icon: <FaBrain />, label: 'AI', action: () => onTabChange?.('ai') },
     { id: 'terminal', icon: <FaTerminal />, label: 'Terminal', action: () => onTabChange?.('terminal') },
     { id: 'extensions', icon: <FaPuzzlePiece />, label: 'Extensions', action: () => onTabChange?.('extensions') },
+    ...extensionTabs.map(ext => ({
+      id: ext.id,
+      // Use resolved icon if available, else placeholder
+      icon: (ext as any).iconUrl ? <img src={(ext as any).iconUrl} style={{ width: 20, height: 20 }} alt={ext.label} /> : <FaPuzzlePiece />,
+      label: ext.label,
+      action: () => onTabChange?.(ext.id)
+    }))
   ];
 
   const isTabActive = (tabId: string) => {
@@ -59,8 +85,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onTabChange, activeTab, aiActive = fa
     setShowGithubDropdown(false);
     onTabChange?.('git');
     // Dispatch a custom event that GitPanel can listen for
-    const event = new CustomEvent('github-action', { 
-      detail: { action } 
+    const event = new CustomEvent('github-action', {
+      detail: { action }
     });
     document.dispatchEvent(event);
   };
@@ -82,7 +108,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onTabChange, activeTab, aiActive = fa
           </button>
         ))}
       </div>
-      
+
       {/* GitHub dropdown menu for advanced GitHub actions */}
       {showGithubDropdown && (
         <div className="github-dropdown" ref={githubDropdownRef}>

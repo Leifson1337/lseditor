@@ -934,6 +934,18 @@ function setupFsIpcHandlers() {
     }
   });
 
+  // File system: read file as base64 (for images)
+  ipcMain.handle('fs:readFileBase64', async (_event, filePath) => {
+    try {
+      const normalizedPath = validatePath(filePath);
+      const buffer = await fs.promises.readFile(normalizedPath);
+      return buffer.toString('base64');
+    } catch (error) {
+      console.error('Failed to read file base64:', error);
+      return null;
+    }
+  });
+
   // File system: write file
   ipcMain.handle('fs:writeFile', async (_event, filePath, content) => {
     try {
@@ -1157,6 +1169,14 @@ ipcMain.handle('app:getVersion', () => {
     console.error('Failed to retrieve app version:', error);
     return '0.0.0';
   }
+});
+
+ipcMain.handle('app:getUserDataPath', () => {
+  return app.getPath('userData');
+});
+
+ipcMain.handle('app:getPath', (event, name) => {
+  return app.getPath(name as any);
 });
 
 ipcMain.handle('app:openAbout', async () => {

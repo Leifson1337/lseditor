@@ -1,33 +1,32 @@
-// Extension represents a user-installed extension for the editor
-interface Extension {
-  id: string;                // Unique extension ID
-  name: string;              // Name of the extension
-  version: string;           // Extension version
-  description: string;       // Description of the extension
-  author: string;            // Author of the extension
-  enabled: boolean;          // Whether the extension is enabled
-  commands: ExtensionCommand[]; // Commands provided by the extension
+import { ExtensionService as BaseExtensionService } from './ExtensionService';
+
+export interface ExtensionContribution {
+  id: string; // extension id (folder name usually)
+  extensionPath: string; // Absolute path to extension folder
+  manifest: any;
+  viewsContainers?: {
+    activitybar?: any[];
+    [key: string]: any;
+  };
+  views?: {
+    [key: string]: any[];
+  };
+  commands?: any[];
 }
 
-// ExtensionCommand represents a command provided by an extension
-interface ExtensionCommand {
-  id: string;                // Unique command ID
-  name: string;              // Name of the command
-  description: string;       // Description of the command
-  handler: () => void;       // Handler function for the command
-}
-
-// ExtensionService manages loading, enabling, disabling, and unloading extensions
 export class ExtensionService {
-  private static instance: ExtensionService;           // Singleton instance
-  private extensions: Map<string, Extension> = new Map(); // All loaded extensions
-  private commands: Map<string, ExtensionCommand> = new Map(); // All registered commands
+  private static instance: ExtensionService;
+  private userDataPath: string | null = null;
+  private extensionsPath: string | null = null;
+  private contributions: Map<string, ExtensionContribution> = new Map();
+  private listeners: ((contributions: ExtensionContribution[]) => void)[] = [];
+  // Cache for icon base64 data to avoid repeated reads
+  private iconCache: Map<string, string> = new Map();
 
-  private constructor() {}
+  private constructor() {
+    this.init();
+  }
 
-  /**
-   * Get the singleton instance of ExtensionService.
-   */
   public static getInstance(): ExtensionService {
     if (!ExtensionService.instance) {
       ExtensionService.instance = new ExtensionService();
@@ -35,125 +34,141 @@ export class ExtensionService {
     return ExtensionService.instance;
   }
 
-  /**
-   * Load an extension from the file system.
-   * @param extensionPath Path to the extension
-   * @returns True if loaded successfully, false otherwise
-   */
-  async loadExtension(extensionPath: string): Promise<boolean> {
-    try {
-      // Here you would load the extension from the file system
-      // and register its commands
-      return true;
-    } catch (error) {
-      console.error('Failed to load extension:', error);
-      return false;
+  private async init() {
+    if (typeof window !== 'undefined' && window.electron) {
+      this.userDataPath = await window.electron.ipcRenderer.invoke('app:getUserDataPath');
+      // Also try to get project path if possible, but this is a global service.
+      if (this.userDataPath) {
+        this.extensionsPath = `${this.userDataPath}\\extensions`;
+        this.loadExtensions();
+      }
     }
   }
 
-  /**
-   * Unload an extension and remove its commands.
-   * @param extensionId ID of the extension to unload
-   * @returns True if unloaded successfully, false otherwise
-   */
-  async unloadExtension(extensionId: string): Promise<boolean> {
+  public async loadExtensions() {
+    if (!this.extensionsPath || !window.electron) return;
+
     try {
-      const extension = this.extensions.get(extensionId);
-      if (!extension) return false;
-      // Remove all commands associated with this extension
-      extension.commands.forEach(cmd => {
-        this.commands.delete(cmd.id);
-      });
-      this.extensions.delete(extensionId);
-      return true;
-    } catch (error) {
-      console.error('Failed to unload extension:', error);
-      return false;
+      const exists = await window.electron.ipcRenderer.invoke('fs:checkPathExistsAndIsDirectory', this.extensionsPath);
+      if (!exists) return;
+
+      const entries = await window.electron.ipcRenderer.invoke('fs:readDir', this.extensionsPath);
+      if (!Array.isArray(entries)) return;
+
+      const newContributions = new Map<string, ExtensionContribution>();
+
+      for (const entry of entries) {
+        if (!entry.isDirectory) continue;
+        const extPath = `${this.extensionsPath}\\${entry.name}`;
+        const packageJsonPath = `${extPath}\\package.json`;
+
+        try {
+          if (await window.electron.ipcRenderer.invoke('fs:exists', packageJsonPath)) {
+            const content = await window.electron.ipcRenderer.invoke('fs:readFile', packageJsonPath);
+            const packageJson = JSON.parse(content);
+
+            newContributions.set(entry.name, {
+              id: entry.name,
+              extensionPath: extPath,
+              manifest: packageJson,
+              viewsContainers: packageJson.contributes?.viewsContainers,
+              views: packageJson.contributes?.views,
+              commands: packageJson.contributes?.commands,
+            });
+          }
+        } catch (e) {
+          console.warn('Failed to parse extension manifest', entry.name, e);
+        }
+      }
+
+      this.contributions = newContributions;
+      this.notifyListeners();
+
+    } catch (e) {
+      console.error('Error loading extensions in service:', e);
     }
   }
 
+  public getAllContributions(): ExtensionContribution[] {
+    return Array.from(this.contributions.values());
+  }
+
   /**
-   * Enable an extension.
-   * @param extensionId ID of the extension to enable
-   * @returns True if enabled successfully, false otherwise
+   * Resolves the icon path for a given extension sidebar item.
+   * If the icon is a relative path, it tries to read it as base64.
    */
-  async enableExtension(extensionId: string): Promise<boolean> {
-    try {
-      const extension = this.extensions.get(extensionId);
-      if (!extension) return false;
-      extension.enabled = true;
-      this.extensions.set(extensionId, extension);
-      return true;
-    } catch (error) {
-      console.error('Failed to enable extension:', error);
-      return false;
+  public async resolveIcon(extensionId: string, relativePath: string): Promise<string | undefined> {
+    const contrib = this.contributions.get(extensionId);
+    if (!contrib || !relativePath) return undefined;
+
+    const fullPath = `${contrib.extensionPath}\\${relativePath}`; // Simple windows join
+    // Check cache
+    if (this.iconCache.has(fullPath)) {
+      return this.iconCache.get(fullPath);
     }
-  }
 
-  /**
-   * Disable an extension.
-   * @param extensionId ID of the extension to disable
-   * @returns True if disabled successfully, false otherwise
-   */
-  async disableExtension(extensionId: string): Promise<boolean> {
     try {
-      const extension = this.extensions.get(extensionId);
-      if (!extension) return false;
-      extension.enabled = false;
-      this.extensions.set(extensionId, extension);
-      return true;
-    } catch (error) {
-      console.error('Failed to disable extension:', error);
-      return false;
+      if (!window.electron) return undefined;
+      // Use the new base64 reader
+      const b64 = await window.electron.ipcRenderer.invoke('fs:readFileBase64', fullPath);
+      if (b64) {
+        // Determine mime type roughly
+        const ext = relativePath.split('.').pop()?.toLowerCase();
+        let mime = 'image/png';
+        if (ext === 'svg') mime = 'image/svg+xml';
+        if (ext === 'jpg' || ext === 'jpeg') mime = 'image/jpeg';
+
+        const dataUrl = `data:${mime};base64,${b64}`;
+        this.iconCache.set(fullPath, dataUrl);
+        return dataUrl;
+      }
+    } catch (e) {
+      console.error('Failed to resolve icon', fullPath, e);
     }
+    return undefined;
   }
 
-  /**
-   * Register a command provided by an extension.
-   * @param command Extension command to register
-   */
-  registerCommand(command: ExtensionCommand): void {
-    this.commands.set(command.id, command);
+  public getSidebarItems(): { id: string, title: string, icon?: string, extensionId: string }[] {
+    const items: { id: string, title: string, icon?: string, extensionId: string }[] = [];
+    this.contributions.forEach(contrib => {
+      if (contrib.viewsContainers?.activitybar) {
+        contrib.viewsContainers.activitybar.forEach((container: any) => {
+          items.push({
+            id: container.id,
+            title: container.title,
+            icon: container.icon,
+            extensionId: contrib.id
+          });
+        });
+      }
+    });
+    return items;
   }
 
-  /**
-   * Unregister a command by its ID.
-   * @param commandId ID of the command to unregister
-   */
-  unregisterCommand(commandId: string): void {
-    this.commands.delete(commandId);
+  public getViewsForContainer(containerId: string): { id: string, name: string }[] {
+    const views: { id: string, name: string }[] = [];
+    this.contributions.forEach(contrib => {
+      if (contrib.views && contrib.views[containerId]) {
+        contrib.views[containerId].forEach((view: any) => {
+          views.push({
+            id: view.id,
+            name: view.name
+          });
+        });
+      }
+    });
+    return views;
   }
 
-  /**
-   * Get all registered commands.
-   * @returns Array of registered commands
-   */
-  getCommands(): ExtensionCommand[] {
-    return Array.from(this.commands.values());
+  public subscribe(listener: (contributions: ExtensionContribution[]) => void) {
+    this.listeners.push(listener);
+    listener(this.getAllContributions());
+    return () => {
+      this.listeners = this.listeners.filter(l => l !== listener);
+    };
   }
 
-  /**
-   * Get all loaded extensions.
-   * @returns Array of loaded extensions
-   */
-  getExtensions(): Extension[] {
-    return Array.from(this.extensions.values());
-  }
-
-  /**
-   * Execute a command by its ID.
-   * @param commandId ID of the command to execute
-   * @returns True if executed successfully, false otherwise
-   */
-  async executeCommand(commandId: string): Promise<boolean> {
-    try {
-      const command = this.commands.get(commandId);
-      if (!command) return false;
-      await command.handler();
-      return true;
-    } catch (error) {
-      console.error('Failed to execute command:', error);
-      return false;
-    }
+  private notifyListeners() {
+    this.listeners.forEach(l => l(this.getAllContributions()));
   }
 }

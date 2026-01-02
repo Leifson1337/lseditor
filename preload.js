@@ -14,9 +14,10 @@ const ALLOWED_INVOKE_CHANNELS = [
   'get-code-completion', 'explain-code', 'refactor-code', 'editor:findInFiles',
   'exec', 'terminal:create', 'terminal:kill', 'terminal:resize', 'terminal:dispose',
   'dialog:showOpenDialog', 'dialog:openDirectory', 'dialog:inputBox',
-  'app:getVersion', 'app:openAbout', 'app:newWindow', 'app:openFile', 'app:openFolder', 'app:exit',
+  'app:getVersion', 'app:openAbout', 'app:newWindow', 'app:openFile', 'app:openFolder', 'app:exit', 'app:getUserDataPath', 'app:getPath',
   'shell:openPath', 'edit:undo', 'edit:redo', 'edit:cut', 'edit:copy', 'edit:paste', 'edit:find', 'edit:replace',
-  'view:toggleFullScreen', 'view:reload', 'terminal:new', 'terminal:runActiveFile', 'file:newTextFile'
+  'view:toggleFullScreen', 'view:reload', 'terminal:new', 'terminal:runActiveFile', 'file:newTextFile',
+  'fs:readFileBase64'
 ];
 
 const ALLOWED_SEND_CHANNELS = [

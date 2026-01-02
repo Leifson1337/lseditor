@@ -11,6 +11,7 @@ import ExtensionsPanel from './ExtensionsPanel';
 import { ThemeProvider } from '../contexts/ThemeContext';
 import { EditorProvider } from '../contexts/EditorContext';
 import { AIProvider } from '../contexts/AIContext';
+import { ExtensionViewPanel } from './ExtensionViewPanel';
 import '../styles/EditorLayout.css';
 import { FaRegFile } from 'react-icons/fa';
 import { Resizable } from 're-resizable';
@@ -659,13 +660,15 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                     projectPath={projectPath}
                     onOpenExtension={handleOpenExtensionManifest}
                   />
-                ) : (
+                ) : sidebarTab === 'explorer' ? (
                   <FileExplorer
                     fileStructure={fileStructure}
                     onOpenFile={openFileInTab}
                     activeFile={tabs.find(t => t.id === activeTab)?.path || ''}
                     projectPath={projectPath}
                   />
+                ) : (
+                  <ExtensionViewPanel viewContainerId={sidebarTab} />
                 )}
               </Resizable>
               <div className="editor-container">

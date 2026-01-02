@@ -70,10 +70,20 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
   const [isUninstalling, setIsUninstalling] = useState<string | null>(null);
   const [marketplaceResultsCount, setMarketplaceResultsCount] = useState<number>(0);
 
+  const [userDataPath, setUserDataPath] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchUserDataPath = async () => {
+      const path = await safeInvoke<string>('app:getUserDataPath');
+      if (path) setUserDataPath(path);
+    };
+    fetchUserDataPath();
+  }, []);
+
   const baseExtensionsPath = useMemo(() => {
-    if (!projectPath) return null;
-    return path.join(projectPath, EXTENSIONS_DIR_NAME);
-  }, [projectPath]);
+    if (!userDataPath) return null;
+    return path.join(userDataPath, EXTENSIONS_DIR_NAME);
+  }, [userDataPath]);
 
   const loadExtensions = useCallback(async () => {
     if (!baseExtensionsPath) {
@@ -244,7 +254,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
 
   const handleInstall = async (ext: OpenVSXExtension) => {
     if (!baseExtensionsPath) {
-      setError('Kein Projekt geöffnet.');
+      setError('Kein Extensions-Verzeichnis verfügbar.');
       return;
     }
 
