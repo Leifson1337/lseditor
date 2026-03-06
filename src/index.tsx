@@ -13,6 +13,8 @@ import App from './components/App';
 import './styles/styles.css';
 import './styles/App.css';
 import { AIProvider } from './contexts/AIContext';
+import getViewCommonServiceOverride from '@codingame/monaco-vscode-view-common-service-override';
+import getViewsServiceOverride from '@codingame/monaco-vscode-views-service-override';
 
 // monaco-vscode-api initialization
 import { initialize } from 'vscode/services';
@@ -22,8 +24,9 @@ import { initialize } from 'vscode/services';
 
 // Initialize VS Code services
 initialize({
-  // Adding core services for better compatibility with extensions
-  // This allows extensions to register commands and UI contributions
+  // Add view-related service overrides so contributed tree/web views can render
+  ...getViewCommonServiceOverride(),
+  ...getViewsServiceOverride(),
 }).then(() => {
   console.log('VS Code API initialized');
 

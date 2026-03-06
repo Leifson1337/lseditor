@@ -232,6 +232,19 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   const loadExtensions = useCallback(async () => {
     const seenExtensions = new Set<string>();
 
+    const ipc = window.electron?.ipcRenderer;
+    if (ipc) {
+      try {
+        const userDataPath = await ipc.invoke('app:getUserDataPath');
+        if (userDataPath) {
+          const userExtensionsDir = path.join(userDataPath, 'extensions');
+          await loadExtensionsFromDir(userExtensionsDir, seenExtensions);
+        }
+      } catch (err) {
+        console.warn('Failed to load user extensions directory', err);
+      }
+    }
+
     if (projectPath) {
       // Load project-specific extensions
       const projectExtensionsDir = path.join(projectPath, 'extensions');

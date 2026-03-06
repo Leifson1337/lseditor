@@ -118,9 +118,9 @@ rendererConfig.module.rules.push({
 
 rendererConfig.resolve.alias = {
   ...rendererConfig.resolve.alias,
+  '@codingame/monaco-vscode-api$': path.resolve(__dirname, 'node_modules/@codingame/monaco-vscode-api'),
   'vscode': path.resolve(__dirname, 'node_modules/@codingame/monaco-vscode-api'),
   'process': 'process/browser.js'
 };
 
 module.exports = [mainConfig, rendererConfig];
-
