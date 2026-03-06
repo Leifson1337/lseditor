@@ -279,6 +279,15 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
 
   const handleEditorMount = useCallback((editorInstance: any) => {
     editorRef.current = editorInstance;
+    editorInstance.updateOptions({
+      lineNumbers: 'on',
+      lineNumbersMinChars: 4,
+      glyphMargin: false,
+      lineDecorationsWidth: 12,
+      folding: true,
+      renderLineHighlightGutter: true
+    });
+    editorInstance.layout();
   }, []);
 
   const normalizedProjectRoot = useMemo(() => normalizeProjectRoot(projectPath), [projectPath]);
@@ -715,9 +724,13 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                         wordWrap: wordWrapEnabled ? 'on' : 'off',
                         scrollBeyondLastLine: false,
                         automaticLayout: true,
-                        lineNumbers: 'on', // Ensure line numbers are always on
-                        glyphMargin: true,
+                        lineNumbers: 'on',
+                        lineNumbersMinChars: 4,
+                        glyphMargin: false,
+                        lineDecorationsWidth: 12,
+                        folding: true,
                         renderLineHighlight: 'all',
+                        renderLineHighlightGutter: true,
                         scrollbar: { vertical: 'visible', horizontal: 'visible' },
                         quickSuggestions: false,
                         suggestOnTriggerCharacters: false,

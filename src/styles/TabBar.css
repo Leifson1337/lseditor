@@ -71,7 +71,5 @@
 .monaco-editor .margin {
   background: #222 !important;
   color: #888 !important;
-  width: 48px !important;
-  min-width: 32px !important;
   border-right: 1px solid #333 !important;
 }

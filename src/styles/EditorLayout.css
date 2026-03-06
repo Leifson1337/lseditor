@@ -24,6 +24,8 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .editor-path-display {
@@ -56,6 +58,29 @@
 .editor-area {
   flex: 1;
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.editor-area .monaco-editor,
+.editor-area .monaco-editor .overflow-guard,
+.editor-area .monaco-editor-background,
+.editor-area .monaco-editor .inputarea.ime-input {
+  max-width: 100%;
+}
+
+.editor-area .monaco-editor .margin {
+  background: #181c24 !important;
+  border-right: 1px solid #283244 !important;
+}
+
+.editor-area .monaco-editor .line-numbers {
+  color: #7f8ba3 !important;
+}
+
+.editor-area .monaco-editor .current-line-margin,
+.editor-area .monaco-editor .margin-view-overlays .current-line {
+  background: rgba(56, 189, 248, 0.08) !important;
 }
 
 .editor-empty-ui {
@@ -90,4 +115,6 @@
   flex-shrink: 0;
   min-width: 0;
   overflow: hidden;
+  position: relative;
+  z-index: 2;
 }

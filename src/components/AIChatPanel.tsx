@@ -214,6 +214,8 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
   const [pendingEdits, setPendingEdits] = useState<PendingFileEdit[]>([]);
   const [selectedEditId, setSelectedEditId] = useState<string | null>(null);
   const [lastParsedMessageId, setLastParsedMessageId] = useState<string | null>(null);
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const messageEndRef = useRef<HTMLDivElement | null>(null);
 
   const ensureAbsolutePath = useMemo(() => {
     const resolveBaseDirectory = () => {
@@ -399,6 +401,13 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       setSelectedEditId(pendingEdits[0].id);
     }
   }, [pendingEdits, selectedEditId]);
+
+  useEffect(() => {
+    if (!messagesContainerRef.current) {
+      return;
+    }
+    messageEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [messages, isThinking, isAutoContextBusy]);
 
   const requestAutoContextFiles = useCallback(
     async (question: string) => {
@@ -748,7 +757,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
         </div>
       </div>
 
-      <div className="ai-chat-messages">
+      <div className="ai-chat-messages" ref={messagesContainerRef}>
         {messages.length === 0 ? (
           <div className="ai-chat-empty">
             Start a conversation or enable Auto Context for automatic code snippets.
@@ -767,6 +776,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
             </div>
           ))
         )}
+        <div ref={messageEndRef} />
       </div>
 
       {lastError && <div className="ai-chat-alert">{lastError}</div>}
