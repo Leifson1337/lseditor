@@ -759,23 +759,24 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                 </Resizable>
               )}
             </div>
+
+            {isAIPanelOpen && (
+              <Resizable
+                defaultSize={{ width: 360, height: '100%' }}
+                minWidth={260}
+                maxWidth={640}
+                enable={{ left: true }}
+                className="ai-panel-resizable"
+              >
+                <AIChatPanel
+                  fileStructure={fileStructure}
+                  projectPath={projectPath}
+                  activeFilePath={activeTabData?.path}
+                  openFiles={tabs.map(tab => tab.path)}
+                />
+              </Resizable>
+            )}
           </div>
-          {isAIPanelOpen && (
-            <Resizable
-              defaultSize={{ width: 360, height: '100%' }}
-              minWidth={260}
-              maxWidth={640}
-              enable={{ left: true }}
-              className="ai-panel-resizable"
-            >
-              <AIChatPanel
-                fileStructure={fileStructure}
-                projectPath={projectPath}
-                activeFilePath={activeTabData?.path}
-                openFiles={tabs.map(tab => tab.path)}
-              />
-            </Resizable>
-          )}
         </div>
       </EditorProvider>
     </ThemeProvider>

@@ -22,7 +22,7 @@ body {
 
 .app-container {
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto 1fr auto;
   height: 100vh;
   width: 100vw;
   overflow: hidden;
@@ -39,14 +39,15 @@ body {
   display: flex;
   overflow: hidden;
   position: relative;
+  min-width: 0;
+  min-height: 0;
 }
 
 .status-bar {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  z-index: 1000;
+  grid-row: 3;
+  position: relative;
+  z-index: 20;
+  flex-shrink: 0;
   height: 24px;
   background-color: var(--bg-secondary, #252526);
   border-top: 1px solid var(--border-color, #3c3c3c);

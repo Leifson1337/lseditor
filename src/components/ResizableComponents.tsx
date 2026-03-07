@@ -38,7 +38,7 @@ export const ResizableSidebar: React.FC<{children: React.ReactNode, initialWidth
 };
 
 // ResizableAIPanel provides a right-side panel that can be resized horizontally by dragging
-export const ResizableAIPanel: React.FC<{children: React.ReactNode, initialWidth?:number, minWidth?:number, maxWidth?:number}> = ({children, initialWidth=340, minWidth=260, maxWidth=600}) => {
+export const ResizableAIPanel: React.FC<{children: React.ReactNode, initialWidth?:number, minWidth?:number, maxWidth?:number, className?: string}> = ({children, initialWidth=340, minWidth=260, maxWidth=600, className}) => {
   const panelRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = React.useState(initialWidth);
@@ -66,7 +66,7 @@ export const ResizableAIPanel: React.FC<{children: React.ReactNode, initialWidth
     };
   }, [minWidth, maxWidth]);
   return (
-    <div ref={panelRef} style={{width, minWidth, maxWidth, height:'100%', position:'relative', display:'flex'}}>
+    <div ref={panelRef} className={className} style={{width, minWidth, maxWidth, height:'100%', position:'relative', display:'flex', minHeight:0, flex:'0 0 auto', flexShrink:0}}>
       {/* Drag handle for resizing the AI panel */}
       <div ref={dragRef} style={{width:6, cursor:'col-resize', position:'absolute', left:0, top:0, bottom:0, zIndex:10, background:'#2224', borderRadius:3}} />
       {children}
