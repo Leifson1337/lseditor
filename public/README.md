@@ -52,7 +52,7 @@
 ```bash
 # 1. Repository klonen
 git clone https://github.com/Leifson1337/lseditor.git
-cd open-cursor
+cd lseditor-master
 
 # 2. Abhängigkeiten installieren
 npm install
@@ -116,7 +116,7 @@ English:
 ```bash
 # 1. clone repository
 git clone https://github.com/Leifson1337/lseditor.git
-cd open-cursor
+cd lseditor-master
 
 # 2. install dependencies
 npm install
