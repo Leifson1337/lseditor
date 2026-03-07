@@ -29,10 +29,35 @@ export interface DirectoryEntry {
   name: string;            // Name des Eintrags
   path: string;            // Pfad des Eintrags
   isDirectory: boolean;    // Gibt an, ob der Eintrag ein Verzeichnis ist
+  isSymbolicLink?: boolean; // Gibt an, ob der Eintrag ein Symlink/Junction ist
   children?: DirectoryEntry[]; // Unterordnete Einträge (nur für Verzeichnisse)
   size?: number;           // Größe des Eintrags (nur für Dateien)
   modified?: Date;         // Letztes Änderungsdatum des Eintrags
 }
+
+const IGNORED_DIRECTORY_NAMES = new Set([
+  'node_modules',
+  '.git',
+  '.hg',
+  '.svn',
+  '.next',
+  '.nuxt',
+  'dist',
+  'build',
+  'out',
+  'coverage',
+  '.cache',
+  '.turbo',
+  '.parcel-cache',
+  '.yarn',
+  '.pnpm-store',
+  '.idea',
+  '.vs',
+  '.venv',
+  'venv',
+  '__pycache__',
+  'target'
+]);
 
 // ProjectService-Klasse
 // Diese Klasse verwaltet den Zugriff auf Projekte und Dateien im Workspace
@@ -237,8 +262,17 @@ export class ProjectService extends EventEmitter {
     try {
       const entries = await this.safeGetDirectoryEntries(dirPath);
       const result: any[] = [];
+      const filteredEntries = entries
+        .filter(entry => !entry.isSymbolicLink)
+        .filter(entry => !(entry.isDirectory && IGNORED_DIRECTORY_NAMES.has(entry.name.toLowerCase())))
+        .sort((a, b) => {
+          if (a.isDirectory === b.isDirectory) {
+            return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+          }
+          return a.isDirectory ? -1 : 1;
+        });
       
-      for (const entry of entries) {
+      for (const entry of filteredEntries) {
         const node = {
           name: entry.name,
           path: entry.path,

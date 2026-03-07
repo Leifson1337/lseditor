@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { StandaloneServices } from 'vscode/services';
+import { StandaloneServices } from '@codingame/monaco-vscode-api/services';
 import { FaEllipsisV } from 'react-icons/fa';
 import '../styles/ExtensionActions.css';
 

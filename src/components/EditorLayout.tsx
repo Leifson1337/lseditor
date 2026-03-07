@@ -10,7 +10,6 @@ import { IntegratedTerminal } from './IntegratedTerminal';
 import ExtensionsPanel from './ExtensionsPanel';
 import { ThemeProvider } from '../contexts/ThemeContext';
 import { EditorProvider } from '../contexts/EditorContext';
-import { AIProvider } from '../contexts/AIContext';
 import { ExtensionViewPanel } from './ExtensionViewPanel';
 import '../styles/EditorLayout.css';
 import { FaRegFile } from 'react-icons/fa';
@@ -661,125 +660,123 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   return (
     <ThemeProvider>
       <EditorProvider>
-        <AIProvider>
-          <div className="editor-layout-root">
-            <Sidebar
-              activeTab={sidebarTab}
-              onTabChange={handleSidebarTabChange}
-              aiActive={isAIPanelOpen}
-              terminalActive={isTerminalPanelOpen}
-            />
-            <div className="editor-layout-main">
-              <Resizable
-                defaultSize={{ width: 260, height: '100%' }}
-                minWidth={200}
-                maxWidth={500}
-                enable={{ right: true }}
-                className="file-explorer-resizable"
-              >
-                {sidebarTab === 'extensions' ? (
-                  <ExtensionsPanel
-                    projectPath={projectPath}
-                    onOpenExtension={handleOpenExtensionManifest}
-                  />
-                ) : sidebarTab === 'explorer' ? (
-                  <FileExplorer
-                    fileStructure={fileStructure}
-                    onOpenFile={openFileInTab}
-                    activeFile={tabs.find(t => t.id === activeTab)?.path || ''}
-                    projectPath={projectPath}
+        <div className="editor-layout-root">
+          <Sidebar
+            activeTab={sidebarTab}
+            onTabChange={handleSidebarTabChange}
+            aiActive={isAIPanelOpen}
+            terminalActive={isTerminalPanelOpen}
+          />
+          <div className="editor-layout-main">
+            <Resizable
+              defaultSize={{ width: 260, height: '100%' }}
+              minWidth={200}
+              maxWidth={500}
+              enable={{ right: true }}
+              className="file-explorer-resizable"
+            >
+              {sidebarTab === 'extensions' ? (
+                <ExtensionsPanel
+                  projectPath={projectPath}
+                  onOpenExtension={handleOpenExtensionManifest}
+                />
+              ) : sidebarTab === 'explorer' ? (
+                <FileExplorer
+                  fileStructure={fileStructure}
+                  onOpenFile={openFileInTab}
+                  activeFile={tabs.find(t => t.id === activeTab)?.path || ''}
+                  projectPath={projectPath}
+                />
+              ) : (
+                <ExtensionViewPanel viewContainerId={sidebarTab} />
+              )}
+            </Resizable>
+            <div className="editor-container">
+              <TabBar
+                tabs={tabs}
+                activeTab={activeTab}
+                onTabClose={handleTabClose}
+                onTabSelect={setActiveTab}
+              />
+              <div className="editor-path-display" title={activeTabData?.path || 'Keine Datei geöffnet'}>
+                <span className="editor-path-label">Pfad:</span>
+                <span className="editor-path-value">
+                  {activeTabData?.path || 'Keine Datei geöffnet'}
+                </span>
+              </div>
+              <div className="editor-area">
+                {tabs.length > 0 && activeTab ? (
+                  <Editor
+                    key={activeTab}
+                    height="100%"
+                    language={editorLanguage}
+                    value={activeTabContent}
+                    beforeMount={configureDiagnostics}
+                    onChange={handleEditorChange}
+                    path={activeTabData?.path}
+                    onMount={handleEditorMount}
+                    theme="vs-dark"
+                    options={{
+                      fontSize: 16,
+                      minimap: { enabled: false },
+                      wordWrap: wordWrapEnabled ? 'on' : 'off',
+                      scrollBeyondLastLine: false,
+                      automaticLayout: true,
+                      lineNumbers: 'on',
+                      lineNumbersMinChars: 4,
+                      glyphMargin: false,
+                      lineDecorationsWidth: 12,
+                      folding: true,
+                      renderLineHighlight: 'all',
+                      renderLineHighlightGutter: true,
+                      scrollbar: { vertical: 'visible', horizontal: 'visible' },
+                      quickSuggestions: false,
+                      suggestOnTriggerCharacters: false,
+                      smoothScrolling: true,
+                      stickyScroll: { enabled: true }
+                    }}
                   />
                 ) : (
-                  <ExtensionViewPanel viewContainerId={sidebarTab} />
-                )}
-              </Resizable>
-              <div className="editor-container">
-                <TabBar
-                  tabs={tabs}
-                  activeTab={activeTab}
-                  onTabClose={handleTabClose}
-                  onTabSelect={setActiveTab}
-                />
-                <div className="editor-path-display" title={activeTabData?.path || 'Keine Datei geöffnet'}>
-                  <span className="editor-path-label">Pfad:</span>
-                  <span className="editor-path-value">
-                    {activeTabData?.path || 'Keine Datei geöffnet'}
-                  </span>
-                </div>
-                <div className="editor-area">
-                  {tabs.length > 0 && activeTab ? (
-                    <Editor
-                      key={activeTab}
-                      height="100%"
-                      language={editorLanguage}
-                      value={activeTabContent}
-                      beforeMount={configureDiagnostics}
-                      onChange={handleEditorChange}
-                      path={activeTabData?.path}
-                      onMount={handleEditorMount}
-                      theme="vs-dark"
-                      options={{
-                        fontSize: 16,
-                        minimap: { enabled: false },
-                        wordWrap: wordWrapEnabled ? 'on' : 'off',
-                        scrollBeyondLastLine: false,
-                        automaticLayout: true,
-                        lineNumbers: 'on',
-                        lineNumbersMinChars: 4,
-                        glyphMargin: false,
-                        lineDecorationsWidth: 12,
-                        folding: true,
-                        renderLineHighlight: 'all',
-                        renderLineHighlightGutter: true,
-                        scrollbar: { vertical: 'visible', horizontal: 'visible' },
-                        quickSuggestions: false,
-                        suggestOnTriggerCharacters: false,
-                        smoothScrolling: true,
-                        stickyScroll: { enabled: true }
-                      }}
-                    />
-                  ) : (
-                    <div className="editor-empty-ui">
-                      <FaRegFile size={64} color="#888" />
-                      <div className="editor-empty-title">No file opened</div>
-                      <div className="editor-empty-desc">Select a file in the explorer or create a new file to get started.</div>
-                    </div>
-                  )}
-                </div>
-                {isTerminalPanelOpen && (
-                  <Resizable
-                    defaultSize={{ height: 320, width: '100%' }}
-                    minHeight={100}
-                    maxHeight={600}
-                    enable={{ top: true }}
-                    className="terminal-resizable"
-                  >
-                    <IntegratedTerminal
-                      projectPath={projectPath}
-                      onClose={() => setIsTerminalPanelOpen(false)}
-                    />
-                  </Resizable>
+                  <div className="editor-empty-ui">
+                    <FaRegFile size={64} color="#888" />
+                    <div className="editor-empty-title">No file opened</div>
+                    <div className="editor-empty-desc">Select a file in the explorer or create a new file to get started.</div>
+                  </div>
                 )}
               </div>
+              {isTerminalPanelOpen && (
+                <Resizable
+                  defaultSize={{ height: 320, width: '100%' }}
+                  minHeight={100}
+                  maxHeight={600}
+                  enable={{ top: true }}
+                  className="terminal-resizable"
+                >
+                  <IntegratedTerminal
+                    projectPath={projectPath}
+                    onClose={() => setIsTerminalPanelOpen(false)}
+                  />
+                </Resizable>
+              )}
             </div>
-            {isAIPanelOpen && (
-              <Resizable
-                defaultSize={{ width: 360, height: '100%' }}
-                minWidth={260}
-                maxWidth={640}
-                enable={{ left: true }}
-                className="ai-panel-resizable"
-              >
-                <AIChatPanel
-                  fileStructure={fileStructure}
-                  projectPath={projectPath}
-                  activeFilePath={activeTabData?.path}
-                  openFiles={tabs.map(tab => tab.path)}
-                />
-              </Resizable>
-            )}
           </div>
-        </AIProvider>
+          {isAIPanelOpen && (
+            <Resizable
+              defaultSize={{ width: 360, height: '100%' }}
+              minWidth={260}
+              maxWidth={640}
+              enable={{ left: true }}
+              className="ai-panel-resizable"
+            >
+              <AIChatPanel
+                fileStructure={fileStructure}
+                projectPath={projectPath}
+                activeFilePath={activeTabData?.path}
+                openFiles={tabs.map(tab => tab.path)}
+              />
+            </Resizable>
+          )}
+        </div>
       </EditorProvider>
     </ThemeProvider>
   );

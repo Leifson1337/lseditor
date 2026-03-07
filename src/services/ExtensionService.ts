@@ -1,5 +1,3 @@
-import { ExtensionService as BaseExtensionService } from './ExtensionService';
-
 export interface ExtensionContribution {
   id: string; // extension id (folder name usually)
   extensionPath: string; // Absolute path to extension folder

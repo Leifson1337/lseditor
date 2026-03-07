@@ -28,13 +28,13 @@ body {
   overflow: hidden;
   background-color: var(--background-color);
   color: var(--text-color);
-  border: 3px solid green; /* Debug: sichtbar machen */
 }
 
 .main-content {
   flex: 1;
   display: flex;
   overflow: hidden;
+  min-height: 0;
 }
 
 .sidebar {
@@ -63,7 +63,6 @@ body {
   width: 100%;
   height: 100%;
   background: #222;
-  border: 2px dashed red; /* Debug: sichtbar machen */
   color: #fff;
   z-index: 1;
   overflow: auto;
@@ -89,7 +88,8 @@ body {
 }
 
 .status-bar {
-  height: 30px;
+  height: 24px;
+  flex-shrink: 0;
   background-color: var(--status-bar-bg, #007acc);
   color: white;
   display: flex;

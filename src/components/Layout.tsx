@@ -63,21 +63,17 @@ const Layout: React.FC<LayoutProps> = ({
         />
       </Titlebar>
       <div className="main-content">
-        <div className="left-panel">
-          <StatusBar
-            activeFile={statusBar?.activeFile}
-            terminalPort={statusBar?.terminalPort}
-            isTerminalConnected={statusBar?.isTerminalConnected}
-            errorCount={statusBar?.errorCount}
-            problemCount={statusBar?.problemCount}
-            portForwardCount={statusBar?.portForwardCount}
-          />
-        </div>
-        <div className="editor-container" style={{width:'100%'}}>
-          {/* EditorLayout handles the main editor and file navigation UI */}
-          {editorContent}
-        </div>
+        {/* EditorLayout handles the main editor and file navigation UI */}
+        {editorContent}
       </div>
+      <StatusBar
+        activeFile={statusBar?.activeFile}
+        terminalPort={statusBar?.terminalPort}
+        isTerminalConnected={statusBar?.isTerminalConnected}
+        errorCount={statusBar?.errorCount}
+        problemCount={statusBar?.problemCount}
+        portForwardCount={statusBar?.portForwardCount}
+      />
     </div>
   );
 };

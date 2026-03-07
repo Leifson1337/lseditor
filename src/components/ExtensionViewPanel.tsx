@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ViewPaneContainer } from '@codingame/monaco-vscode-views-service-override';
 import { IExtensionService } from '@codingame/monaco-vscode-api/vscode/vs/workbench/services/extensions/common/extensions.service';
-import { IInstantiationService, IViewDescriptorService, StandaloneServices } from 'vscode/services';
+import { IInstantiationService, IViewDescriptorService, StandaloneServices } from '@codingame/monaco-vscode-api/services';
 import { ExtensionService } from '../services/ExtensionService';
 
 interface ExtensionViewPanelProps {

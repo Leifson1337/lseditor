@@ -460,7 +460,13 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
       key={refreshKey}
       onContextMenu={handleRootContextMenu}
     >
-      {sortNodes(fileStructure).map(node => renderFileNode(node))}
+      {fileStructure.length > 0 ? (
+        sortNodes(fileStructure).map(node => renderFileNode(node))
+      ) : (
+        <div className="empty-explorer">
+          {projectPath ? 'No files loaded yet. Right-click to refresh the explorer.' : 'No project opened.'}
+        </div>
+      )}
       {newFileDraft && newFileDraft.parentPath === resolveAbsolutePath(projectPath || '') && renderNewFilePlaceholder(0)}
       {contextMenu && (
         <ContextMenu

@@ -193,7 +193,8 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     refreshModels,
     isFetchingModels,
     lastError,
-    connectionStatus
+    connectionStatus,
+    toolStatus
   } = useAI();
 
   const activeConversation = useMemo(
@@ -447,7 +448,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       try {
         const selectionResponse = await requestCompletion(
           [{ role: 'user', content: selectionPrompt }],
-          { signal: controller.signal }
+          { signal: controller.signal, includeBasePrompt: false }
         );
 
         if (!selectionResponse) {
@@ -659,6 +660,14 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
             >
               Auto Context
             </button>
+            <button
+              type="button"
+              className={`ai-chat-toggle ${settings.toolsEnabled ? 'active' : ''}`}
+              onClick={() => updateSettings({ toolsEnabled: !settings.toolsEnabled })}
+              title="Toggle AI Tools (ReadFile, WriteFile, RunCommand, etc.)"
+            >
+              Tools
+            </button>
           </div>
           <div className="ai-chat-header-right">
             <p className={`ai-chat-status ai-chat-status-${connectionStatus}`}>
@@ -766,13 +775,37 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
           messages.map(message => (
             <div key={message.id} className={`ai-chat-message ${message.sender}`}>
               <div className="ai-chat-message-meta">
-                <span>{message.sender === 'user' ? 'Du' : message.sender === 'ai' ? 'Assistant' : 'System'}</span>
+                <span>{message.sender === 'user' ? 'Du' : message.sender === 'ai' ? 'Assistant' : message.sender === 'tool' ? 'Tool' : 'System'}</span>
                 <span>{message.timestamp.toLocaleTimeString()}</span>
               </div>
-              <div
-                className="ai-chat-message-content"
-                dangerouslySetInnerHTML={{ __html: marked.parse(message.content || '') }}
-              />
+              {message.toolCalls && message.toolCalls.length > 0 ? (
+                <div className="ai-chat-tool-calls">
+                  {message.toolCalls.map((tc, idx) => (
+                    <div key={idx} className={`ai-chat-tool-call ${tc.status}`}>
+                      <div className="ai-chat-tool-call-header">
+                        <span className="ai-chat-tool-call-icon">
+                          {tc.status === 'done' ? '✓' : tc.status === 'error' ? '✗' : '⟳'}
+                        </span>
+                        <span className="ai-chat-tool-call-name">{tc.name}</span>
+                      </div>
+                      {tc.result && (
+                        <pre className="ai-chat-tool-call-result">{tc.result}</pre>
+                      )}
+                    </div>
+                  ))}
+                  {message.content && (
+                    <div
+                      className="ai-chat-message-content"
+                      dangerouslySetInnerHTML={{ __html: marked.parse(message.content) }}
+                    />
+                  )}
+                </div>
+              ) : (
+                <div
+                  className="ai-chat-message-content"
+                  dangerouslySetInnerHTML={{ __html: marked.parse(message.content || '') }}
+                />
+              )}
             </div>
           ))
         )}
@@ -799,7 +832,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
           {(isThinking || isAutoContextBusy) && (
             <span className="ai-chat-typing">
               <LuLoader2 className="ai-chat-spinner" />
-              Assistant is working...
+              {toolStatus || 'Assistant is working...'}
             </span>
           )}
           <div className="ai-chat-input-buttons">

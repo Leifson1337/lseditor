@@ -941,7 +941,50 @@ function setupFsIpcHandlers() {
       const buffer = await fs.promises.readFile(normalizedPath);
       return buffer.toString('base64');
     } catch (error) {
-      console.error('Failed to read file base64:', error);
+      if ((error as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT') {
+        console.error('Failed to read file base64:', error);
+      }
+      return null;
+    }
+  });
+
+  ipcMain.handle('fs:readFileBinary', async (_event, filePath) => {
+    try {
+      const normalizedPath = validatePath(filePath);
+      const buffer = await fs.promises.readFile(normalizedPath);
+      return buffer.toString('base64');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT') {
+        console.error('Failed to read binary file:', error);
+      }
+      return null;
+    }
+  });
+
+  ipcMain.handle('fs:writeFileBinary', async (_event, filePath, base64Content) => {
+    try {
+      const targetPath = validatePath(filePath);
+      await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+      const buffer = Buffer.from(String(base64Content ?? ''), 'base64');
+      await fs.promises.writeFile(targetPath, buffer);
+      return true;
+    } catch (error) {
+      console.error('Error writing binary file:', error);
+      return false;
+    }
+  });
+
+  ipcMain.handle('fs:stat', async (_event, filePath) => {
+    try {
+      const normalizedPath = validatePath(filePath);
+      const stats = await fs.promises.stat(normalizedPath);
+      return {
+        ctime: stats.ctimeMs,
+        mtime: stats.mtimeMs,
+        size: stats.size,
+        type: stats.isDirectory() ? 'directory' : stats.isFile() ? 'file' : 'unknown'
+      };
+    } catch (error) {
       return null;
     }
   });
@@ -1138,6 +1181,68 @@ function setupFsIpcHandlers() {
       return { success: false, error: String(error) };
     }
   });
+
+  // Extension system: list installed extensions
+  ipcMain.handle('extension:list', async () => {
+    try {
+      const extensionsDir = path.join(app.getPath('userData'), 'extensions');
+      if (!fs.existsSync(extensionsDir)) {
+        return [];
+      }
+      const entries = await fs.promises.readdir(extensionsDir, { withFileTypes: true });
+      const extensions: any[] = [];
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const extPath = path.join(extensionsDir, entry.name);
+        const packageJsonPath = path.join(extPath, 'package.json');
+        try {
+          if (fs.existsSync(packageJsonPath)) {
+            const content = await fs.promises.readFile(packageJsonPath, 'utf-8');
+            const manifest = JSON.parse(content);
+            extensions.push({
+              id: entry.name,
+              name: manifest.name || entry.name,
+              displayName: manifest.displayName || manifest.name || entry.name,
+              description: manifest.description || '',
+              version: manifest.version || '0.0.0',
+              publisher: manifest.publisher || 'local',
+              path: extPath,
+              contributes: manifest.contributes || {}
+            });
+          }
+        } catch (e) {
+          console.warn(`Failed to read extension manifest: ${entry.name}`, e);
+        }
+      }
+      return extensions;
+    } catch (error) {
+      console.error('Failed to list extensions:', error);
+      return [];
+    }
+  });
+
+  // Extension system: uninstall extension
+  ipcMain.handle('extension:uninstall', async (_event, extensionId: string) => {
+    try {
+      const extensionsDir = path.join(app.getPath('userData'), 'extensions');
+      const extPath = path.join(extensionsDir, extensionId);
+      const normalized = normalizeFsPath(extPath);
+
+      if (!normalized.startsWith(normalizeFsPath(extensionsDir))) {
+        return { success: false, error: 'Invalid extension path' };
+      }
+
+      if (!fs.existsSync(normalized)) {
+        return { success: false, error: 'Extension not found' };
+      }
+
+      await fs.promises.rm(normalized, { recursive: true, force: true });
+      return { success: true };
+    } catch (error) {
+      console.error('Failed to uninstall extension:', error);
+      return { success: false, error: String(error) };
+    }
+  });
 }
 
 // --- Fehlende IPC-Handler für Renderer-Kommunikation ---
@@ -1149,6 +1254,7 @@ ipcMain.handle('getDirectoryEntries', async (event, dirPath) => {
       name: entry.name,
       isDirectory: entry.isDirectory(),
       isFile: entry.isFile(),
+      isSymbolicLink: entry.isSymbolicLink(),
       path: path.join(normalized, entry.name)
     }));
   } catch (error) {
@@ -1540,11 +1646,11 @@ export {
 // Electron Lifecycle: Services und Fenster nach App-Start initialisieren
 app.whenReady().then(async () => {
   await initializeServices();
-  createSplashWindow();
-  await createWindow();
   setupIpcHandlers();
   setupFsIpcHandlers();
   setupTerminalIpcHandlers();
+  createSplashWindow();
+  await createWindow();
 
   // Check for updates
   const remoteVersion = await fetchRemoteVersion();

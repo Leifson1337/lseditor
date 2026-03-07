@@ -10,29 +10,18 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './components/App';
+import ErrorBoundary from './components/ErrorBoundary';
 import './styles/styles.css';
 import './styles/App.css';
-import { AIProvider } from './contexts/AIContext';
-import getViewCommonServiceOverride from '@codingame/monaco-vscode-view-common-service-override';
-import getViewsServiceOverride from '@codingame/monaco-vscode-views-service-override';
-
-// monaco-vscode-api initialization
-import { initialize } from 'vscode/services';
+import '@codingame/monaco-vscode-api/monaco';
+import { initializeVSCodeWorkbench } from './services/VSCodeWorkbenchBridge';
 // import '@codingame/monaco-vscode-api/default-extensions/theme-defaults';
 // import '@codingame/monaco-vscode-api/default-extensions/javascript';
 // import '@codingame/monaco-vscode-api/default-extensions/typescript';
 
 // Initialize VS Code services
-initialize({
-  // Add view-related service overrides so contributed tree/web views can render
-  ...getViewCommonServiceOverride(),
-  ...getViewsServiceOverride(),
-}).then(() => {
+initializeVSCodeWorkbench().then(() => {
   console.log('VS Code API initialized');
-
-  // We can now load default themes and language support
-  // These imports register the built-in extensions for core functionality
-  import('@codingame/monaco-vscode-api/monaco');
 }).catch((err: any) => {
   console.error('Failed to initialize VS Code API:', err);
 });
@@ -50,9 +39,9 @@ if (container) {
   const root = createRoot(container);
   root.render(
     <React.StrictMode>
-      <AIProvider>
+      <ErrorBoundary>
         <App />
-      </AIProvider>
+      </ErrorBoundary>
     </React.StrictMode>
   );
 }

@@ -3,20 +3,15 @@ import Layout from './Layout';
 import { store, StoreSchema } from '../store/store';
 import { ProjectService } from '../services/ProjectService';
 import { TerminalManager } from '../services/TerminalManager';
-import { TerminalService } from '../services/TerminalService';
-import { AIService } from '../services/AIService';
-import { UIService } from '../services/UIService';
-import { TerminalServer } from '../server/terminalServer';
 import '../styles/App.css';
-import { Terminal } from './Terminal';
-import { TerminalContainer } from './TerminalContainer';
-import { AIConfig } from '../types/AITypes';
 import { FileNode } from '../types/FileNode';
 import { EditorLayout } from './EditorLayout';
 import { ThemeProvider } from '../contexts/ThemeContext';
+import { AIProvider } from '../contexts/AIContext';
 import { TerminalSettingsDialog } from './TerminalSettingsDialog';
 import Titlebar from './Titlebar';
 import path from 'path';
+import { notifyWorkspaceChanged, persistWorkspacePath } from '../services/VSCodeWorkbenchBridge';
 
 // Extend StoreSchema to include all required properties for the editor and terminal
 declare module '../store/store' {
@@ -270,6 +265,8 @@ const App: React.FC = () => {
     setProjectPath(path);
     setShowProjectDialog(false);
     store.set('lastProjectPath', path);
+    persistWorkspacePath(path);
+    notifyWorkspaceChanged(path);
 
     // Update recent projects list
     let updated = [path, ...recentProjects.filter(p => p !== path)];
@@ -278,45 +275,10 @@ const App: React.FC = () => {
     store.set('recentProjects', updated);
 
     try {
-      // Initialize core services for the project
+      // Initialize the project service for the opened workspace
       const projectService = new ProjectService(path);
       projectServiceRef.current = projectService;
-      const uiService = new UIService();
-      const aiService = AIService.getInstance({
-        useLocalModel: false,
-        model: 'gpt-3.5-turbo',
-        temperature: 0.7,
-        maxTokens: 2048,
-        contextWindow: 4096,
-        stopSequences: ['\n\n', '```'],
-        topP: 1,
-        openAIConfig: {
-          apiKey: process.env.OPENAI_API_KEY || '',
-          model: 'gpt-3.5-turbo',
-          temperature: 0.7,
-          maxTokens: 2048
-        }
-      });
-
-      // Initialize terminal server and services
-      const terminalServer = new TerminalServer(terminalPort);
-      const terminalService = TerminalService.getInstance(
-        null,
-        aiService,
-        projectService,
-        uiService,
-        terminalServer,
-        store
-      );
-      // Initialize terminal manager
-      const manager = new TerminalManager(
-        terminalPort,
-        terminalService,
-        aiService,
-        projectService,
-        uiService
-      );
-      setTerminalManager(manager);
+      setTerminalManager(null);
 
       // Load file structure for the project
       try {
@@ -344,6 +306,7 @@ const App: React.FC = () => {
       if (dir) {
         setProjectPath(dir);
         setIsValidPath(true);
+        persistWorkspacePath(dir);
         setPathFeedback({ text: 'Folder selected. Click "Open" to continue.', tone: 'info' });
       }
     } finally {
@@ -392,6 +355,7 @@ const App: React.FC = () => {
         // Open the new project
         setProjectPath(newProjectPath);
         setIsValidPath(true);
+        persistWorkspacePath(newProjectPath);
         setPathFeedback({ text: 'Project created. Launching editor...', tone: 'success' });
         openProject(newProjectPath);
       } catch (error) {
@@ -509,113 +473,115 @@ const App: React.FC = () => {
 
   return (
     <ThemeProvider>
-      <div className="app">
-        {/* SettingsIcon is now placed in the MenuBar, no separate popup */}
-        {showProjectDialog ? (
-          <>
-            <Titlebar minimal />
-            <div className="project-dialog">
-              <h2>Open Project</h2>
-              <div className="project-input">
-                <input
-                  type="text"
-                  placeholder="Enter project path..."
-                  value={projectPath}
-                  onChange={(e) => setProjectPath(e.target.value)}
-                />
-                <button
-                  onClick={() => openProject(projectPath)}
-                  disabled={!isValidPath}
-                  title={!isValidPath ? "Please enter a valid path" : "Open project"}
-                >
-                  Open
-                </button>
-                <button
-                  onClick={openProjectDialog}
-                  disabled={isBrowseDialogOpen}
-                  title={isBrowseDialogOpen ? "Dialog is already open" : "Browse directory"}
-                >
-                  Browse...
-                </button>
-                <button
-                  onClick={createNewProject}
-                  disabled={isBrowseDialogOpen}
-                  title={isBrowseDialogOpen ? "Dialog is already open" : "Create new project"}
-                >
-                  New Project
-                </button>
-              </div>
-              {pathFeedback && (
-                <div className={`path-feedback ${pathFeedback.tone}`}>
-                  {pathFeedback.text}
+      <AIProvider projectPath={projectPath}>
+        <div className="app">
+          {/* SettingsIcon is now placed in the MenuBar, no separate popup */}
+          {showProjectDialog ? (
+            <>
+              <Titlebar minimal />
+              <div className="project-dialog">
+                <h2>Open Project</h2>
+                <div className="project-input">
+                  <input
+                    type="text"
+                    placeholder="Enter project path..."
+                    value={projectPath}
+                    onChange={(e) => setProjectPath(e.target.value)}
+                  />
+                  <button
+                    onClick={() => openProject(projectPath)}
+                    disabled={!isValidPath}
+                    title={!isValidPath ? "Please enter a valid path" : "Open project"}
+                  >
+                    Open
+                  </button>
+                  <button
+                    onClick={openProjectDialog}
+                    disabled={isBrowseDialogOpen}
+                    title={isBrowseDialogOpen ? "Dialog is already open" : "Browse directory"}
+                  >
+                    Browse...
+                  </button>
+                  <button
+                    onClick={createNewProject}
+                    disabled={isBrowseDialogOpen}
+                    title={isBrowseDialogOpen ? "Dialog is already open" : "Create new project"}
+                  >
+                    New Project
+                  </button>
                 </div>
-              )}
-              <div className="recent-projects">
-                <h3>Recently opened projects</h3>
-                {recentProjects.length > 0 ? (
-                  <ul>
-                    {recentProjects.map((project) => (
-                      <li key={project} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{project}</span>
-                        <button
-                          onClick={() => openProject(project)}
-                          title="Open project"
-                        >
-                          Open
-                        </button>
-                        <button
-                          title="Remove from list"
-                          onClick={() => removeRecentProject(project)}
-                          style={{ color: 'red' }}
-                        >
-                          ×
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p>No recently opened projects.</p>
+                {pathFeedback && (
+                  <div className={`path-feedback ${pathFeedback.tone}`}>
+                    {pathFeedback.text}
+                  </div>
                 )}
+                <div className="recent-projects">
+                  <h3>Recently opened projects</h3>
+                  {recentProjects.length > 0 ? (
+                    <ul>
+                      {recentProjects.map((project) => (
+                        <li key={project} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{project}</span>
+                          <button
+                            onClick={() => openProject(project)}
+                            title="Open project"
+                          >
+                            Open
+                          </button>
+                          <button
+                            title="Remove from list"
+                            onClick={() => removeRecentProject(project)}
+                            style={{ color: 'red' }}
+                          >
+                            ×
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p>No recently opened projects.</p>
+                  )}
+                </div>
               </div>
-            </div>
-          </>
-        ) : (
-          <Layout
-            fileStructure={fileStructure}
-            projectPath={projectPath}
-            onHelpAction={handleHelpAction}
-            onFileAction={handleFileAction}
-            onEditAction={handleEditAction}
-            onMenuAction={handleGenericMenuAction}
-            statusBar={{
-              activeFile,
-              terminalPort,
-              isTerminalConnected: Boolean(terminalManager),
-              errorCount: 0,
-              problemCount: 0,
-              portForwardCount: 0
-            }}
-          >
-            <EditorLayout
+            </>
+          ) : (
+            <Layout
               fileStructure={fileStructure}
               projectPath={projectPath}
-              activeFile={activeFile}
-              onOpenFile={handleFileOpen}
-            />
-          </Layout>
-        )}
-      </div>
-      <TerminalSettingsDialog
-        isOpen={showTerminalSettings}
-        onClose={() => setShowTerminalSettings(false)}
-        initialFontSize={(store.get('terminal') as any)?.fontSize || 14}
-        initialFontFamily={(store.get('terminal') as any)?.fontFamily || 'Consolas, monospace'}
-        onSave={(fontSize, fontFamily) => {
-          const current = (store.get('terminal') as any) || {};
-          store.set('terminal', { ...current, fontSize, fontFamily });
-          setShowTerminalSettings(false);
-        }}
-      />
+              onHelpAction={handleHelpAction}
+              onFileAction={handleFileAction}
+              onEditAction={handleEditAction}
+              onMenuAction={handleGenericMenuAction}
+              statusBar={{
+                activeFile,
+                terminalPort,
+                isTerminalConnected: Boolean(terminalManager),
+                errorCount: 0,
+                problemCount: 0,
+                portForwardCount: 0
+              }}
+            >
+              <EditorLayout
+                fileStructure={fileStructure}
+                projectPath={projectPath}
+                activeFile={activeFile}
+                onOpenFile={handleFileOpen}
+              />
+            </Layout>
+          )}
+        </div>
+        <TerminalSettingsDialog
+          isOpen={showTerminalSettings}
+          onClose={() => setShowTerminalSettings(false)}
+          initialFontSize={(store.get('terminal') as any)?.fontSize || 14}
+          initialFontFamily={(store.get('terminal') as any)?.fontFamily || 'Consolas, monospace'}
+          onSave={(fontSize, fontFamily) => {
+            const current = (store.get('terminal') as any) || {};
+            store.set('terminal', { ...current, fontSize, fontFamily });
+            setShowTerminalSettings(false);
+          }}
+        />
+      </AIProvider>
     </ThemeProvider>
   );
 };
