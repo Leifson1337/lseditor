@@ -372,7 +372,8 @@ export async function executeToolCall(
           result = `Error: File not found: ${resolvedPath}`;
         } else {
           const prefix = guessed ? `[Resolved from ${args.path} to ${resolvedPath}]\n` : '';
-          result = `${prefix}${typeof content === 'string' ? content : String(content)}`;
+          const text = typeof content === 'string' ? content : String(content);
+          result = text.length > 0 ? `${prefix}${text}` : `${prefix}(empty file: ${resolvedPath})`;
         }
         break;
       }
@@ -467,7 +468,14 @@ export async function executeToolCall(
           cwd: args.cwd ? resolvePath(args.cwd, projectPath) : projectPath
         });
         if (execResult && typeof execResult === 'object') {
-          result = execResult.stdout || execResult.stderr || '(no output)';
+          const parts: string[] = [];
+          if (execResult.stdout) parts.push(execResult.stdout);
+          if (execResult.stderr) parts.push(`[stderr] ${execResult.stderr}`);
+          if (execResult.error) parts.push(`[error] ${execResult.error}`);
+          result = parts.length > 0 ? parts.join('\n') : '(no output)';
+          if (execResult.code !== 0 && execResult.code !== undefined) {
+            result += `\n[exit code: ${execResult.code}]`;
+          }
         } else {
           result = String(execResult || '(no output)');
         }

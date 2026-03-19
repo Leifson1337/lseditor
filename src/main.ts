@@ -622,26 +622,20 @@ ipcMain.handle('exec', async (event, command: unknown, options?: { cwd?: string 
     try {
       execProcess(
         command,
-        { cwd, windowsHide: true },
+        { cwd, windowsHide: true, timeout: 30000 },
         (error: ExecException | null, stdout = '', stderr = '') => {
-          if (error) {
-            reject({
-              stdout,
-              stderr,
-              code: error.code ?? 1,
-              message: error.message ?? 'Command failed'
-            });
-            return;
-          }
+          // Always resolve with stdout/stderr so the AI can see the output.
+          // Rejecting with a plain object causes "[object Object]" over IPC.
           resolve({
             stdout,
             stderr,
-            code: 0
+            code: error ? (error.code ?? 1) : 0,
+            error: error ? (error.message ?? 'Command failed') : undefined
           });
         }
       );
     } catch (error) {
-      reject(error);
+      reject(error instanceof Error ? error : new Error(String(error)));
     }
   });
 });

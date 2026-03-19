@@ -767,6 +767,15 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                 maxWidth={640}
                 enable={{ left: true }}
                 className="ai-panel-resizable"
+                style={{ position: 'relative', left: 0, right: 0 }}
+                onResize={(_e, _dir, ref) => {
+                  ref.style.left = '0';
+                  ref.style.right = '0';
+                }}
+                onResizeStop={(_e, _dir, ref) => {
+                  ref.style.left = '0';
+                  ref.style.right = '0';
+                }}
               >
                 <AIChatPanel
                   fileStructure={fileStructure}

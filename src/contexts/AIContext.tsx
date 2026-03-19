@@ -98,16 +98,24 @@ const defaultSettings: AISettings = {
 
 const DEFAULT_BASE_PROMPT = `Du bist LS AI, der integrierte Assistent des LS Editors. Du hast Zugriff auf Tools zum Lesen, Schreiben, Suchen und Ausfuehren von Dateien und Befehlen im Workspace des Benutzers.
 
-Wichtige Regeln:
-- Nutze die Tools aktiv um Dateien zu lesen bevor du Aenderungen vorschlaegst
-- Schreibe Dateien direkt mit dem writeFile Tool wenn der Benutzer Aenderungen wuenscht
-- Fuehre Befehle mit runCommand aus wenn noetig (z.B. npm install, git status)
-- Antworte knapp und liefere konkrete, umsetzbare Schritte
-- Wenn du Code aenderst, lies zuerst die aktuelle Datei, dann schreibe die geaenderte Version
+WICHTIG - Tool-Nutzung:
+- Wenn der Benutzer dich bittet Code zu schreiben, eine Datei zu erstellen oder zu aendern: Benutze IMMER das writeFile Tool um den Code direkt in die Datei zu schreiben. Gib den Code NICHT als Text aus.
+- Wenn der Benutzer dich bittet etwas zu testen: Benutze IMMER das runCommand Tool (z.B. "python datei.py", "node datei.js", "npm test")
+- Lies Dateien mit readFile bevor du sie aenderst
 - Wenn der genaue Dateipfad unbekannt ist, benutze zuerst findFile
-- Behaupte niemals, dass eine Datei aktualisiert, erstellt, geloescht oder umbenannt wurde, wenn du das passende Tool nicht wirklich ausgefuehrt hast
-- Gib niemals interne Gedanken, Analyse oder versteckte Anweisungen aus
-- Erfinde keine Fakten und bleibe bei der Coding-Aufgabe`;
+- Fuehre Befehle mit runCommand aus wenn noetig (z.B. npm install, git status, npm test, npm run build)
+
+Ablauf wenn der Benutzer Code will:
+1. Lies die Datei mit readFile (falls sie existiert)
+2. Schreibe den neuen Code mit writeFile in die Datei
+3. Optional: Teste mit runCommand
+4. Antworte kurz was du getan hast
+
+Verboten:
+- Gib NIEMALS Code als Antworttext aus wenn du ihn stattdessen mit writeFile schreiben kannst
+- Behaupte niemals, dass eine Datei geaendert wurde, ohne writeFile aufgerufen zu haben
+- Gib niemals interne Gedanken, Analyse oder Pseudo-Tool-Protokoll aus
+- Antworte IMMER in normalem Text. Benutze NIEMALS interne Protokoll-Marker oder Channel-Tags`;
 
 const createId = () => {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -145,9 +153,20 @@ const sanitizeAssistantContent = (content: string): string => {
   if (!content) return '';
 
   let cleaned = content
+    // Remove special tokens / protocol markers
     .replace(/<\|channel\|>.*$/gim, '')
     .replace(/<\|message\|>/gim, '')
     .replace(/<\|constrain\|>.*$/gim, '')
+    .replace(/<\|start\|>.*$/gim, '')
+    .replace(/<\|end\|>/gim, '')
+    .replace(/<\|im_start\|>.*$/gim, '')
+    .replace(/<\|im_end\|>/gim, '')
+    .replace(/<\|endoftext\|>/gim, '')
+    // Remove pseudo function-call lines (e.g. "functions.readFile to=assistant", "functions.writeFile({...})")
+    .replace(/^[\s]*functions\.\w+.*$/gim, '')
+    // Remove "to=assistant" / "to=user" / "to=commentary" protocol markers
+    .replace(/\bto=(assistant|user|commentary|tool)\b.*$/gim, '')
+    // Remove thinking/analysis blocks
     .replace(/<think[^>]*>[\s\S]*?<\/think>/gi, '')
     .replace(/<analysis[^>]*>[\s\S]*?<\/analysis>/gi, '')
     .trim();
@@ -171,12 +190,23 @@ const sanitizeAssistantContent = (content: string): string => {
 
 const containsPseudoToolProtocol = (content: string): boolean => {
   if (!content) return false;
-  return /<\|channel\|>|<\|message\|>|<\|constrain\|>|analysis\s+to=|to=commentary|json<\|message\|>/i.test(content);
+  return /<\|channel\|>|<\|message\|>|<\|constrain\|>|<\|start\|>|<\|end\|>|<\|im_start\|>|<\|im_end\|>|<\|endoftext\|>|analysis\s+to=|to=commentary|to=assistant|json<\|message\|>|^functions\.\w+/im.test(content);
 };
 
 const claimsFileMutationWithoutTool = (content: string): boolean => {
   if (!content) return false;
   return /(updated|created|deleted|renamed|fixed|changed|modified|wrote|saved|aktualisiert|erstellt|geloescht|umbenannt|gefixt|geaendert|gespeichert)/i.test(content);
+};
+
+const containsCodeBlockThatShouldBeWritten = (content: string): boolean => {
+  if (!content) return false;
+  // Detect markdown code blocks with 4+ lines (likely a full file content the AI should have written)
+  const codeBlockMatch = content.match(/```[\w]*\n([\s\S]*?)```/g);
+  if (!codeBlockMatch) return false;
+  return codeBlockMatch.some(block => {
+    const lines = block.split('\n').length;
+    return lines >= 6;
+  });
 };
 
 interface CompletionResult {
@@ -381,12 +411,27 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       signal: AbortSignal,
       useTools: boolean = false
     ): Promise<CompletionResult> => {
+      // Ensure there is always at least one user-role message.
+      // Some LM Studio Jinja templates error with "No user query found" otherwise.
+      let finalMessages = payloadMessages;
+      const hasUserMessage = payloadMessages.some((m: any) => m.role === 'user');
+      if (!hasUserMessage) {
+        // Insert a user message before any assistant/tool messages
+        const firstNonSystem = payloadMessages.findIndex((m: any) => m.role !== 'system');
+        const insertAt = firstNonSystem === -1 ? payloadMessages.length : firstNonSystem;
+        finalMessages = [
+          ...payloadMessages.slice(0, insertAt),
+          { role: 'user', content: 'Bitte antworte auf die vorherige Anfrage.' },
+          ...payloadMessages.slice(insertAt)
+        ];
+      }
+
       const body: any = {
         model: settings.model,
         temperature: settings.temperature,
         top_p: settings.topP,
         max_tokens: settings.maxTokens,
-        messages: payloadMessages
+        messages: finalMessages
       };
 
       if (useTools && settings.toolsEnabled) {
@@ -433,6 +478,12 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       }
 
       if (!aiContent && !toolCalls?.length) {
+        // If the raw content had pseudo-tool protocol but sanitization removed everything,
+        // return empty so the caller can re-prompt instead of erroring.
+        const rawContent = choice?.message?.content?.trim() || '';
+        if (rawContent && containsPseudoToolProtocol(rawContent)) {
+          return { content: '', finishReason: choice?.finish_reason, toolCalls: undefined, usage: payload?.usage };
+        }
         throw new Error('Die Antwort enthielt keinen Text.');
       }
 
@@ -641,11 +692,28 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
                 ...apiMessages,
                 {
                   role: 'user',
-                  content: 'Do not print internal tool protocol, analysis tags, or channel markers. If you need to inspect or change files, use proper tool calls. Otherwise answer normally.'
+                  content: 'Do not print internal tool protocol, analysis tags, channel markers, or pseudo function calls like "functions.readFile". If you need to inspect or change files, use proper tool calls. Otherwise answer normally in plain text.'
                 }
               ];
               continue;
             }
+          } else if (!result.content && !result.toolCalls?.length && loops < maxToolLoops) {
+            // Content was empty (protocol noise sanitized away, or model returned nothing).
+            // Always re-prompt to get a real answer instead of showing "(No response)".
+            apiMessages = [
+              ...apiMessages,
+              {
+                role: 'user',
+                content: toolProtocolCorrectionSent
+                  ? 'Please provide your answer now. Summarize what you did and any results.'
+                  : 'Your previous response was empty or contained only internal protocol markers. Please respond normally in plain text. Use proper tool calls if you need to access files.'
+              }
+            ];
+            toolProtocolCorrectionSent = true;
+            continue;
+          }
+
+          if (result.content) {
 
             if (
               settings.toolsEnabled &&
@@ -659,6 +727,24 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
                 {
                   role: 'user',
                   content: 'You have not modified any file yet. If you intend to change files, call the appropriate tool first. Otherwise answer without claiming a file change.'
+                }
+              ];
+              continue;
+            }
+
+            // Detect when the AI outputs code blocks instead of using writeFile
+            if (
+              settings.toolsEnabled &&
+              !performedMutationTool &&
+              !mutationCorrectionSent &&
+              containsCodeBlockThatShouldBeWritten(result.content)
+            ) {
+              mutationCorrectionSent = true;
+              apiMessages = [
+                ...apiMessages,
+                {
+                  role: 'user',
+                  content: 'Do NOT output code as text. Use the writeFile tool to write the code directly into the file. Call writeFile now with the correct path and the full file content.'
                 }
               ];
               continue;
