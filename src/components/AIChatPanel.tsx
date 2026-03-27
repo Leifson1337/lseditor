@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import path from 'path';
-import { FiRefreshCw, FiSend, FiPlus, FiSettings, FiCopy, FiCheck, FiAlertTriangle, FiInfo, FiX, FiMessageSquare, FiCode, FiFileText, FiTerminal } from 'react-icons/fi';
+import { FiRefreshCw, FiSend, FiPlus, FiSettings, FiCopy, FiCheck, FiAlertTriangle, FiX, FiMessageSquare, FiCode, FiFileText, FiTerminal, FiPaperclip, FiZap, FiShield } from 'react-icons/fi';
 import { LuLoader2 } from 'react-icons/lu';
 import { diffLines } from 'diff';
 import '../styles/AIChatPanel.css';
@@ -78,6 +78,12 @@ const createLocalId = () => {
     return crypto.randomUUID();
   }
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+};
+
+const createFileList = (files: File[]): FileList => {
+  const dt = new DataTransfer();
+  files.forEach(f => dt.items.add(f));
+  return dt.files;
 };
 
 const normalizeRelativePath = (filePath?: string, projectPath?: string) => {
@@ -271,7 +277,11 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
   const activeApproval = activeApprovals[0] ?? null;
 
   const [input, setInput] = useState('');
-  const [showSettings, setShowSettings] = useState(false);
+  const [showSettingsMenu, setShowSettingsMenu] = useState(false);
+  const [settingsMenuTab, setSettingsMenuTab] = useState<'general' | 'model' | 'advanced'>('general');
+  const [attachedFiles, setAttachedFiles] = useState<Array<{ name: string; type: string; dataUrl?: string; content?: string }>>([]);
+  const settingsMenuRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [autoContextEnabled, setAutoContextEnabled] = useState(() => {
     if (typeof window === 'undefined') return false;
     return window.localStorage.getItem(AUTO_CONTEXT_KEY) === 'true';
@@ -609,11 +619,57 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
 
   // ─── Handlers ───
 
+  const handleFileAttach = (files: FileList | null) => {
+    if (!files) return;
+    Array.from(files).forEach(file => {
+      const reader = new FileReader();
+      if (file.type.startsWith('image/')) {
+        reader.onload = () => {
+          setAttachedFiles(prev => [...prev, { name: file.name, type: file.type, dataUrl: reader.result as string }]);
+        };
+        reader.readAsDataURL(file);
+      } else {
+        reader.onload = () => {
+          setAttachedFiles(prev => [...prev, { name: file.name, type: file.type, content: reader.result as string }]);
+        };
+        reader.readAsText(file);
+      }
+    });
+  };
+
+  const handlePaste = (event: React.ClipboardEvent) => {
+    const items = event.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith('image/')) {
+        event.preventDefault();
+        const file = item.getAsFile();
+        if (file) handleFileAttach(createFileList([file]));
+      }
+    }
+  };
+
+  const removeAttachment = (index: number) => {
+    setAttachedFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
   const handleSend = async () => {
-    if (!input.trim() || isThinking || isAutoContextBusy) return;
+    if (!input.trim() && !attachedFiles.length) return;
+    if (isThinking || isAutoContextBusy) return;
     const question = input.trim();
+    let fullMessage = question;
+    if (attachedFiles.length) {
+      const attachmentSections = attachedFiles.map(f => {
+        if (f.dataUrl) return `[Image: ${f.name}]\n${f.dataUrl}`;
+        if (f.content) return `[File: ${f.name}]\n\`\`\`\n${f.content}\n\`\`\``;
+        return `[File: ${f.name}]`;
+      });
+      fullMessage = [...attachmentSections, question].filter(Boolean).join('\n\n');
+    }
     setInput('');
-    await sendWithAutoContext(question);
+    setAttachedFiles([]);
+    if (fullMessage) await sendWithAutoContext(fullMessage);
   };
 
   const handleInputKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -627,6 +683,18 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     setInput(prompt);
     textareaRef.current?.focus();
   };
+
+  // Close settings menu when clicking outside
+  useEffect(() => {
+    if (!showSettingsMenu) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (settingsMenuRef.current && !settingsMenuRef.current.contains(e.target as Node)) {
+        setShowSettingsMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showSettingsMenu]);
 
   const toggleToolCallExpanded = (key: string) => {
     setExpandedToolCalls(prev => {
@@ -775,92 +843,15 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     return <div className="ai-chat-message-content" dangerouslySetInnerHTML={{ __html: withCopy }} />;
   };
 
-  const toolCallSupportBannerId = `tool-support-${settings.model}`;
-  const showToolWarning = settings.toolsEnabled && toolCallSupported === false && !dismissedBanners.has(toolCallSupportBannerId);
-  const showToolInfo = settings.toolsEnabled && toolCallSupported === 'unknown' && !dismissedBanners.has('tool-unknown');
 
   return (
     <div className="ai-chat-panel">
-      {/* ─── Header ─── */}
+      {/* ─── Minimal Header ─── */}
       <div className="ai-chat-header">
         <div className="ai-chat-header-top">
           <div className="ai-chat-header-left">
-            <h3>AI Chat</h3>
-          </div>
-          <div className="ai-chat-header-right">
-            <p className={`ai-chat-status ai-chat-status-${connectionStatus}`}>
-              {connectionLabel}
-            </p>
-          </div>
-        </div>
-
-        <div className="ai-chat-toolbar">
-          <div className="ai-chat-toolbar-row">
-            <div className="ai-chat-mode-switch" role="tablist" aria-label="AI mode">
-              {(['qa', 'coder', 'autonomous'] as const).map(mode => (
-                <button
-                  key={mode}
-                  type="button"
-                  className={`ai-chat-mode-button ${settings.mode === mode ? 'active' : ''}`}
-                  onClick={() => updateSettings({ mode })}
-                  title={mode === 'qa' ? 'Read-only question mode' : mode === 'coder' ? 'Can edit files and code' : 'Plans, codes and validates autonomously'}
-                >
-                  {mode === 'qa' ? 'QA' : mode === 'coder' ? 'Coder' : 'Auto'}
-                </button>
-              ))}
-            </div>
-            <button
-              type="button"
-              className={`ai-chat-toggle ${autoContextEnabled ? 'active' : ''}`}
-              onClick={() => {
-                setAutoContextEnabled(value => {
-                  const next = !value;
-                  if (!next) {
-                    setAutoContextFiles([]);
-                    setAutoContextStatus('');
-                    setAutoContextActivity([]);
-                  }
-                  return next;
-                });
-              }}
-              title="Toggle smart file selection"
-            >
-              Context
-            </button>
-          </div>
-        </div>
-
-        {/* Auto context file chips */}
-        {autoContextEnabled && (
-          <div className="ai-chat-context-strip">
-            <span className="ai-chat-context-label">Context</span>
-            <div className="ai-chat-context-content">
-              {autoContextFiles.length ? (
-                <div className="ai-chat-context-files">
-                  {autoContextFiles.map(file => (
-                    <span key={file} className="ai-chat-context-chip" title={file}>{file}</span>
-                  ))}
-                </div>
-              ) : (
-                <span className="ai-chat-context-empty">Active file and open tabs are used automatically.</span>
-              )}
-              {autoContextActivity.length > 0 && (
-                <div className="ai-chat-context-activity">
-                  {autoContextActivity.map(item => (
-                    <span key={item} className="ai-chat-context-activity-item">{item}</span>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Conversation switcher */}
-        <div className="ai-chat-conversation-bar">
-          <div className="ai-chat-conversation-picker">
             <select
-              id="ai-chat-conversation-select"
-              className="ai-chat-conversation-select"
+              className="ai-chat-conversation-select-compact"
               value={activeConversationId}
               onChange={event => setActiveConversation(event.target.value)}
             >
@@ -871,212 +862,29 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
               ))}
             </select>
           </div>
-          <div className="ai-chat-conversation-actions">
+          <div className="ai-chat-header-right">
+            <span className={`ai-chat-status-dot ai-chat-status-dot-${connectionStatus}`} title={connectionLabel} />
+            {settings.yoloMode && <span className="ai-chat-yolo-badge" title="YOLO Mode active">YOLO</span>}
             {conversations.length > 1 && (
               <button
                 type="button"
-                className="ai-chat-conversation-action danger"
+                className="ai-chat-header-btn"
                 onClick={() => removeConversation(activeConversationId)}
                 title="Delete current chat"
               >
-                <FiX />
+                <FiX size={14} />
               </button>
             )}
             <button
               type="button"
-              className="ai-chat-conversation-action"
+              className="ai-chat-header-btn"
               onClick={() => { setInput(''); setAutoContextStatus(''); setAutoContextFiles([]); startNewConversation(); }}
               title="New Chat"
             >
-              <FiPlus />
+              <FiPlus size={14} />
             </button>
           </div>
         </div>
-
-        {/* Model select + settings */}
-        <div className="ai-chat-controls">
-          <div className="ai-chat-model-row">
-            <div className="ai-chat-model-select-wrapper">
-              <select
-                className="ai-chat-model-select"
-                value={settings.model}
-                onChange={event => updateSettings({ model: event.target.value })}
-                disabled={!models.length}
-              >
-                {models.length === 0 && <option value="">No models</option>}
-                {models.map(model => (
-                  <option key={model} value={model}>{model}</option>
-                ))}
-              </select>
-            </div>
-            <button
-              className="ai-chat-icon-button"
-              type="button"
-              onClick={refreshModels}
-              title="Refresh Models"
-              disabled={isFetchingModels}
-            >
-              {isFetchingModels ? <LuLoader2 className="ai-chat-spinner" /> : <FiRefreshCw />}
-            </button>
-            <button
-              className={`ai-settings-toggle ${showSettings ? 'open' : ''}`}
-              type="button"
-              onClick={() => setShowSettings(v => !v)}
-              title="Settings"
-            >
-              <FiSettings />
-            </button>
-          </div>
-        </div>
-
-        {/* Tool call capability warnings */}
-        {showToolWarning && (
-          <div className="ai-chat-capability-banner warning">
-            <FiAlertTriangle className="banner-icon" />
-            <div className="banner-text">
-              <strong>Tool Calls Not Supported</strong>
-              <span>
-                The model "{settings.model}" does not support function/tool calls.
-                Tools are enabled but the model will not be able to execute file operations or commands.
-                Try a model that supports tool calling (e.g. models with "function calling" support).
-              </span>
-            </div>
-            <button
-              className="banner-dismiss"
-              onClick={() => setDismissedBanners(prev => new Set(prev).add(toolCallSupportBannerId))}
-            >
-              <FiX />
-            </button>
-          </div>
-        )}
-        {showToolInfo && (
-          <div className="ai-chat-capability-banner info">
-            <FiInfo className="banner-icon" />
-            <div className="banner-text">
-              <strong>Tool Call Support Unknown</strong>
-              <span>
-                Could not verify if "{settings.model}" supports tool calls. Tool calls will be attempted but may not work.
-              </span>
-            </div>
-            <button
-              className="banner-dismiss"
-              onClick={() => setDismissedBanners(prev => new Set(prev).add('tool-unknown'))}
-            >
-              <FiX />
-            </button>
-          </div>
-        )}
-
-        {/* Settings drawer */}
-        {showSettings && (
-          <div className="ai-settings-drawer">
-            <div className="ai-settings-row">
-              <label>Execution policy</label>
-              <div className="ai-settings-toggle-row">
-                <button
-                  type="button"
-                  className={`ai-chat-toggle ${!settings.yoloMode ? 'active' : ''}`}
-                  onClick={() => updateSettings({ yoloMode: false })}
-                >
-                  Confirm writes
-                </button>
-                <button
-                  type="button"
-                  className={`ai-chat-toggle danger ${settings.yoloMode ? 'active' : ''}`}
-                  onClick={() => {
-                    if (settings.yoloMode) {
-                      updateSettings({ yoloMode: false });
-                      return;
-                    }
-                    const confirmed = window.confirm(
-                      'YOLO mode erlaubt Dateiänderungen und Befehle ohne Bestätigung. Das kann Sicherheitsrisiken verursachen. Wirklich aktivieren?'
-                    );
-                    if (confirmed) {
-                      updateSettings({ yoloMode: true });
-                    }
-                  }}
-                >
-                  YOLO
-                </button>
-              </div>
-            </div>
-            <div className="ai-settings-row">
-              <label>Endpoint URL</label>
-              <input
-                type="text"
-                value={settings.baseUrl}
-                onChange={e => updateSettings({ baseUrl: e.target.value })}
-                placeholder="http://localhost:1234"
-              />
-            </div>
-            <div className="ai-settings-row">
-              <label>API Key (optional)</label>
-              <input
-                type="password"
-                value={settings.apiKey || ''}
-                onChange={e => updateSettings({ apiKey: e.target.value || undefined })}
-                placeholder="sk-..."
-              />
-            </div>
-            <div className="ai-settings-row-inline">
-              <div className="ai-settings-row">
-                <label>Temperature</label>
-                <input
-                  type="number"
-                  min="0"
-                  max="2"
-                  step="0.1"
-                  value={settings.temperature}
-                  onChange={e => updateSettings({ temperature: parseFloat(e.target.value) || 0.7 })}
-                />
-              </div>
-              <div className="ai-settings-row">
-                <label>Max Tokens</label>
-                <input
-                  type="number"
-                  min="256"
-                  max="128000"
-                  step="256"
-                  value={settings.maxTokens}
-                  onChange={e => updateSettings({ maxTokens: parseInt(e.target.value) || 4096 })}
-                />
-              </div>
-            </div>
-            <div className="ai-settings-row-inline">
-              <div className="ai-settings-row">
-                <label>Top P</label>
-                <input
-                  type="number"
-                  min="0"
-                  max="1"
-                  step="0.05"
-                  value={settings.topP}
-                  onChange={e => updateSettings({ topP: parseFloat(e.target.value) || 1 })}
-                />
-              </div>
-              <div className="ai-settings-row">
-                <label>Tool Support</label>
-                <span style={{ fontSize: 11, color: toolCallSupported === true ? '#34d399' : toolCallSupported === false ? '#f87171' : '#6b7280', padding: '5px 0' }}>
-                  {toolCallSupported === true ? 'Supported' : toolCallSupported === false ? 'Not Supported' : 'Unknown'}
-                </span>
-              </div>
-            </div>
-            <div className="ai-settings-row">
-              <label>Mode behavior</label>
-              <span className="ai-settings-note">
-                {settings.mode === 'qa'
-                  ? 'Read-only. The assistant should inspect and answer, but not write or execute.'
-                  : settings.mode === 'coder'
-                    ? settings.yoloMode
-                      ? 'Writes and commands run immediately without confirmation.'
-                      : 'Writes and commands require confirmation cards in the chat.'
-                    : settings.yoloMode
-                      ? 'Autonomous mode with unrestricted execution.'
-                      : 'Autonomous mode plans, codes and validates, but dangerous actions still require confirmation.'}
-              </span>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* ─── Messages ─── */}
@@ -1230,17 +1038,39 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
         </div>
       )}
 
+      {/* ─── Input area ─── */}
       <div className="ai-chat-input">
         {isCancelling && (
           <div className="ai-chat-input-status">Cancelling...</div>
         )}
+
+        {/* Attached files preview */}
+        {attachedFiles.length > 0 && (
+          <div className="ai-chat-attachments">
+            {attachedFiles.map((file, i) => (
+              <div key={i} className="ai-chat-attachment-chip">
+                {file.dataUrl ? (
+                  <img src={file.dataUrl} alt={file.name} className="ai-chat-attachment-thumb" />
+                ) : (
+                  <FiFileText size={12} />
+                )}
+                <span className="ai-chat-attachment-name">{file.name}</span>
+                <button type="button" className="ai-chat-attachment-remove" onClick={() => removeAttachment(i)}>
+                  <FiX size={10} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="ai-chat-input-row">
           <textarea
             ref={textareaRef}
-            placeholder={inputDisabled ? 'Select a model to start...' : 'Type a message... (Shift+Enter for new line)'}
+            placeholder={inputDisabled ? 'Select a model to start...' : 'Type a message...'}
             value={input}
             onChange={event => setInput(event.target.value)}
             onKeyDown={handleInputKeyDown}
+            onPaste={handlePaste}
             rows={1}
             disabled={inputDisabled}
           />
@@ -1256,7 +1086,6 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                 setIsAutoContextBusy(false);
                 setAutoContextFiles([]);
               }}
-              style={{ height: 36, borderRadius: 6 }}
             >
               Stop
             </button>
@@ -1265,21 +1094,288 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
               type="button"
               className="ai-chat-send-btn"
               onClick={handleSend}
-              disabled={inputDisabled || !input.trim()}
+              disabled={inputDisabled || (!input.trim() && !attachedFiles.length)}
               title="Send"
             >
               <FiSend />
             </button>
           )}
         </div>
-        <div className="ai-chat-input-actions">
-          <span className="ai-chat-input-hint">Shift+Enter for new line</span>
-          {messages.length > 0 && (
-            <span className="ai-chat-token-count">
-              {messages.length} message{messages.length !== 1 ? 's' : ''}
+
+        {/* Bottom action bar */}
+        <div className="ai-chat-input-bar">
+          <div className="ai-chat-input-bar-left">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="*/*"
+              style={{ display: 'none' }}
+              onChange={e => { handleFileAttach(e.target.files); e.target.value = ''; }}
+            />
+            <button
+              type="button"
+              className="ai-chat-input-icon-btn"
+              onClick={() => fileInputRef.current?.click()}
+              title="Attach files or images"
+            >
+              <FiPaperclip size={15} />
+            </button>
+            <button
+              type="button"
+              className={`ai-chat-input-icon-btn ${showSettingsMenu ? 'active' : ''}`}
+              onClick={() => setShowSettingsMenu(v => !v)}
+              title="Settings"
+            >
+              <FiSettings size={15} />
+            </button>
+            {autoContextEnabled && (
+              <span className="ai-chat-context-indicator" title="Smart Context active">
+                <FiZap size={12} /> Context
+              </span>
+            )}
+          </div>
+          <div className="ai-chat-input-bar-right">
+            <span className="ai-chat-input-hint">
+              {settings.model ? settings.model.split('/').pop() : 'No model'}
             </span>
-          )}
+            {messages.length > 0 && (
+              <span className="ai-chat-token-count">
+                {messages.length} msg{messages.length !== 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
         </div>
+
+        {/* ─── Settings popup menu ─── */}
+        {showSettingsMenu && (
+          <div className="ai-chat-settings-popup" ref={settingsMenuRef}>
+            <div className="ai-settings-popup-tabs">
+              <button
+                type="button"
+                className={`ai-settings-popup-tab ${settingsMenuTab === 'general' ? 'active' : ''}`}
+                onClick={() => setSettingsMenuTab('general')}
+              >
+                General
+              </button>
+              <button
+                type="button"
+                className={`ai-settings-popup-tab ${settingsMenuTab === 'model' ? 'active' : ''}`}
+                onClick={() => setSettingsMenuTab('model')}
+              >
+                Model
+              </button>
+              <button
+                type="button"
+                className={`ai-settings-popup-tab ${settingsMenuTab === 'advanced' ? 'active' : ''}`}
+                onClick={() => setSettingsMenuTab('advanced')}
+              >
+                Advanced
+              </button>
+            </div>
+
+            <div className="ai-settings-popup-body">
+              {/* ── General tab ── */}
+              {settingsMenuTab === 'general' && (
+                <>
+                  <div className="ai-settings-popup-section">
+                    <div className="ai-settings-popup-label">Mode</div>
+                    <div className="ai-chat-mode-switch" role="tablist">
+                      {(['qa', 'coder', 'autonomous'] as const).map(mode => (
+                        <button
+                          key={mode}
+                          type="button"
+                          className={`ai-chat-mode-button ${settings.mode === mode ? 'active' : ''}`}
+                          onClick={() => updateSettings({ mode })}
+                        >
+                          {mode === 'qa' ? 'QA' : mode === 'coder' ? 'Coder' : 'Auto'}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="ai-settings-popup-hint">
+                      {settings.mode === 'qa' ? 'Read-only Q&A'
+                        : settings.mode === 'coder' ? 'Can edit files and run commands'
+                        : 'Plans, codes and validates autonomously'}
+                    </span>
+                  </div>
+
+                  <div className="ai-settings-popup-section">
+                    <div className="ai-settings-popup-label">Context</div>
+                    <button
+                      type="button"
+                      className={`ai-chat-toggle ${autoContextEnabled ? 'active' : ''}`}
+                      onClick={() => {
+                        setAutoContextEnabled(value => {
+                          const next = !value;
+                          if (!next) {
+                            setAutoContextFiles([]);
+                            setAutoContextStatus('');
+                            setAutoContextActivity([]);
+                          }
+                          return next;
+                        });
+                      }}
+                    >
+                      <FiZap size={12} /> Smart Context
+                    </button>
+                    {autoContextEnabled && autoContextFiles.length > 0 && (
+                      <div className="ai-chat-context-files-mini">
+                        {autoContextFiles.map(file => (
+                          <span key={file} className="ai-chat-context-chip" title={file}>{file}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="ai-settings-popup-section">
+                    <div className="ai-settings-popup-label">
+                      <FiShield size={12} /> Execution
+                    </div>
+                    <div className="ai-settings-popup-row">
+                      <button
+                        type="button"
+                        className={`ai-chat-toggle ${!settings.yoloMode ? 'active' : ''}`}
+                        onClick={() => updateSettings({ yoloMode: false })}
+                      >
+                        Safe
+                      </button>
+                      <button
+                        type="button"
+                        className={`ai-chat-toggle danger ${settings.yoloMode ? 'active' : ''}`}
+                        onClick={() => {
+                          if (settings.yoloMode) {
+                            updateSettings({ yoloMode: false });
+                            return;
+                          }
+                          const confirmed = window.confirm(
+                            '⚠️ YOLO Mode\n\nDateiänderungen und Befehle werden ohne Bestätigung ausgeführt.\nSicherheitskritische Aktionen erfordern weiterhin eine Bestätigung.\n\nWirklich aktivieren?'
+                          );
+                          if (confirmed) {
+                            updateSettings({ yoloMode: true });
+                          }
+                        }}
+                      >
+                        <FiZap size={11} /> YOLO
+                      </button>
+                    </div>
+                    {settings.yoloMode && (
+                      <span className="ai-settings-popup-hint warning">
+                        Writes and commands run without confirmation. Security risks still require approval.
+                      </span>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {/* ── Model tab ── */}
+              {settingsMenuTab === 'model' && (
+                <>
+                  <div className="ai-settings-popup-section">
+                    <div className="ai-settings-popup-label">Model</div>
+                    <div className="ai-settings-popup-row">
+                      <select
+                        className="ai-chat-model-select"
+                        value={settings.model}
+                        onChange={event => updateSettings({ model: event.target.value })}
+                        disabled={!models.length}
+                      >
+                        {models.length === 0 && <option value="">No models</option>}
+                        {models.map(model => (
+                          <option key={model} value={model}>{model}</option>
+                        ))}
+                      </select>
+                      <button
+                        className="ai-chat-icon-button"
+                        type="button"
+                        onClick={refreshModels}
+                        title="Refresh Models"
+                        disabled={isFetchingModels}
+                      >
+                        {isFetchingModels ? <LuLoader2 className="ai-chat-spinner" /> : <FiRefreshCw size={13} />}
+                      </button>
+                    </div>
+                    <div className="ai-settings-popup-row">
+                      <span className="ai-settings-popup-hint">
+                        Tool Support: {' '}
+                        <span style={{ color: toolCallSupported === true ? '#34d399' : toolCallSupported === false ? '#f87171' : '#6b7280' }}>
+                          {toolCallSupported === true ? 'Supported' : toolCallSupported === false ? 'Not Supported' : 'Unknown'}
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="ai-settings-popup-section">
+                    <div className="ai-settings-popup-label">Endpoint</div>
+                    <input
+                      type="text"
+                      className="ai-settings-popup-input"
+                      value={settings.baseUrl}
+                      onChange={e => updateSettings({ baseUrl: e.target.value })}
+                      placeholder="http://localhost:1234"
+                    />
+                  </div>
+
+                  <div className="ai-settings-popup-section">
+                    <div className="ai-settings-popup-label">API Key</div>
+                    <input
+                      type="password"
+                      className="ai-settings-popup-input"
+                      value={settings.apiKey || ''}
+                      onChange={e => updateSettings({ apiKey: e.target.value || undefined })}
+                      placeholder="sk-..."
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* ── Advanced tab ── */}
+              {settingsMenuTab === 'advanced' && (
+                <>
+                  <div className="ai-settings-popup-section">
+                    <div className="ai-settings-popup-label">Temperature</div>
+                    <input
+                      type="range"
+                      className="ai-settings-popup-range"
+                      min="0"
+                      max="2"
+                      step="0.1"
+                      value={settings.temperature}
+                      onChange={e => updateSettings({ temperature: parseFloat(e.target.value) || 0.7 })}
+                    />
+                    <span className="ai-settings-popup-range-value">{settings.temperature}</span>
+                  </div>
+
+                  <div className="ai-settings-popup-section">
+                    <div className="ai-settings-popup-label">Max Tokens</div>
+                    <input
+                      type="number"
+                      className="ai-settings-popup-input"
+                      min="256"
+                      max="128000"
+                      step="256"
+                      value={settings.maxTokens}
+                      onChange={e => updateSettings({ maxTokens: parseInt(e.target.value) || 4096 })}
+                    />
+                  </div>
+
+                  <div className="ai-settings-popup-section">
+                    <div className="ai-settings-popup-label">Top P</div>
+                    <input
+                      type="range"
+                      className="ai-settings-popup-range"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={settings.topP}
+                      onChange={e => updateSettings({ topP: parseFloat(e.target.value) || 1 })}
+                    />
+                    <span className="ai-settings-popup-range-value">{settings.topP}</span>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ─── Patch edit panel ─── */}
