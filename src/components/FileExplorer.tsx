@@ -3,6 +3,7 @@ import { FolderIcon, FileIcon, ChevronRightIcon, ChevronDownIcon } from './Icons
 import { SiJavascript, SiTypescript, SiCss3, SiHtml5, SiPython, SiJson, SiMarkdown } from 'react-icons/si';
 import '../styles/FileExplorer.css';
 import path from 'path';
+import { isAbsoluteFilePath } from '../utils/pathUtils';
 
 // FileNode describes a node in the file tree (either a file or directory)
 interface FileNode {
@@ -319,7 +320,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     if (!projectPath) return;
     const name = await promptForName('Enter new folder name', 'New Folder');
     if (!name) return;
-    const targetPath = path.isAbsolute(name) ? name : path.join(projectPath, name);
+    const targetPath = isAbsoluteFilePath(name) ? path.normalize(name) : path.join(projectPath, name);
     try {
       await window.electron?.ipcRenderer?.invoke('fs:createDirectory', targetPath);
       dispatchExplorerRefresh();

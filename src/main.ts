@@ -35,6 +35,7 @@ interface TerminalSession {
 }
 
 const terminalSessions = new Map<string, TerminalSession>();
+const aiCommandProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 
 interface RemoteVersionResponse {
   program?: {
@@ -196,7 +197,11 @@ function tokenizeCommand(command: string): string[] {
   });
 }
 
-function runSafeCommand(command: string, cwd: string): Promise<{ stdout: string; stderr: string; code: number; error?: string }> {
+function runSafeCommand(
+  command: string,
+  cwd: string,
+  options?: { requestId?: string }
+): Promise<{ stdout: string; stderr: string; code: number; error?: string }> {
   return new Promise((resolve, reject) => {
     try {
       const [file, ...args] = tokenizeCommand(command);
@@ -210,6 +215,10 @@ function runSafeCommand(command: string, cwd: string): Promise<{ stdout: string;
         shell: false,
         env: process.env
       });
+      const requestId = options?.requestId?.trim();
+      if (requestId) {
+        aiCommandProcesses.set(requestId, child);
+      }
 
       let stdout = '';
       let stderr = '';
@@ -229,6 +238,9 @@ function runSafeCommand(command: string, cwd: string): Promise<{ stdout: string;
         });
       });
       child.on('close', code => {
+        if (requestId) {
+          aiCommandProcesses.delete(requestId);
+        }
         resolve({
           stdout,
           stderr,
@@ -719,7 +731,7 @@ ipcMain.handle('ai:getBasePrompt', async () => {
   }
 });
 
-ipcMain.handle('exec', async (event, command: unknown, options?: { cwd?: string }) => {
+ipcMain.handle('exec', async (event, command: unknown, options?: { cwd?: string; requestId?: string }) => {
   assertTrustedSender(event);
 
   if (typeof command !== 'string' || command.trim().length === 0) {
@@ -732,11 +744,32 @@ ipcMain.handle('exec', async (event, command: unknown, options?: { cwd?: string 
 
   return new Promise((resolve, reject) => {
     try {
-      runSafeCommand(command, cwd).then(resolve).catch(reject);
+      runSafeCommand(command, cwd, { requestId: options?.requestId }).then(resolve).catch(reject);
     } catch (error) {
       reject(error instanceof Error ? error : new Error(String(error)));
     }
   });
+});
+
+ipcMain.handle('exec:kill', async (event, requestId: unknown) => {
+  assertTrustedSender(event);
+  if (typeof requestId !== 'string' || !requestId.trim()) {
+    return false;
+  }
+
+  const child = aiCommandProcesses.get(requestId);
+  if (!child) {
+    return false;
+  }
+
+  aiCommandProcesses.delete(requestId);
+  try {
+    child.kill('SIGTERM');
+    return true;
+  } catch (error) {
+    console.warn(`Failed to kill AI command ${requestId}:`, error);
+    return false;
+  }
 });
 
 function createSplashWindow(): void {

@@ -13,7 +13,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   'window:minimize', 'window:maximize', 'window:unmaximize', 'window:close', 'window:isMaximized',
   'ai:getBasePrompt', 'ai:chat', 'ai:refactor',
   'get-code-completion', 'explain-code', 'refactor-code', 'editor:findInFiles',
-  'exec', 'terminal:create', 'terminal:kill', 'terminal:resize', 'terminal:dispose',
+  'exec', 'exec:kill', 'terminal:create', 'terminal:kill', 'terminal:resize', 'terminal:dispose',
   'dialog:showOpenDialog', 'dialog:openDirectory', 'dialog:inputBox',
   'app:getVersion', 'app:openAbout', 'app:newWindow', 'app:openFile', 'app:openFolder', 'app:exit', 'app:getUserDataPath', 'app:getPath',
   'shell:openPath', 'edit:undo', 'edit:redo', 'edit:cut', 'edit:copy', 'edit:paste', 'edit:find', 'edit:replace',

@@ -9,6 +9,8 @@ import { FileNode } from '../types/FileNode';
 import { marked } from 'marked';
 import {
   collapseDuplicateProjectRoot,
+  isAbsoluteFilePath,
+  joinPathPreserveAbsolute,
   normalizeProjectRoot,
   stripFileProtocol,
   stripRelativeDrivePrefix
@@ -73,6 +75,11 @@ interface PlanItem {
   done: boolean;
 }
 
+interface MessageStopState {
+  body: string;
+  stopReason?: string;
+}
+
 const createLocalId = () => {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
     return crypto.randomUUID();
@@ -88,7 +95,7 @@ const createFileList = (files: File[]): FileList => {
 
 const normalizeRelativePath = (filePath?: string, projectPath?: string) => {
   if (!filePath) return '';
-  if (projectPath) {
+  if (projectPath && isAbsoluteFilePath(filePath)) {
     const relative = path.relative(projectPath, filePath);
     if (relative && relative !== filePath) {
       return relative.replace(/\\/g, '/');
@@ -172,6 +179,31 @@ const tokenizeQuestion = (question: string) => {
     .split(/[^a-z0-9_\-./]+/g)
     .map(token => token.trim())
     .filter(token => token.length >= 3);
+};
+
+const extractChecklistItems = (content?: string): PlanItem[] => {
+  if (!content) return [];
+  return content
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => /^[-*]\s+\[( |x|X)\]\s+/.test(line))
+    .map(line => ({
+      done: /^[-*]\s+\[(x|X)\]\s+/.test(line),
+      text: line.replace(/^[-*]\s+\[( |x|X)\]\s+/, '').trim()
+    }));
+};
+
+const splitStopReason = (content?: string): MessageStopState => {
+  const raw = content || '';
+  const match = raw.match(/\n\n---\n\*(.+?)\*\s*$/s);
+  if (!match) {
+    return { body: raw };
+  }
+
+  return {
+    body: raw.slice(0, match.index).trim(),
+    stopReason: match[1]?.trim()
+  };
 };
 
 const scoreFilePath = (filePath: string, tokens: string[]) => {
@@ -263,6 +295,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     toolStatus,
     toolCallSupported,
     checkToolCallSupport,
+    visionSupported,
     pendingToolApprovals,
     approvePendingToolApproval,
     rejectPendingToolApproval
@@ -280,6 +313,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [settingsMenuTab, setSettingsMenuTab] = useState<'general' | 'model' | 'advanced'>('general');
   const [attachedFiles, setAttachedFiles] = useState<Array<{ name: string; type: string; dataUrl?: string; content?: string }>>([]);
+  const [showYoloConfirm, setShowYoloConfirm] = useState(false);
   const settingsMenuRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [autoContextEnabled, setAutoContextEnabled] = useState(() => {
@@ -296,6 +330,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
   const [lastParsedMessageId, setLastParsedMessageId] = useState<string | null>(null);
   const [dismissedBanners, setDismissedBanners] = useState<Set<string>>(new Set());
   const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(new Set());
+  const [expandedReasoning, setExpandedReasoning] = useState<Set<string>>(new Set());
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -322,9 +357,9 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       const sanitized = stripRelativeDrivePrefix(stripFileProtocol(trimmed));
       let normalized = path.normalize(sanitized);
       normalized = collapseDuplicateProjectRoot(normalized, normalizedRoot);
-      if (path.isAbsolute(normalized)) return path.normalize(normalized);
+      if (isAbsoluteFilePath(normalized)) return path.normalize(normalized);
       if (!baseDirectory) return path.normalize(normalized);
-      const joined = path.normalize(path.join(baseDirectory, normalized));
+      const joined = joinPathPreserveAbsolute(baseDirectory, normalized);
       return collapseDuplicateProjectRoot(joined, normalizedRoot);
     };
   }, [projectPath]);
@@ -427,17 +462,25 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
   );
 
   const currentPlan = useMemo(() => {
-    const latestAiMessage = [...messages].reverse().find(message => message.sender === 'ai');
-    if (!latestAiMessage?.content) return [] as PlanItem[];
-    return latestAiMessage.content
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => /^[-*]\s+\[( |x|X)\]\s+/.test(line))
-      .map(line => ({
-        done: /^[-*]\s+\[(x|X)\]\s+/.test(line),
-        text: line.replace(/^[-*]\s+\[( |x|X)\]\s+/, '').trim()
-      }));
+    const latestChecklistMessage = [...messages]
+      .reverse()
+      .find(
+        message =>
+          (message.sender === 'ai' || message.sender === 'tool') &&
+          extractChecklistItems(message.content).length > 0
+      );
+    return extractChecklistItems(latestChecklistMessage?.content);
   }, [messages]);
+
+  const planStats = useMemo(() => {
+    const total = currentPlan.length;
+    const completed = currentPlan.filter(item => item.done).length;
+    return {
+      total,
+      completed,
+      finished: total > 0 && completed === total
+    };
+  }, [currentPlan]);
 
   // ─── Effects ───
 
@@ -554,9 +597,14 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     [activeRelativePath, availableFiles, openRelativeFiles, requestCompletion]
   );
 
-  const sendWithAutoContext = async (question: string) => {
+  const sendWithAutoContext = async (
+    question: string,
+    images?: Array<{ dataUrl: string; name: string; mimeType: string }>,
+    displayContent?: string
+  ) => {
+    const msgOptions: Parameters<typeof sendMessage>[1] = { images, displayContent };
     if (!autoContextEnabled || !availableFiles.length) {
-      await sendMessage(question);
+      await sendMessage(question, msgOptions);
       return;
     }
     setIsAutoContextBusy(true);
@@ -568,7 +616,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       if (!requestedFiles.length) {
         setAutoContextStatus('');
         setAutoContextActivity([]);
-        await sendMessage(question);
+        await sendMessage(question, msgOptions);
         return;
       }
       setAutoContextFiles(requestedFiles);
@@ -601,7 +649,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       }
       if (!sections.length) {
         setAutoContextActivity([]);
-        await sendMessage(question);
+        await sendMessage(question, msgOptions);
         return;
       }
       const attachmentsSection = accessibleFileNotes.length
@@ -609,7 +657,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
         : '';
       const inlineSection = ['If you cannot access the files directly, use the following content:', sections.join('\n\n')].join('\n\n');
       const contextPrompt = [attachmentsSection, inlineSection, 'Use line numbers in the snippets for precise references.', `Answer the question: ${question}`].filter(Boolean).join('\n\n');
-      await sendMessage(question, { injectSystemPrompt: contextPrompt });
+      await sendMessage(question, { ...msgOptions, injectSystemPrompt: contextPrompt });
     } finally {
       setAutoContextStatus('');
       setAutoContextActivity([]);
@@ -624,6 +672,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     Array.from(files).forEach(file => {
       const reader = new FileReader();
       if (file.type.startsWith('image/')) {
+        if (!visionSupported) return; // silently skip images if model doesn't support vision
         reader.onload = () => {
           setAttachedFiles(prev => [...prev, { name: file.name, type: file.type, dataUrl: reader.result as string }]);
         };
@@ -643,6 +692,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       if (item.type.startsWith('image/')) {
+        if (!visionSupported) return; // don't accept pasted images for non-vision models
         event.preventDefault();
         const file = item.getAsFile();
         if (file) handleFileAttach(createFileList([file]));
@@ -658,18 +708,51 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     if (!input.trim() && !attachedFiles.length) return;
     if (isThinking || isAutoContextBusy) return;
     const question = input.trim();
+
+    // Separate images from text files
+    const imageAttachments = attachedFiles.filter(f => f.dataUrl && f.type.startsWith('image/'));
+    const textAttachments = attachedFiles.filter(f => f.content && !f.type.startsWith('image/'));
+
+    // Build the text message (include text file contents inline, but NOT image base64)
     let fullMessage = question;
-    if (attachedFiles.length) {
-      const attachmentSections = attachedFiles.map(f => {
-        if (f.dataUrl) return `[Image: ${f.name}]\n${f.dataUrl}`;
-        if (f.content) return `[File: ${f.name}]\n\`\`\`\n${f.content}\n\`\`\``;
-        return `[File: ${f.name}]`;
-      });
-      fullMessage = [...attachmentSections, question].filter(Boolean).join('\n\n');
+    if (textAttachments.length) {
+      const fileSections = textAttachments.map(f =>
+        `[File: ${f.name}]\n\`\`\`\n${(f.content || '').slice(0, MAX_SNIPPET_LENGTH)}\n\`\`\``
+      );
+      fullMessage = [...fileSections, question].filter(Boolean).join('\n\n');
     }
+
+    // Build display text (what the user sees in the chat)
+    const displayParts: string[] = [];
+    if (imageAttachments.length) {
+      displayParts.push(imageAttachments.map(f => `📷 ${f.name}`).join(', '));
+    }
+    if (textAttachments.length) {
+      displayParts.push(textAttachments.map(f => `📄 ${f.name}`).join(', '));
+    }
+    if (question) displayParts.push(question);
+    const displayContent = displayParts.join('\n');
+
+    // Prepare image attachments for the API (multimodal content parts)
+    const images = imageAttachments.length > 0
+      ? imageAttachments.map(f => ({ dataUrl: f.dataUrl!, name: f.name, mimeType: f.type }))
+      : undefined;
+
     setInput('');
     setAttachedFiles([]);
-    if (fullMessage) await sendWithAutoContext(fullMessage);
+
+    if (!fullMessage && !images?.length) return;
+
+    // Send with proper multimodal support
+    if (autoContextEnabled && availableFiles.length) {
+      // For auto context, we need to inject context and pass images separately
+      await sendWithAutoContext(fullMessage || '', images, displayContent);
+    } else {
+      await sendMessage(fullMessage || (images ? '' : ''), {
+        displayContent,
+        images
+      });
+    }
   };
 
   const handleInputKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -698,6 +781,15 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
 
   const toggleToolCallExpanded = (key: string) => {
     setExpandedToolCalls(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const toggleReasoningExpanded = (key: string) => {
+    setExpandedReasoning(prev => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
@@ -843,6 +935,50 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     return <div className="ai-chat-message-content" dangerouslySetInnerHTML={{ __html: withCopy }} />;
   };
 
+  const renderReasoning = (message: typeof messages[number]) => {
+    if (!message.reasoning?.trim()) return null;
+    const reasoningKey = `reasoning-${message.id}`;
+    const isExpanded = expandedReasoning.has(reasoningKey);
+    const preview = message.reasoning
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean)
+      .slice(0, 2)
+      .join(' ');
+
+    return (
+      <div className={`ai-chat-reasoning ${isExpanded ? 'expanded' : ''}`}>
+        <button
+          type="button"
+          className="ai-chat-reasoning-toggle"
+          onClick={() => toggleReasoningExpanded(reasoningKey)}
+        >
+          <span className="ai-chat-reasoning-label">Reasoning</span>
+          <span className="ai-chat-reasoning-preview">{preview || 'Open internal work trace'}</span>
+        </button>
+        {isExpanded && <div className="ai-chat-reasoning-body">{renderMessageContent(message.reasoning)}</div>}
+      </div>
+    );
+  };
+
+  const renderSummaryCard = (message: typeof messages[number]) => {
+    const { body, stopReason } = splitStopReason(message.content);
+    return (
+      <div className="ai-chat-summary-card">
+        <div className="ai-chat-summary-header">
+          <div>
+            <div className="ai-chat-summary-eyebrow">Execution Summary</div>
+            <strong>Task finished</strong>
+          </div>
+          {stopReason && <span className="ai-chat-summary-stop">{stopReason}</span>}
+        </div>
+        <div className="ai-chat-summary-body">
+          {renderMessageContent(body || '(No summary provided)')}
+        </div>
+      </div>
+    );
+  };
+
 
   return (
     <div className="ai-chat-panel">
@@ -889,9 +1025,15 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
 
       {/* ─── Messages ─── */}
       <div className="ai-chat-messages" ref={messagesContainerRef}>
-        {settings.mode === 'autonomous' && currentPlan.length > 0 && (
-          <div className="ai-chat-plan-card">
-            <div className="ai-chat-plan-title">Working plan</div>
+        {currentPlan.length > 0 && (
+          <div className={`ai-chat-plan-card ${planStats.finished ? 'finished' : ''}`}>
+            <div className="ai-chat-plan-header">
+              <div className="ai-chat-plan-title">Working plan</div>
+              <div className="ai-chat-plan-progress">
+                <span>{planStats.completed}/{planStats.total}</span>
+                {planStats.finished && <span className="ai-chat-plan-badge">Done</span>}
+              </div>
+            </div>
             <div className="ai-chat-plan-items">
               {currentPlan.map(item => (
                 <div key={`${item.text}-${item.done ? 'done' : 'todo'}`} className={`ai-chat-plan-item ${item.done ? 'done' : ''}`}>
@@ -928,7 +1070,14 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
             </div>
           </div>
         ) : (
-          messages.map(message => (
+          messages.map((message, index) => {
+            const { body, stopReason } = splitStopReason(message.content);
+            const isSummaryMessage =
+              message.sender === 'ai' &&
+              Boolean(stopReason) &&
+              index === messages.length - 1;
+
+            return (
             <div key={message.id} className={`ai-chat-message ${message.sender}`}>
               <div className="ai-chat-message-meta">
                 <span>
@@ -936,9 +1085,10 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                 </span>
                 <span>{message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
               </div>
-              <div className="ai-chat-message-bubble">
+              {isSummaryMessage ? renderSummaryCard(message) : <div className="ai-chat-message-bubble">
                 {message.toolCalls && message.toolCalls.length > 0 ? (
                   <div className="ai-chat-tool-calls">
+                    {renderReasoning(message)}
                     {message.toolCalls.map((tc, idx) => {
                       const tcKey = `${message.id}-tc-${idx}`;
                       const isExpanded = expandedToolCalls.has(tcKey);
@@ -965,14 +1115,17 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                         </div>
                       );
                     })}
-                    {message.content && renderMessageContent(message.content)}
+                    {body && renderMessageContent(body)}
                   </div>
                 ) : (
-                  renderMessageContent(message.content || '')
+                  <>
+                    {renderReasoning(message)}
+                    {renderMessageContent(body || '')}
+                  </>
                 )}
-              </div>
+              </div>}
             </div>
-          ))
+          )})
         )}
 
         {/* Thinking indicator */}
@@ -1109,7 +1262,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
               ref={fileInputRef}
               type="file"
               multiple
-              accept="*/*"
+              accept={visionSupported ? '*/*' : '.ts,.tsx,.js,.jsx,.json,.css,.html,.py,.md,.txt,.yml,.yaml,.xml,.sh,.rs,.go,.java,.c,.cpp,.h'}
               style={{ display: 'none' }}
               onChange={e => { handleFileAttach(e.target.files); e.target.value = ''; }}
             />
@@ -1117,7 +1270,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
               type="button"
               className="ai-chat-input-icon-btn"
               onClick={() => fileInputRef.current?.click()}
-              title="Attach files or images"
+              title={visionSupported ? 'Attach files or images' : 'Attach code files (vision not supported by this model)'}
             >
               <FiPaperclip size={15} />
             </button>
@@ -1235,7 +1388,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                       <button
                         type="button"
                         className={`ai-chat-toggle ${!settings.yoloMode ? 'active' : ''}`}
-                        onClick={() => updateSettings({ yoloMode: false })}
+                        onClick={() => { updateSettings({ yoloMode: false }); setShowYoloConfirm(false); }}
                       >
                         Safe
                       </button>
@@ -1247,20 +1400,43 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                             updateSettings({ yoloMode: false });
                             return;
                           }
-                          const confirmed = window.confirm(
-                            '⚠️ YOLO Mode\n\nDateiänderungen und Befehle werden ohne Bestätigung ausgeführt.\nSicherheitskritische Aktionen erfordern weiterhin eine Bestätigung.\n\nWirklich aktivieren?'
-                          );
-                          if (confirmed) {
-                            updateSettings({ yoloMode: true });
-                          }
+                          setShowYoloConfirm(true);
                         }}
                       >
                         <FiZap size={11} /> YOLO
                       </button>
                     </div>
+                    {showYoloConfirm && !settings.yoloMode && (
+                      <div className="ai-yolo-confirm">
+                        <div className="ai-yolo-confirm-icon"><FiAlertTriangle size={16} /></div>
+                        <div className="ai-yolo-confirm-text">
+                          <strong>Enable YOLO Mode?</strong>
+                          <p>All file changes, deletions, and commands will execute immediately without any confirmation. This is fully unrestricted.</p>
+                        </div>
+                        <div className="ai-yolo-confirm-actions">
+                          <button
+                            type="button"
+                            className="ai-yolo-confirm-btn cancel"
+                            onClick={() => setShowYoloConfirm(false)}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            className="ai-yolo-confirm-btn confirm"
+                            onClick={() => {
+                              updateSettings({ yoloMode: true });
+                              setShowYoloConfirm(false);
+                            }}
+                          >
+                            Enable YOLO
+                          </button>
+                        </div>
+                      </div>
+                    )}
                     {settings.yoloMode && (
                       <span className="ai-settings-popup-hint warning">
-                        Writes and commands run without confirmation. Security risks still require approval.
+                        All actions execute without confirmation. Fully unrestricted.
                       </span>
                     )}
                   </div>

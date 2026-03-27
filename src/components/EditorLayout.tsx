@@ -16,6 +16,8 @@ import { FaRegFile } from 'react-icons/fa';
 import { Resizable } from 're-resizable';
 import {
   collapseDuplicateProjectRoot,
+  isAbsoluteFilePath,
+  joinPathPreserveAbsolute,
   normalizeProjectRoot,
   stripFileProtocol,
   stripRelativeDrivePrefix
@@ -301,12 +303,12 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
       let normalized = path.normalize(sanitized);
       normalized = collapseDuplicateProjectRoot(normalized, normalizedProjectRoot);
 
-      if (path.isAbsolute(normalized)) {
+      if (isAbsoluteFilePath(normalized)) {
         return normalized;
       }
 
       if (normalizedProjectRoot) {
-        const joined = path.normalize(path.join(normalizedProjectRoot, normalized));
+        const joined = joinPathPreserveAbsolute(normalizedProjectRoot, normalized);
         return collapseDuplicateProjectRoot(joined, normalizedProjectRoot);
       }
 

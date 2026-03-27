@@ -35,6 +35,11 @@ export interface ToolResult {
   content: string;
 }
 
+interface ToolExecutionOptions {
+  signal?: AbortSignal;
+  requestId?: string;
+}
+
 export const AI_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
@@ -55,11 +60,13 @@ export const AI_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'readFile',
-      description: 'Read the contents of a file at the given path. Returns the file content as text.',
+      description: 'Read the contents of a file. For large files, use startLine/endLine to read specific sections and avoid token waste. Lines are 1-indexed. If omitted, reads the entire file.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Absolute or relative file path to read' }
+          path: { type: 'string', description: 'Absolute or relative file path to read' },
+          startLine: { type: 'number', description: 'First line to read (1-indexed, inclusive). Omit to start from beginning.' },
+          endLine: { type: 'number', description: 'Last line to read (1-indexed, inclusive). Omit to read until end.' }
         },
         required: ['path']
       }
@@ -373,7 +380,8 @@ async function findMatchingFiles(
 
 export async function executeToolCall(
   toolCall: ToolCall,
-  projectPath?: string
+  projectPath?: string,
+  options?: ToolExecutionOptions
 ): Promise<ToolResult> {
   const renderer = ipc();
   if (!renderer) {
@@ -409,7 +417,23 @@ export async function executeToolCall(
         } else {
           const prefix = guessed ? `[Resolved from ${args.path} to ${resolvedPath}]\n` : '';
           const text = typeof content === 'string' ? content : String(content);
-          result = text.length > 0 ? `${prefix}${text}` : `${prefix}(empty file: ${resolvedPath})`;
+          if (text.length === 0) {
+            result = `${prefix}(empty file: ${resolvedPath})`;
+          } else {
+            const allLines = text.split('\n');
+            const totalLines = allLines.length;
+            const start = Math.max(1, Math.floor(Number(args.startLine) || 1));
+            const end = Math.min(totalLines, Math.floor(Number(args.endLine) || totalLines));
+            const hasRange = args.startLine != null || args.endLine != null;
+
+            if (hasRange) {
+              const sliced = allLines.slice(start - 1, end);
+              const numbered = sliced.map((line: string, i: number) => `${String(start + i).padStart(4, ' ')}| ${line}`).join('\n');
+              result = `${prefix}[Lines ${start}-${end} of ${totalLines}]\n${numbered}`;
+            } else {
+              result = `${prefix}[${totalLines} lines total]\n${text}`;
+            }
+          }
         }
         break;
       }
@@ -541,9 +565,20 @@ export async function executeToolCall(
 
       case 'runCommand': {
         const normalizedCommand = quoteWindowsCommandPath(String(args.command ?? ''));
-        const execResult = await renderer.invoke('exec', normalizedCommand, {
-          cwd: args.cwd ? resolvePath(args.cwd, projectPath) : projectPath
-        });
+        const requestId = options?.requestId || toolCall.id;
+        const abortHandler = () => {
+          renderer.invoke('exec:kill', requestId).catch(() => undefined);
+        };
+        options?.signal?.addEventListener('abort', abortHandler, { once: true });
+        let execResult: any;
+        try {
+          execResult = await renderer.invoke('exec', normalizedCommand, {
+            cwd: args.cwd ? resolvePath(args.cwd, projectPath) : projectPath,
+            requestId
+          });
+        } finally {
+          options?.signal?.removeEventListener('abort', abortHandler);
+        }
         if (execResult && typeof execResult === 'object') {
           const parts: string[] = [];
           parts.push(`[command] ${normalizedCommand}`);
