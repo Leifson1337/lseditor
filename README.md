@@ -28,6 +28,7 @@
 ## 🚀 Geplante Features (Community-Mitwirkung erwünscht!)
 
 - ✅ Git-Integration (Commit-Vorschläge, Diff-Analyse)
+- ✅ Vollständig Autonomer Coding Agent auf Lokaler Hardware
 - ✅ AI-gestützte Code-Tests & Testgenerierung
 - ✅ Plugin-System für eigene Tools & Commands
 - ✅ AI-Sitzungsspeicher + Chatverlauf
@@ -94,6 +95,7 @@ English:
 - ✅ Git integration (commit suggestions, diff analysis)
 - ✅ AI-supported code tests & test generation
 - ✅ Plugin system for own tools & commands
+- ✅ Fully Autonomous Coding Agent on Local Hardware
 - ✅ AI session memory + chat history
 - ✅ Open Source Plugin Marketplace
 - ✅ AI- Autocompletion via background model

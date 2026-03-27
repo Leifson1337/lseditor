@@ -7,6 +7,7 @@ import React, {
   useRef,
   useState
 } from 'react';
+import path from 'path';
 import { AI_TOOLS, executeToolCall, ToolCall, ToolResult } from '../services/AIToolService';
 
 export type ChatSender = 'user' | 'ai' | 'system' | 'tool';
@@ -16,6 +17,15 @@ export interface ToolCallInfo {
   arguments: string;
   result?: string;
   status: 'pending' | 'running' | 'done' | 'error';
+  preview?: ToolCallPreview;
+}
+
+export interface ToolCallPreview {
+  kind: 'file';
+  path: string;
+  action: 'create' | 'update' | 'delete';
+  originalContent: string;
+  newContent: string;
 }
 
 export interface Message {
@@ -43,6 +53,8 @@ export interface AISettings {
   maxTokens: number;
   apiKey?: string;
   toolsEnabled: boolean;
+  mode: 'qa' | 'coder' | 'autonomous';
+  yoloMode: boolean;
 }
 
 interface SendMessageOptions {
@@ -56,6 +68,16 @@ interface CompletionRequestOptions {
   injectSystemPrompt?: string;
   signal?: AbortSignal;
   includeBasePrompt?: boolean;
+}
+
+export type ToolCallSupport = boolean | 'unknown';
+
+export interface PendingToolApproval {
+  id: string;
+  conversationId: string;
+  messageId: string;
+  summary: string;
+  toolCalls: ToolCallInfo[];
 }
 
 interface AIContextType {
@@ -81,6 +103,11 @@ interface AIContextType {
   lastError?: string;
   connectionStatus: 'idle' | 'connecting' | 'ready' | 'error';
   toolStatus?: string;
+  toolCallSupported: ToolCallSupport;
+  checkToolCallSupport: () => Promise<ToolCallSupport>;
+  pendingToolApprovals: PendingToolApproval[];
+  approvePendingToolApproval: (id: string) => Promise<void>;
+  rejectPendingToolApproval: (id: string) => Promise<void>;
 }
 
 const AIContext = createContext<AIContextType | undefined>(undefined);
@@ -93,13 +120,16 @@ const defaultSettings: AISettings = {
   temperature: 0.7,
   topP: 1,
   maxTokens: 4096,
-  toolsEnabled: true
+  toolsEnabled: true,
+  mode: 'coder',
+  yoloMode: false
 };
 
 const DEFAULT_BASE_PROMPT = `Du bist LS AI, der integrierte Assistent des LS Editors. Du hast Zugriff auf Tools zum Lesen, Schreiben, Suchen und Ausfuehren von Dateien und Befehlen im Workspace des Benutzers.
 
 WICHTIG - Tool-Nutzung:
-- Wenn der Benutzer dich bittet Code zu schreiben, eine Datei zu erstellen oder zu aendern: Benutze IMMER das writeFile Tool um den Code direkt in die Datei zu schreiben. Gib den Code NICHT als Text aus.
+- Wenn der Benutzer dich bittet Code zu schreiben, eine Datei zu erstellen oder zu aendern: Benutze IMMER ein echtes Tool um die Datei direkt zu aendern. Gib den Code NICHT als Text aus.
+- Bevorzuge replaceInFile fuer gezielte Aenderungen an bestehenden Dateien. Benutze writeFile nur fuer neue Dateien oder komplette Rewrite-Faelle.
 - Wenn der Benutzer dich bittet etwas zu testen: Benutze IMMER das runCommand Tool (z.B. "python datei.py", "node datei.js", "npm test")
 - Lies Dateien mit readFile bevor du sie aenderst
 - Wenn der genaue Dateipfad unbekannt ist, benutze zuerst findFile
@@ -107,13 +137,13 @@ WICHTIG - Tool-Nutzung:
 
 Ablauf wenn der Benutzer Code will:
 1. Lies die Datei mit readFile (falls sie existiert)
-2. Schreibe den neuen Code mit writeFile in die Datei
+2. Aendere gezielt mit replaceInFile oder schreibe mit writeFile in die Datei
 3. Optional: Teste mit runCommand
 4. Antworte kurz was du getan hast
 
 Verboten:
-- Gib NIEMALS Code als Antworttext aus wenn du ihn stattdessen mit writeFile schreiben kannst
-- Behaupte niemals, dass eine Datei geaendert wurde, ohne writeFile aufgerufen zu haben
+- Gib NIEMALS Code als Antworttext aus wenn du ihn stattdessen mit einem Tool in die Datei schreiben kannst
+- Behaupte niemals, dass eine Datei geaendert wurde, ohne ein mutierendes Tool aufgerufen zu haben
 - Gib niemals interne Gedanken, Analyse oder Pseudo-Tool-Protokoll aus
 - Antworte IMMER in normalem Text. Benutze NIEMALS interne Protokoll-Marker oder Channel-Tags`;
 
@@ -136,6 +166,17 @@ const sanitizeBaseUrl = (url: string) => {
   return url.trim().replace(/\/$/, '');
 };
 
+const resolveToolTargetPath = (targetPath: string, projectPath?: string) => {
+  if (!targetPath) return '';
+  if (/^[a-zA-Z]:[\\/]/.test(targetPath) || targetPath.startsWith('/')) {
+    return targetPath;
+  }
+  if (projectPath) {
+    return path.join(projectPath, targetPath);
+  }
+  return targetPath;
+};
+
 const extractModels = (payload: any): string[] => {
   if (!payload) return [];
   const list =
@@ -147,6 +188,55 @@ const extractModels = (payload: any): string[] => {
       return item?.id || item?.name || item?.model;
     })
     .filter(Boolean);
+};
+
+const extractModelEntries = (payload: any): any[] => {
+  if (!payload) return [];
+  const list = payload?.models ?? payload?.data ?? (Array.isArray(payload) ? payload : []);
+  return Array.isArray(list) ? list : [];
+};
+
+const coerceBoolean = (value: unknown): boolean | undefined => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'supported', 'enabled'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'unsupported', 'disabled'].includes(normalized)) return false;
+  }
+  return undefined;
+};
+
+const inferToolCallSupportFromModel = (modelId: string, modelData?: any): ToolCallSupport => {
+  const directFlags = [
+    modelData?.supports_tool_calls,
+    modelData?.supports_function_calling,
+    modelData?.supports_function_calls,
+    modelData?.tool_calling,
+    modelData?.function_calling,
+    modelData?.capabilities?.tool_calls,
+    modelData?.capabilities?.function_calling
+  ];
+
+  for (const flag of directFlags) {
+    const resolved = coerceBoolean(flag);
+    if (resolved !== undefined) return resolved;
+  }
+
+  const lowerModelId = modelId.toLowerCase();
+  if (
+    /(?:^|[\s:/_-])(vision|embedding|rerank|reranker|whisper|stt|tts)(?:$|[\s:/_-])/.test(lowerModelId)
+  ) {
+    return false;
+  }
+
+  if (
+    /(tool|function)[\s_-]?call/.test(lowerModelId) ||
+    /\b(?:gpt-4\.1|gpt-4o|gpt-4\.5|gpt-5|qwen(?:2\.5)?-coder|deepseek-coder|codestral|ministral|devstral|kimi-k2|glm-4|llama-3(?:\.\d+)?(?:-instruct)?|mistral(?:-small|-medium|-large)?|mixtral)\b/.test(lowerModelId)
+  ) {
+    return 'unknown';
+  }
+
+  return 'unknown';
 };
 
 const sanitizeAssistantContent = (content: string): string => {
@@ -209,6 +299,173 @@ const containsCodeBlockThatShouldBeWritten = (content: string): boolean => {
   });
 };
 
+const READ_ONLY_TOOL_NAMES = new Set(['findFile', 'readFile', 'listFiles', 'searchFiles']);
+const MUTATING_TOOL_NAMES = new Set(['writeFile', 'replaceInFile', 'createDirectory', 'deleteFile', 'renameFile']);
+const EXECUTION_TOOL_NAMES = new Set(['runCommand']);
+
+const toolNeedsApproval = (toolName: string) =>
+  MUTATING_TOOL_NAMES.has(toolName) || EXECUTION_TOOL_NAMES.has(toolName);
+
+const getToolsForMode = (settings: AISettings) => {
+  if (settings.mode === 'qa') {
+    return AI_TOOLS.filter(tool => READ_ONLY_TOOL_NAMES.has(tool.function.name));
+  }
+  return AI_TOOLS;
+};
+
+const createRuntimeModePrompt = (settings: AISettings) => {
+  const common = [
+    'Use real tool calls whenever you need to inspect files, write files, search the workspace, or run commands.',
+    'Never print pseudo tool syntax like functions.writeFile(...).',
+    'If tool calls are available, edit existing files with replaceInFile whenever possible, and use writeFile for new files or full rewrites.',
+    'Do not paste full files into chat when a tool call can apply the change directly.'
+  ];
+
+  if (settings.mode === 'qa') {
+    return [
+      'Current mode: QA mode.',
+      'You may inspect the workspace with read-only tools, but you must not modify files, create files, rename files, delete files, or run commands that change the project.',
+      'Answer questions, explain code, and propose changes. If the user wants implementation, tell them to switch to Coder or Autonomous mode.',
+      ...common
+    ].join('\n');
+  }
+
+  if (settings.mode === 'autonomous') {
+    return [
+      'Current mode: Autonomous mode.',
+      'Act like a senior engineer working the task through to completion.',
+      'Before substantial work, produce a short markdown checklist plan and keep updating the checklist as you make progress.',
+      'Read files first, then edit, then run validations/tests/builds when relevant.',
+      ...common
+    ].join('\n');
+  }
+
+  return [
+    'Current mode: Coder mode.',
+    'You may read files, write files, create files, and run commands to complete coding tasks.',
+    'Prefer direct tool calls over describing code in prose.',
+    ...common
+  ].join('\n');
+};
+
+const summarizeToolCall = (toolCall: ToolCall): string => {
+  try {
+    const args = JSON.parse(toolCall.function.arguments || '{}');
+    switch (toolCall.function.name) {
+      case 'readFile':
+        return `Reading ${args.path || 'file'}`;
+      case 'writeFile':
+        return `Writing ${args.path || 'file'}`;
+      case 'replaceInFile':
+        return `Editing ${args.path || 'file'}`;
+      case 'findFile':
+        return `Finding ${args.query || 'file'}`;
+      case 'listFiles':
+        return `Listing ${args.path || 'directory'}`;
+      case 'searchFiles':
+        return `Searching ${args.pattern || 'workspace'}`;
+      case 'runCommand':
+        return `Running ${args.command || 'command'}`;
+      case 'createDirectory':
+        return `Creating ${args.path || 'directory'}`;
+      case 'deleteFile':
+        return `Deleting ${args.path || 'path'}`;
+      case 'renameFile':
+        return `Renaming ${args.oldPath || 'path'}`;
+      default:
+        return `Running ${toolCall.function.name}`;
+    }
+  } catch {
+    return `Running ${toolCall.function.name}`;
+  }
+};
+
+const userRequestLikelyNeedsTools = (content: string, mode: AISettings['mode']) => {
+  if (mode === 'qa') return false;
+  return /(program|implement|create|write|save|edit|change|modify|update|fix|refactor|build|run|test|erstell|schreib|programmier|aender|änder|fixe|teste|baue)/i.test(
+    content
+  );
+};
+
+const extractPseudoToolCalls = (content: string): ToolCall[] => {
+  if (!content) return [];
+  const calls: ToolCall[] = [];
+  const pushCall = (name: string, args: string) => {
+    if (!name) return;
+    calls.push({
+      id: createId(),
+      type: 'function',
+      function: {
+        name,
+        arguments: args || '{}'
+      }
+    });
+  };
+
+  const fnPattern = /(?:functions?\.)?([A-Za-z_]\w*)\s*\((\{[\s\S]*?\})\)/g;
+  let fnMatch: RegExpExecArray | null;
+  while ((fnMatch = fnPattern.exec(content)) !== null) {
+    const toolName = fnMatch[1];
+    if (AI_TOOLS.some(tool => tool.function.name === toolName)) {
+      pushCall(toolName, fnMatch[2]);
+    }
+  }
+
+  const tagPattern = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
+  let tagMatch: RegExpExecArray | null;
+  while ((tagMatch = tagPattern.exec(content)) !== null) {
+    try {
+      const parsed = JSON.parse(tagMatch[1]);
+      const toolName = parsed?.name || parsed?.tool || parsed?.function?.name;
+      const args =
+        typeof parsed?.arguments === 'string'
+          ? parsed.arguments
+          : JSON.stringify(parsed?.arguments || parsed?.parameters || {});
+      if (toolName) pushCall(toolName, args);
+    } catch {
+      // ignore malformed pseudo tool calls
+    }
+  }
+
+  return calls;
+};
+
+const extractFirstCodeBlock = (content: string) => {
+  const match = content.match(/```[\w.-]*\n([\s\S]*?)```/);
+  return match?.[1]?.trim() || '';
+};
+
+const inferRequestedFilePath = (request: string) => {
+  if (!request) return '';
+  const match = request.match(/(?:^|\s)([A-Za-z0-9_./\\-]+\.[A-Za-z0-9]{1,8})(?=$|\s|[,.!?])/);
+  return match?.[1]?.trim() || '';
+};
+
+const inferSyntheticWriteToolCall = (request: string, responseContent: string): ToolCall | null => {
+  const filePath = inferRequestedFilePath(request);
+  const code = extractFirstCodeBlock(responseContent);
+  if (!filePath || !code) return null;
+  return {
+    id: createId(),
+    type: 'function',
+    function: {
+      name: 'writeFile',
+      arguments: JSON.stringify({
+        path: filePath,
+        content: code.endsWith('\n') ? code : `${code}\n`
+      })
+    }
+  };
+};
+
+const safeJsonParse = (value: string) => {
+  try {
+    return JSON.parse(value || '{}');
+  } catch {
+    return {};
+  }
+};
+
 interface CompletionResult {
   content: string;
   finishReason?: string;
@@ -217,6 +474,23 @@ interface CompletionResult {
     completion_tokens?: number;
     total_tokens?: number;
   };
+}
+
+interface AgentLoopState {
+  conversationId: string;
+  apiMessages: any[];
+  controller: AbortController;
+  combinedContent: string;
+  loops: number;
+  performedMutationTool: boolean;
+  mutationCorrectionSent: boolean;
+  toolProtocolCorrectionSent: boolean;
+}
+
+interface PendingToolExecutionState extends AgentLoopState {
+  id: string;
+  messageId: string;
+  toolCalls: ToolCall[];
 }
 
 export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: string }> = ({ children, projectPath }) => {
@@ -247,9 +521,97 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
   const [lastError, setLastError] = useState<string | undefined>();
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'connecting' | 'ready' | 'error'>('idle');
   const [toolStatus, setToolStatus] = useState<string | undefined>();
+  const [toolCallSupported, setToolCallSupported] = useState<ToolCallSupport>('unknown');
+  const [pendingToolApprovals, setPendingToolApprovals] = useState<PendingToolApproval[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
   const basePromptRef = useRef<string>(DEFAULT_BASE_PROMPT);
   const projectPathRef = useRef(projectPath);
+  const modelMetadataRef = useRef<Map<string, any>>(new Map());
+  const pendingToolExecutionRef = useRef<Map<string, PendingToolExecutionState>>(new Map());
+
+  const buildToolCallPreview = useCallback(
+    async (toolCall: ToolCall): Promise<ToolCallPreview | undefined> => {
+      const args = safeJsonParse(toolCall.function.arguments || '{}');
+      const targetPath = typeof args.path === 'string' ? args.path : '';
+      if (!targetPath || !window.electron?.ipcRenderer) return undefined;
+
+      const renderer = window.electron.ipcRenderer;
+
+      if (toolCall.function.name === 'writeFile') {
+        const absolutePath = resolveToolTargetPath(targetPath, projectPathRef.current);
+        let originalContent = '';
+        try {
+          const diskContent = await renderer.invoke('fs:readFile', absolutePath);
+          if (typeof diskContent === 'string') originalContent = diskContent;
+        } catch {
+          originalContent = '';
+        }
+        return {
+          kind: 'file',
+          path: targetPath,
+          action: originalContent ? 'update' : 'create',
+          originalContent,
+          newContent: typeof args.content === 'string' ? args.content : ''
+        };
+      }
+
+      if (toolCall.function.name === 'replaceInFile') {
+        const absolutePath = resolveToolTargetPath(targetPath, projectPathRef.current);
+        const diskContent = await renderer.invoke('fs:readFile', absolutePath);
+        if (typeof diskContent !== 'string') return undefined;
+        const search = typeof args.search === 'string' ? args.search : '';
+        const replace = typeof args.replace === 'string' ? args.replace : '';
+        if (!search) return undefined;
+        const replaceAll = Boolean(args.allOccurrences);
+        const newContent = replaceAll
+          ? diskContent.split(search).join(replace)
+          : diskContent.replace(search, replace);
+        return {
+          kind: 'file',
+          path: targetPath,
+          action: 'update',
+          originalContent: diskContent,
+          newContent
+        };
+      }
+
+      if (toolCall.function.name === 'deleteFile') {
+        const absolutePath = resolveToolTargetPath(targetPath, projectPathRef.current);
+        const diskContent = await renderer.invoke('fs:readFile', absolutePath);
+        if (typeof diskContent !== 'string') return undefined;
+        return {
+          kind: 'file',
+          path: targetPath,
+          action: 'delete',
+          originalContent: diskContent,
+          newContent: ''
+        };
+      }
+
+      return undefined;
+    },
+    []
+  );
+
+  const buildToolCallInfo = useCallback(
+    async (toolCall: ToolCall): Promise<ToolCallInfo> => {
+      try {
+        return {
+          name: toolCall.function.name,
+          arguments: toolCall.function.arguments,
+          status: 'pending',
+          preview: await buildToolCallPreview(toolCall)
+        };
+      } catch {
+        return {
+          name: toolCall.function.name,
+          arguments: toolCall.function.arguments,
+          status: 'pending'
+        };
+      }
+    },
+    [buildToolCallPreview]
+  );
 
   useEffect(() => {
     projectPathRef.current = projectPath;
@@ -297,6 +659,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
     try {
       const endpoints = [`${baseUrl}/v1/models`, `${baseUrl}/models`];
       let fetched: string[] = [];
+      let fetchedMetadata = new Map<string, any>();
       let lastErrorMessage = '';
 
       for (const endpoint of endpoints) {
@@ -308,7 +671,20 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
           }
           const payload = await response.json();
           fetched = extractModels(payload);
-          if (fetched.length) break;
+          if (fetched.length) {
+            fetchedMetadata = new Map(
+              extractModelEntries(payload)
+                .map(entry => {
+                  const id =
+                    typeof entry === 'string'
+                      ? entry
+                      : entry?.id || entry?.name || entry?.model;
+                  return id ? [String(id), entry] : null;
+                })
+                .filter(Boolean) as Array<[string, any]>
+            );
+            break;
+          }
         } catch (error) {
           lastErrorMessage = error instanceof Error ? error.message : String(error);
         }
@@ -317,10 +693,12 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       if (!fetched.length) {
         throw new Error(lastErrorMessage || 'Keine Modelle gefunden');
       }
+      modelMetadataRef.current = fetchedMetadata;
 
       setModels(fetched);
       setConnectionStatus('ready');
       setLastError(undefined);
+      setToolCallSupported(prev => (settings.model ? prev : 'unknown'));
 
       setSettings(prev => {
         if (prev.model && fetched.includes(prev.model)) {
@@ -333,14 +711,114 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       setModels([]);
       setConnectionStatus('error');
       setLastError(message);
+      setToolCallSupported('unknown');
     } finally {
       setIsFetchingModels(false);
     }
-  }, [settings.baseUrl]);
+  }, [settings.baseUrl, settings.model]);
 
   useEffect(() => {
     refreshModels();
   }, [refreshModels]);
+
+  const checkToolCallSupport = useCallback(async (): Promise<ToolCallSupport> => {
+    const selectedModel = settings.model?.trim();
+    if (!selectedModel) {
+      setToolCallSupported('unknown');
+      return 'unknown';
+    }
+
+    const inferred = inferToolCallSupportFromModel(
+      selectedModel,
+      modelMetadataRef.current.get(selectedModel)
+    );
+
+    if (inferred !== 'unknown') {
+      setToolCallSupported(inferred);
+      return inferred;
+    }
+
+    const baseUrl = sanitizeBaseUrl(settings.baseUrl);
+    try {
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {})
+        },
+        body: JSON.stringify({
+          model: selectedModel,
+          temperature: 0,
+          max_tokens: 32,
+          messages: [
+            {
+              role: 'user',
+              content:
+                'If tool calling is available, call the getWorkspaceInfo tool. Otherwise reply with the exact text NO_TOOL_SUPPORT.'
+            }
+          ],
+          tools: [
+            {
+              type: 'function',
+              function: {
+                name: 'getWorkspaceInfo',
+                description: 'Returns a short workspace description.',
+                parameters: {
+                  type: 'object',
+                  properties: {},
+                  additionalProperties: false
+                }
+              }
+            }
+          ],
+          tool_choice: {
+            type: 'function',
+            function: {
+              name: 'getWorkspaceInfo'
+            }
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const fallback = await response.text().catch(() => '');
+        const lower = fallback.toLowerCase();
+        if (
+          lower.includes('tool') ||
+          lower.includes('function call') ||
+          lower.includes('function calling') ||
+          lower.includes('does not support')
+        ) {
+          setToolCallSupported(false);
+          return false;
+        }
+        setToolCallSupported('unknown');
+        return 'unknown';
+      }
+
+      const payload = await response.json();
+      const choice = payload?.choices?.[0];
+      const toolCalls = choice?.message?.tool_calls;
+      if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+        setToolCallSupported(true);
+        return true;
+      }
+
+      const content = String(choice?.message?.content || '').trim();
+      if (content === 'NO_TOOL_SUPPORT') {
+        setToolCallSupported(false);
+        return false;
+      }
+
+      setToolCallSupported(false);
+      return false;
+    } catch (error) {
+      console.warn('Failed to verify tool calling support', error);
+    }
+
+    setToolCallSupported('unknown');
+    return 'unknown';
+  }, [settings.apiKey, settings.baseUrl, settings.model]);
 
   const getActiveConversation = useCallback(
     () => conversations.find(conv => conv.id === activeConversationId) ?? conversations[0],
@@ -409,7 +887,8 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
     async (
       payloadMessages: any[],
       signal: AbortSignal,
-      useTools: boolean = false
+      useTools: boolean = false,
+      toolChoice: 'auto' | 'required' = 'auto'
     ): Promise<CompletionResult> => {
       // Ensure there is always at least one user-role message.
       // Some LM Studio Jinja templates error with "No user query found" otherwise.
@@ -435,8 +914,8 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       };
 
       if (useTools && settings.toolsEnabled) {
-        body.tools = AI_TOOLS;
-        body.tool_choice = 'auto';
+        body.tools = getToolsForMode(settings);
+        body.tool_choice = toolChoice;
       }
 
       const response = await fetch(`${sanitizeBaseUrl(settings.baseUrl)}/v1/chat/completions`, {
@@ -462,7 +941,8 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
 
       const payload = await response.json();
       const choice = payload?.choices?.[0];
-      const aiContent = sanitizeAssistantContent(choice?.message?.content?.trim() || '');
+      const rawContent = choice?.message?.content?.trim() || '';
+      const aiContent = sanitizeAssistantContent(rawContent);
       const rawToolCalls = choice?.message?.tool_calls;
 
       let toolCalls: ToolCall[] | undefined;
@@ -475,12 +955,16 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
             arguments: tc.function?.arguments || '{}'
           }
         }));
+      } else if (useTools) {
+        const pseudoToolCalls = extractPseudoToolCalls(rawContent);
+        if (pseudoToolCalls.length > 0) {
+          toolCalls = pseudoToolCalls;
+        }
       }
 
       if (!aiContent && !toolCalls?.length) {
         // If the raw content had pseudo-tool protocol but sanitization removed everything,
         // return empty so the caller can re-prompt instead of erroring.
-        const rawContent = choice?.message?.content?.trim() || '';
         if (rawContent && containsPseudoToolProtocol(rawContent)) {
           return { content: '', finishReason: choice?.finish_reason, toolCalls: undefined, usage: payload?.usage };
         }
@@ -504,6 +988,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       if (basePrompt) {
         systemMessages.push({ role: 'system', content: basePrompt });
       }
+      systemMessages.push({ role: 'system', content: createRuntimeModePrompt(settings) });
       if (projectPathRef.current) {
         systemMessages.push({
           role: 'system',
@@ -515,7 +1000,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       }
       return systemMessages;
     },
-    [loadBasePrompt]
+    [loadBasePrompt, settings]
   );
 
   const requestCompletion = useCallback(
@@ -558,6 +1043,495 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
     );
   }, []);
 
+  const updateToolMessage = useCallback(
+    (
+      conversationId: string,
+      messageId: string,
+      updater: (current: ToolCallInfo[]) => ToolCallInfo[]
+    ) => {
+      setConversations(prev =>
+        prev.map(conv => {
+          if (conv.id !== conversationId) return conv;
+          return {
+            ...conv,
+            messages: conv.messages.map(message => {
+              if (message.id !== messageId || !message.toolCalls) return message;
+              return {
+                ...message,
+                toolCalls: updater(message.toolCalls)
+              };
+            })
+          };
+        })
+      );
+    },
+    []
+  );
+
+  const finalizeAssistantMessage = useCallback(
+    (conversationId: string, combinedContent: string) => {
+      const aiMessage: Message = {
+        id: createId(),
+        content: combinedContent || '(No response)',
+        sender: 'ai',
+        timestamp: new Date()
+      };
+      addMessageToConversation(conversationId, aiMessage);
+    },
+    [addMessageToConversation]
+  );
+
+  const runAgentLoop = useCallback(
+    async (
+      state: AgentLoopState,
+      initialUserContent: string
+    ): Promise<string | undefined> => {
+      const maxToolLoops = 10;
+
+      try {
+        let currentState = { ...state };
+
+        while (currentState.loops < maxToolLoops && !currentState.controller.signal.aborted) {
+          currentState.loops += 1;
+          const useTools = settings.toolsEnabled && currentState.loops <= maxToolLoops;
+          const forceToolChoice =
+            toolCallSupported !== false &&
+            settings.mode !== 'qa' &&
+            currentState.mutationCorrectionSent &&
+            !currentState.performedMutationTool;
+
+          const result = await performCompletion(
+            currentState.apiMessages,
+            currentState.controller.signal,
+            useTools,
+            forceToolChoice ? 'required' : 'auto'
+          );
+
+          if (result.toolCalls && result.toolCalls.length > 0) {
+            const toolCalls = result.toolCalls;
+            const toolCallInfos: ToolCallInfo[] = await Promise.all(
+              toolCalls.map(tc => buildToolCallInfo(tc))
+            );
+
+            currentState.apiMessages = [
+              ...currentState.apiMessages,
+              {
+                role: 'assistant',
+                content: result.content || null,
+                tool_calls: toolCalls.map(tc => ({
+                  id: tc.id,
+                  type: 'function',
+                  function: { name: tc.function.name, arguments: tc.function.arguments }
+                }))
+              }
+            ];
+
+            const toolMessage: Message = {
+              id: createId(),
+              content: result.content || '',
+              sender: 'tool',
+              timestamp: new Date(),
+              toolCalls: toolCallInfos
+            };
+            addMessageToConversation(currentState.conversationId, toolMessage);
+
+            if (
+              !settings.yoloMode &&
+              toolCalls.some(tc => toolNeedsApproval(tc.function.name))
+            ) {
+              const approvalId = createId();
+              pendingToolExecutionRef.current.set(approvalId, {
+                ...currentState,
+                id: approvalId,
+                messageId: toolMessage.id,
+                toolCalls
+              });
+              setPendingToolApprovals(prev => [
+                ...prev,
+                {
+                  id: approvalId,
+                  conversationId: currentState.conversationId,
+                  messageId: toolMessage.id,
+                  summary: toolCalls.map(summarizeToolCall).join(' | '),
+                  toolCalls: toolCallInfos
+                }
+              ]);
+              setToolStatus('Waiting for approval');
+              abortControllerRef.current = null;
+              setIsThinking(false);
+              setIsCancelling(false);
+              return currentState.combinedContent;
+            }
+
+            const toolResults: ToolResult[] = [];
+            for (let index = 0; index < toolCalls.length; index += 1) {
+              const tc = toolCalls[index];
+              setToolStatus(summarizeToolCall(tc));
+              if (MUTATING_TOOL_NAMES.has(tc.function.name)) {
+                currentState.performedMutationTool = true;
+              }
+
+              updateToolMessage(currentState.conversationId, toolMessage.id, current =>
+                current.map((entry, entryIndex) =>
+                  entryIndex === index ? { ...entry, status: 'running' } : entry
+                )
+              );
+
+              const toolResult = await executeToolCall(tc, projectPathRef.current);
+              toolResults.push(toolResult);
+
+              updateToolMessage(currentState.conversationId, toolMessage.id, current =>
+                current.map((entry, entryIndex) =>
+                  entryIndex === index
+                    ? {
+                        ...entry,
+                        status: toolResult.content.startsWith('Error') ? 'error' : 'done',
+                        result: toolResult.content.substring(0, 500)
+                      }
+                    : entry
+                )
+              );
+            }
+
+            currentState.apiMessages = [
+              ...currentState.apiMessages,
+              ...toolResults.map(tr => ({
+                role: 'tool',
+                tool_call_id: tr.tool_call_id,
+                content: tr.content
+              }))
+            ];
+            updateToolMessage(currentState.conversationId, toolMessage.id, current =>
+              current.map((entry, entryIndex) => {
+                const toolResult = toolResults[entryIndex];
+                if (!toolResult) return entry;
+                return {
+                  ...entry,
+                  status: toolResult.content.startsWith('Error') ? 'error' : 'done',
+                  result: entry.result ?? toolResult.content.substring(0, 500)
+                };
+              })
+            );
+            setToolStatus(undefined);
+            continue;
+          }
+
+          if (result.content) {
+            if (
+              settings.toolsEnabled &&
+              !currentState.toolProtocolCorrectionSent &&
+              containsPseudoToolProtocol(result.content)
+            ) {
+              currentState.toolProtocolCorrectionSent = true;
+              currentState.apiMessages = [
+                ...currentState.apiMessages,
+                {
+                  role: 'user',
+                  content: 'Do not print internal tool protocol, analysis tags, channel markers, or pseudo function calls like functions.writeFile(...). Use real tool calls instead.'
+                }
+              ];
+              continue;
+            }
+          } else if (!result.content && !result.toolCalls?.length && currentState.loops < maxToolLoops) {
+            currentState.apiMessages = [
+              ...currentState.apiMessages,
+              {
+                role: 'user',
+                content: currentState.toolProtocolCorrectionSent
+                  ? 'Please provide your answer now. Summarize what you did and any results.'
+                  : 'Your previous response was empty or protocol-only. Respond normally and use real tool calls if needed.'
+              }
+            ];
+            currentState.toolProtocolCorrectionSent = true;
+            continue;
+          }
+
+          if (result.content) {
+            const syntheticWriteTool =
+              settings.mode !== 'qa' &&
+              settings.toolsEnabled &&
+              !currentState.performedMutationTool &&
+              userRequestLikelyNeedsTools(initialUserContent, settings.mode)
+                ? inferSyntheticWriteToolCall(initialUserContent, result.content)
+                : null;
+
+            if (syntheticWriteTool) {
+              const syntheticInfo: ToolCallInfo = await buildToolCallInfo(syntheticWriteTool);
+              const toolMessage: Message = {
+                id: createId(),
+                content: 'Fallback tool execution generated from the returned code block.',
+                sender: 'tool',
+                timestamp: new Date(),
+                toolCalls: [syntheticInfo]
+              };
+              addMessageToConversation(currentState.conversationId, toolMessage);
+
+              currentState.apiMessages = [
+                ...currentState.apiMessages,
+                {
+                  role: 'assistant',
+                  content: result.content,
+                  tool_calls: [
+                    {
+                      id: syntheticWriteTool.id,
+                      type: 'function',
+                      function: {
+                        name: syntheticWriteTool.function.name,
+                        arguments: syntheticWriteTool.function.arguments
+                      }
+                    }
+                  ]
+                }
+              ];
+
+              if (!settings.yoloMode) {
+                const approvalId = createId();
+                pendingToolExecutionRef.current.set(approvalId, {
+                  ...currentState,
+                  id: approvalId,
+                  messageId: toolMessage.id,
+                  toolCalls: [syntheticWriteTool]
+                });
+                setPendingToolApprovals(prev => [
+                  ...prev,
+                  {
+                    id: approvalId,
+                    conversationId: currentState.conversationId,
+                    messageId: toolMessage.id,
+                    summary: summarizeToolCall(syntheticWriteTool),
+                    toolCalls: [syntheticInfo]
+                  }
+                ]);
+                setToolStatus('Waiting for approval');
+                abortControllerRef.current = null;
+                setIsThinking(false);
+                setIsCancelling(false);
+                return currentState.combinedContent;
+              }
+
+              const toolResult = await executeToolCall(syntheticWriteTool, projectPathRef.current);
+              updateToolMessage(currentState.conversationId, toolMessage.id, current =>
+                current.map(entry => ({
+                  ...entry,
+                  status: toolResult.content.startsWith('Error') ? 'error' : 'done',
+                  result: toolResult.content.substring(0, 500)
+                }))
+              );
+              currentState.performedMutationTool = true;
+              currentState.apiMessages = [
+                ...currentState.apiMessages,
+                {
+                  role: 'tool',
+                  tool_call_id: toolResult.tool_call_id,
+                  content: toolResult.content
+                }
+              ];
+              updateToolMessage(currentState.conversationId, toolMessage.id, current =>
+                current.map(entry => ({
+                  ...entry,
+                  status: toolResult.content.startsWith('Error') ? 'error' : 'done',
+                  result: entry.result ?? toolResult.content.substring(0, 500)
+                }))
+              );
+              setToolStatus(undefined);
+              continue;
+            }
+
+            if (
+              settings.toolsEnabled &&
+              !currentState.performedMutationTool &&
+              !currentState.mutationCorrectionSent &&
+              claimsFileMutationWithoutTool(result.content)
+            ) {
+              currentState.mutationCorrectionSent = true;
+              currentState.apiMessages = [
+                ...currentState.apiMessages,
+                {
+                  role: 'user',
+                  content: 'You have not modified any file yet. If you intend to change files, call the appropriate tool first. Otherwise answer without claiming a file change.'
+                }
+              ];
+              continue;
+            }
+
+            if (
+              settings.toolsEnabled &&
+              userRequestLikelyNeedsTools(initialUserContent, settings.mode) &&
+              !currentState.performedMutationTool &&
+              !currentState.mutationCorrectionSent &&
+              containsCodeBlockThatShouldBeWritten(result.content)
+            ) {
+              currentState.mutationCorrectionSent = true;
+              currentState.apiMessages = [
+                ...currentState.apiMessages,
+                {
+                  role: 'user',
+                  content: 'Do not output the file as chat text. Use the correct tool call now and write the file directly.'
+                }
+              ];
+              continue;
+            }
+
+            currentState.combinedContent += currentState.combinedContent
+              ? `\n\n${result.content}`
+              : result.content;
+            currentState.apiMessages = [
+              ...currentState.apiMessages,
+              { role: 'assistant', content: result.content }
+            ];
+          }
+
+          if (!shouldContinue(result)) {
+            break;
+          }
+
+          currentState.apiMessages = [
+            ...currentState.apiMessages,
+            { role: 'user', content: 'Bitte fahre fort.' }
+          ];
+        }
+
+        finalizeAssistantMessage(currentState.conversationId, currentState.combinedContent);
+        return currentState.combinedContent;
+      } catch (error) {
+        const aborted = state.controller.signal.aborted;
+        const message = error instanceof Error ? error.message : String(error);
+        setLastError(aborted ? 'Anfrage abgebrochen.' : message);
+        addMessageToConversation(state.conversationId, {
+          id: createId(),
+          content: aborted ? 'Anfrage abgebrochen.' : `Fehler: ${message}`,
+          sender: 'system',
+          timestamp: new Date()
+        });
+        return undefined;
+      } finally {
+        if (abortControllerRef.current === state.controller) {
+          abortControllerRef.current = null;
+        }
+        setIsCancelling(false);
+        setIsThinking(false);
+        setToolStatus(undefined);
+      }
+    },
+    [
+      addMessageToConversation,
+      buildToolCallInfo,
+      finalizeAssistantMessage,
+      performCompletion,
+      settings,
+      shouldContinue,
+      toolCallSupported,
+      updateToolMessage
+    ]
+  );
+
+  const approvePendingToolApproval = useCallback(
+    async (id: string) => {
+      const pending = pendingToolExecutionRef.current.get(id);
+      if (!pending) return;
+      pendingToolExecutionRef.current.delete(id);
+      setPendingToolApprovals(prev => prev.filter(item => item.id !== id));
+      setIsThinking(true);
+      setLastError(undefined);
+
+      const toolResults: ToolResult[] = [];
+      for (let index = 0; index < pending.toolCalls.length; index += 1) {
+        const tc = pending.toolCalls[index];
+        setToolStatus(summarizeToolCall(tc));
+        updateToolMessage(pending.conversationId, pending.messageId, current =>
+          current.map((entry, entryIndex) =>
+            entryIndex === index ? { ...entry, status: 'running' } : entry
+          )
+        );
+        const toolResult = await executeToolCall(tc, projectPathRef.current);
+        toolResults.push(toolResult);
+        updateToolMessage(pending.conversationId, pending.messageId, current =>
+          current.map((entry, entryIndex) =>
+            entryIndex === index
+              ? {
+                  ...entry,
+                  status: toolResult.content.startsWith('Error') ? 'error' : 'done',
+                  result: toolResult.content.substring(0, 500)
+                }
+              : entry
+          )
+        );
+      }
+
+      updateToolMessage(pending.conversationId, pending.messageId, current =>
+        current.map((entry, entryIndex) => {
+          const toolResult = toolResults[entryIndex];
+          if (!toolResult) return entry;
+          return {
+            ...entry,
+            status: toolResult.content.startsWith('Error') ? 'error' : 'done',
+            result: entry.result ?? toolResult.content.substring(0, 500)
+          };
+        })
+      );
+
+      await runAgentLoop(
+        {
+          ...pending,
+          apiMessages: [
+            ...pending.apiMessages,
+            ...toolResults.map(tr => ({
+              role: 'tool',
+              tool_call_id: tr.tool_call_id,
+              content: tr.content
+            }))
+          ],
+          performedMutationTool:
+            pending.performedMutationTool ||
+            pending.toolCalls.some(tc => MUTATING_TOOL_NAMES.has(tc.function.name))
+        },
+        ''
+      );
+    },
+    [runAgentLoop, updateToolMessage]
+  );
+
+  const rejectPendingToolApproval = useCallback(
+    async (id: string) => {
+      const pending = pendingToolExecutionRef.current.get(id);
+      if (!pending) return;
+      pendingToolExecutionRef.current.delete(id);
+      setPendingToolApprovals(prev => prev.filter(item => item.id !== id));
+      setIsThinking(true);
+
+      const denialResults = pending.toolCalls.map((tc, index) => {
+        updateToolMessage(pending.conversationId, pending.messageId, current =>
+          current.map((entry, entryIndex) =>
+            entryIndex === index
+              ? { ...entry, status: 'error', result: 'Rejected by user.' }
+              : entry
+          )
+        );
+        return {
+          tool_call_id: tc.id,
+          role: 'tool' as const,
+          content: `Tool call rejected by the user: ${tc.function.name}`
+        };
+      });
+
+      await runAgentLoop(
+        {
+          ...pending,
+          apiMessages: [
+            ...pending.apiMessages,
+            ...denialResults.map(tr => ({
+              role: 'tool',
+              tool_call_id: tr.tool_call_id,
+              content: tr.content
+            }))
+          ]
+        },
+        ''
+      );
+    },
+    [runAgentLoop, updateToolMessage]
+  );
+
   const sendMessage = useCallback(
     async (content: string, options?: SendMessageOptions) => {
       const displayContent = (options?.displayContent ?? content).trim();
@@ -599,200 +1573,32 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
 
       const messagePayload = mapMessages(updatedMessages);
       const systemMessages = await buildSystemMessages(options?.injectSystemPrompt);
-      let apiMessages: any[] = [...systemMessages, ...messagePayload];
-
       const controller = new AbortController();
       abortControllerRef.current = controller;
 
-      try {
-        let combinedContent = '';
-        let loops = 0;
-        const maxToolLoops = 10;
-        let performedMutationTool = false;
-        let mutationCorrectionSent = false;
-        let toolProtocolCorrectionSent = false;
-
-        while (loops < maxToolLoops && !controller.signal.aborted) {
-          loops += 1;
-          const useTools = settings.toolsEnabled && loops <= maxToolLoops;
-          const result = await performCompletion(apiMessages, controller.signal, useTools);
-
-          // Handle tool calls
-          if (result.toolCalls && result.toolCalls.length > 0) {
-            const toolCallInfos: ToolCallInfo[] = result.toolCalls.map(tc => ({
-              name: tc.function.name,
-              arguments: tc.function.arguments,
-              status: 'pending' as const
-            }));
-
-            // Add assistant message with tool calls to API messages
-            apiMessages = [
-              ...apiMessages,
-              {
-                role: 'assistant',
-                content: result.content || null,
-                tool_calls: result.toolCalls.map(tc => ({
-                  id: tc.id,
-                  type: 'function',
-                  function: { name: tc.function.name, arguments: tc.function.arguments }
-                }))
-              }
-            ];
-
-            // Show tool execution status
-            const toolMsg: Message = {
-              id: createId(),
-              content: result.content || '',
-              sender: 'tool',
-              timestamp: new Date(),
-              toolCalls: toolCallInfos
-            };
-            addMessageToConversation(conversationId, toolMsg);
-
-            // Execute each tool call
-            const toolResults: ToolResult[] = [];
-            for (const tc of result.toolCalls) {
-              setToolStatus(`Running: ${tc.function.name}...`);
-              if (['writeFile', 'createDirectory', 'deleteFile', 'renameFile'].includes(tc.function.name)) {
-                performedMutationTool = true;
-              }
-              const toolResult = await executeToolCall(tc, projectPathRef.current);
-              toolResults.push(toolResult);
-
-              // Update tool call status in the message
-              const idx = toolCallInfos.findIndex(t => t.name === tc.function.name && t.status === 'pending');
-              if (idx !== -1) {
-                toolCallInfos[idx].status = 'done';
-                toolCallInfos[idx].result = toolResult.content.substring(0, 500);
-              }
-            }
-
-            // Add tool results to API messages
-            for (const tr of toolResults) {
-              apiMessages.push({
-                role: 'tool',
-                tool_call_id: tr.tool_call_id,
-                content: tr.content
-              });
-            }
-
-            setToolStatus(undefined);
-            continue;
-          }
-
-          // No tool calls - this is the final text response
-          if (result.content) {
-            if (
-              settings.toolsEnabled &&
-              !toolProtocolCorrectionSent &&
-              containsPseudoToolProtocol(result.content)
-            ) {
-              toolProtocolCorrectionSent = true;
-              apiMessages = [
-                ...apiMessages,
-                {
-                  role: 'user',
-                  content: 'Do not print internal tool protocol, analysis tags, channel markers, or pseudo function calls like "functions.readFile". If you need to inspect or change files, use proper tool calls. Otherwise answer normally in plain text.'
-                }
-              ];
-              continue;
-            }
-          } else if (!result.content && !result.toolCalls?.length && loops < maxToolLoops) {
-            // Content was empty (protocol noise sanitized away, or model returned nothing).
-            // Always re-prompt to get a real answer instead of showing "(No response)".
-            apiMessages = [
-              ...apiMessages,
-              {
-                role: 'user',
-                content: toolProtocolCorrectionSent
-                  ? 'Please provide your answer now. Summarize what you did and any results.'
-                  : 'Your previous response was empty or contained only internal protocol markers. Please respond normally in plain text. Use proper tool calls if you need to access files.'
-              }
-            ];
-            toolProtocolCorrectionSent = true;
-            continue;
-          }
-
-          if (result.content) {
-
-            if (
-              settings.toolsEnabled &&
-              !performedMutationTool &&
-              !mutationCorrectionSent &&
-              claimsFileMutationWithoutTool(result.content)
-            ) {
-              mutationCorrectionSent = true;
-              apiMessages = [
-                ...apiMessages,
-                {
-                  role: 'user',
-                  content: 'You have not modified any file yet. If you intend to change files, call the appropriate tool first. Otherwise answer without claiming a file change.'
-                }
-              ];
-              continue;
-            }
-
-            // Detect when the AI outputs code blocks instead of using writeFile
-            if (
-              settings.toolsEnabled &&
-              !performedMutationTool &&
-              !mutationCorrectionSent &&
-              containsCodeBlockThatShouldBeWritten(result.content)
-            ) {
-              mutationCorrectionSent = true;
-              apiMessages = [
-                ...apiMessages,
-                {
-                  role: 'user',
-                  content: 'Do NOT output code as text. Use the writeFile tool to write the code directly into the file. Call writeFile now with the correct path and the full file content.'
-                }
-              ];
-              continue;
-            }
-
-            combinedContent += combinedContent ? `\n\n${result.content}` : result.content;
-            apiMessages = [...apiMessages, { role: 'assistant', content: result.content }];
-          }
-
-          // Check if we need to continue (token limit hit)
-          if (!shouldContinue(result)) {
-            break;
-          }
-
-          apiMessages = [...apiMessages, { role: 'user', content: 'Bitte fahre fort.' }];
-        }
-
-        const aiMessage: Message = {
-          id: createId(),
-          content: combinedContent || '(No response)',
-          sender: 'ai',
-          timestamp: new Date()
-        };
-
-        addMessageToConversation(conversationId, aiMessage);
-        return combinedContent;
-      } catch (error) {
-        const aborted = controller.signal.aborted;
-        const message = error instanceof Error ? error.message : String(error);
-        setLastError(aborted ? 'Anfrage abgebrochen.' : message);
-
-        const systemMessage: Message = {
-          id: createId(),
-          content: aborted ? 'Anfrage abgebrochen.' : `Fehler: ${message}`,
-          sender: 'system',
-          timestamp: new Date()
-        };
-
-        addMessageToConversation(conversationId, systemMessage);
-        return undefined;
-      } finally {
-        abortControllerRef.current = null;
-        setIsCancelling(false);
-        setIsThinking(false);
-        setToolStatus(undefined);
-      }
+      return runAgentLoop(
+        {
+          conversationId,
+          apiMessages: [...systemMessages, ...messagePayload],
+          controller,
+          combinedContent: '',
+          loops: 0,
+          performedMutationTool: false,
+          mutationCorrectionSent: false,
+          toolProtocolCorrectionSent: false
+        },
+        rawContent
+      );
     },
-    [addMessageToConversation, buildSystemMessages, conversations, getActiveConversation, isThinking, mapMessages, performCompletion, settings.model, settings.toolsEnabled, shouldContinue]
+    [
+      buildSystemMessages,
+      conversations,
+      getActiveConversation,
+      isThinking,
+      mapMessages,
+      runAgentLoop,
+      settings.model
+    ]
   );
 
   const value = useMemo<AIContextType>(
@@ -815,7 +1621,12 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       isFetchingModels,
       lastError,
       connectionStatus,
-      toolStatus
+      toolStatus,
+      toolCallSupported,
+      checkToolCallSupport,
+      pendingToolApprovals,
+      approvePendingToolApproval,
+      rejectPendingToolApproval
     }),
     [
       conversations,
@@ -835,7 +1646,12 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       isFetchingModels,
       lastError,
       connectionStatus,
-      toolStatus
+      toolStatus,
+      toolCallSupported,
+      checkToolCallSupport,
+      pendingToolApprovals,
+      approvePendingToolApproval,
+      rejectPendingToolApproval
     ]
   );
 

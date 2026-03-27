@@ -83,6 +83,23 @@ export const AI_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'replaceInFile',
+      description: 'Apply a targeted replacement inside an existing file. Prefer this over writeFile for small or medium edits so you only send the changed snippet, not the whole file.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Absolute or relative file path to edit' },
+          search: { type: 'string', description: 'Exact existing text to find in the file' },
+          replace: { type: 'string', description: 'Replacement text' },
+          allOccurrences: { type: 'boolean', description: 'Replace all matches instead of only the first match' }
+        },
+        required: ['path', 'search', 'replace']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'listFiles',
       description: 'List files and directories in the given directory path. If you are unsure, use the project root path. Do not pass a file path unless you want its parent directory to be used.',
       parameters: {
@@ -384,6 +401,48 @@ export async function executeToolCall(
         window.dispatchEvent(new CustomEvent('editor:openFile', { detail: fullPath }));
         window.dispatchEvent(new Event('explorer:refresh'));
         result = `File written successfully: ${fullPath}`;
+        break;
+      }
+
+      case 'replaceInFile': {
+        const { resolvedPath, guessed } = await resolveExistingPath(renderer, args.path, projectPath);
+        const content = await renderer.invoke('fs:readFile', resolvedPath);
+        if (typeof content !== 'string') {
+          result = `Error: File not found: ${resolvedPath}`;
+          break;
+        }
+
+        const search = String(args.search ?? '');
+        const replace = String(args.replace ?? '');
+        if (!search) {
+          result = 'Error: replaceInFile requires a non-empty search string';
+          break;
+        }
+
+        if (!content.includes(search)) {
+          result = `Error: Search text not found in ${resolvedPath}`;
+          break;
+        }
+
+        const replaceAll = Boolean(args.allOccurrences);
+        let updatedContent = content;
+        let replacements = 0;
+
+        if (replaceAll) {
+          updatedContent = content.split(search).join(replace);
+          replacements = content.split(search).length - 1;
+        } else {
+          updatedContent = content.replace(search, () => {
+            replacements += 1;
+            return replace;
+          });
+        }
+
+        await renderer.invoke('fs:writeFile', resolvedPath, updatedContent);
+        window.dispatchEvent(new CustomEvent('editor:openFile', { detail: resolvedPath }));
+        window.dispatchEvent(new Event('explorer:refresh'));
+        const prefix = guessed ? `[Resolved from ${args.path} to ${resolvedPath}] ` : '';
+        result = `${prefix}Updated ${resolvedPath} (${replacements} replacement${replacements === 1 ? '' : 's'})`;
         break;
       }
 

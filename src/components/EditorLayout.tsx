@@ -121,6 +121,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   // State for selected sidebar tab
   const [sidebarTab, setSidebarTab] = useState<string>('explorer');
   const [wordWrapEnabled, setWordWrapEnabled] = useState(true);
+  const [aiPanelWidth, setAiPanelWidth] = useState(420);
   // State for terminal panel visibility
   const [isTerminalPanelOpen, setIsTerminalPanelOpen] = useState(false); // State für Terminal-Panel
   const emitTerminalAction = useCallback((type: string, payload?: any) => {
@@ -762,19 +763,21 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
 
             {isAIPanelOpen && (
               <Resizable
-                defaultSize={{ width: 360, height: '100%' }}
-                minWidth={260}
-                maxWidth={640}
+                size={{ width: aiPanelWidth, height: '100%' }}
+                minWidth={320}
+                maxWidth="70%"
                 enable={{ left: true }}
                 className="ai-panel-resizable"
                 style={{ position: 'relative', left: 0, right: 0 }}
                 onResize={(_e, _dir, ref) => {
                   ref.style.left = '0';
                   ref.style.right = '0';
+                  setAiPanelWidth(ref.offsetWidth);
                 }}
                 onResizeStop={(_e, _dir, ref) => {
                   ref.style.left = '0';
                   ref.style.right = '0';
+                  setAiPanelWidth(ref.offsetWidth);
                 }}
               >
                 <AIChatPanel
