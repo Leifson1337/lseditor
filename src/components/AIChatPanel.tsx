@@ -227,6 +227,12 @@ const wrapCodeBlocksWithCopy = (html: string): string => {
   );
 };
 
+const escapeHtmlForMarkdown = (content: string) =>
+  content
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
 // ─── Component ───
 
 const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, activeFilePath, openFiles }) => {
@@ -261,6 +267,8 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     [conversations, activeConversationId]
   );
   const messages = activeConversation?.messages ?? [];
+  const activeApprovals = pendingToolApprovals.filter(item => item.conversationId === activeConversationId);
+  const activeApproval = activeApprovals[0] ?? null;
 
   const [input, setInput] = useState('');
   const [showSettings, setShowSettings] = useState(false);
@@ -640,6 +648,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       } else {
         await window.electron?.ipcRenderer?.invoke('fs:writeFile', edit.absolutePath, edit.newContent ?? '');
       }
+      window.dispatchEvent(new CustomEvent('editor:fileChanged', { detail: edit.absolutePath }));
       window.dispatchEvent(new CustomEvent('editor:openFile', { detail: edit.absolutePath }));
       window.dispatchEvent(new Event('explorer:refresh'));
       setPendingEdits(prev => prev.filter(item => item.id !== edit.id));
@@ -741,8 +750,27 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     );
   };
 
+  const renderApprovalDetails = (toolCall: any) => {
+    try {
+      const args = JSON.parse(toolCall.arguments || '{}');
+      if (toolCall.name === 'runCommand') {
+        return (
+          <pre className="ai-chat-approval-command">
+            <strong>Command</strong>
+            {'\n'}
+            {String(args.command || '').trim() || '(empty)'}
+            {args.cwd ? `\n\nCWD\n${String(args.cwd)}` : ''}
+          </pre>
+        );
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  };
+
   const renderMessageContent = (content: string) => {
-    const rawHtml = marked.parse(content || '') as string;
+    const rawHtml = marked.parse(escapeHtmlForMarkdown(content || '')) as string;
     const withCopy = wrapCodeBlocksWithCopy(rawHtml);
     return <div className="ai-chat-message-content" dangerouslySetInnerHTML={{ __html: withCopy }} />;
   };
@@ -767,22 +795,20 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
         </div>
 
         <div className="ai-chat-toolbar">
-          <div className="ai-chat-section-label">Mode</div>
-          <div className="ai-chat-mode-switch" role="tablist" aria-label="AI mode">
-            {(['qa', 'coder', 'autonomous'] as const).map(mode => (
-              <button
-                key={mode}
-                type="button"
-                className={`ai-chat-mode-button ${settings.mode === mode ? 'active' : ''}`}
-                onClick={() => updateSettings({ mode })}
-                title={mode === 'qa' ? 'Read-only question mode' : mode === 'coder' ? 'Can edit files and code' : 'Plans, codes and validates autonomously'}
-              >
-                {mode === 'qa' ? 'QA' : mode === 'coder' ? 'Coder' : 'Auto'}
-              </button>
-            ))}
-          </div>
           <div className="ai-chat-toolbar-row">
-            <div className="ai-chat-section-label">Context</div>
+            <div className="ai-chat-mode-switch" role="tablist" aria-label="AI mode">
+              {(['qa', 'coder', 'autonomous'] as const).map(mode => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={`ai-chat-mode-button ${settings.mode === mode ? 'active' : ''}`}
+                  onClick={() => updateSettings({ mode })}
+                  title={mode === 'qa' ? 'Read-only question mode' : mode === 'coder' ? 'Can edit files and code' : 'Plans, codes and validates autonomously'}
+                >
+                  {mode === 'qa' ? 'QA' : mode === 'coder' ? 'Coder' : 'Auto'}
+                </button>
+              ))}
+            </div>
             <button
               type="button"
               className={`ai-chat-toggle ${autoContextEnabled ? 'active' : ''}`}
@@ -799,7 +825,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
               }}
               title="Toggle smart file selection"
             >
-              Smart Context
+              Context
             </button>
           </div>
         </div>
@@ -832,7 +858,6 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
         {/* Conversation switcher */}
         <div className="ai-chat-conversation-bar">
           <div className="ai-chat-conversation-picker">
-            <label htmlFor="ai-chat-conversation-select">Chat</label>
             <select
               id="ai-chat-conversation-select"
               className="ai-chat-conversation-select"
@@ -870,7 +895,6 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
 
         {/* Model select + settings */}
         <div className="ai-chat-controls">
-          <div className="ai-chat-section-label">Model</div>
           <div className="ai-chat-model-row">
             <div className="ai-chat-model-select-wrapper">
               <select
@@ -1057,38 +1081,6 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
 
       {/* ─── Messages ─── */}
       <div className="ai-chat-messages" ref={messagesContainerRef}>
-        {pendingToolApprovals
-          .filter(item => item.conversationId === activeConversationId)
-          .map(item => (
-            <div key={item.id} className="ai-chat-approval-card">
-              <div className="ai-chat-approval-header">
-                <FiAlertTriangle />
-                <strong>Approval required</strong>
-              </div>
-              <p>{item.summary}</p>
-              <div className="ai-chat-approval-list">
-                {item.toolCalls.map((toolCall, index) => (
-                  <span key={`${item.id}-${index}`} className="ai-chat-approval-chip">
-                    {toolCall.name}
-                  </span>
-                ))}
-              </div>
-              {item.toolCalls.map((toolCall, index) => (
-                <div key={`${item.id}-preview-${index}`}>
-                  {renderToolPreview(item.id, index, toolCall)}
-                </div>
-              ))}
-              <div className="ai-chat-approval-actions">
-                <button type="button" className="reject" onClick={() => rejectPendingToolApproval(item.id)}>
-                  Reject
-                </button>
-                <button type="button" className="accept" onClick={() => approvePendingToolApproval(item.id)}>
-                  Approve
-                </button>
-              </div>
-            </div>
-          ))}
-
         {settings.mode === 'autonomous' && currentPlan.length > 0 && (
           <div className="ai-chat-plan-card">
             <div className="ai-chat-plan-title">Working plan</div>
@@ -1197,6 +1189,47 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       {lastError && <div className="ai-chat-alert">{lastError}</div>}
 
       {/* ─── Input ─── */}
+      {activeApproval && (
+        <div className="ai-chat-approval-overlay">
+          <div className="ai-chat-approval-backdrop" />
+          <div className="ai-chat-approval-modal">
+            <div className="ai-chat-approval-card floating">
+              <div className="ai-chat-approval-header">
+                <FiAlertTriangle />
+                <strong>Approval required</strong>
+              </div>
+              <p>{activeApproval.summary}</p>
+              <div className="ai-chat-approval-list">
+                {activeApproval.toolCalls.map((toolCall, index) => (
+                  <span key={`${activeApproval.id}-${index}`} className="ai-chat-approval-chip">
+                    {toolCall.name}
+                  </span>
+                ))}
+              </div>
+              {activeApproval.toolCalls.map((toolCall, index) => (
+                <div key={`${activeApproval.id}-preview-${index}`}>
+                  {renderApprovalDetails(toolCall)}
+                  {renderToolPreview(activeApproval.id, index, toolCall)}
+                </div>
+              ))}
+              {activeApprovals.length > 1 && (
+                <p className="ai-chat-approval-count-note">
+                  {activeApprovals.length - 1} further approval request{activeApprovals.length - 1 !== 1 ? 's' : ''} queued.
+                </p>
+              )}
+              <div className="ai-chat-approval-actions">
+                <button type="button" className="reject" onClick={() => rejectPendingToolApproval(activeApproval.id)}>
+                  Reject
+                </button>
+                <button type="button" className="accept" onClick={() => approvePendingToolApproval(activeApproval.id)}>
+                  Approve
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="ai-chat-input">
         {isCancelling && (
           <div className="ai-chat-input-status">Cancelling...</div>

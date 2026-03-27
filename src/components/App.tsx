@@ -96,6 +96,7 @@ const App: React.FC = () => {
   // State for showing settings
   const [showSettings, setShowSettings] = useState(false);
   const [showTerminalSettings, setShowTerminalSettings] = useState(false);
+  const [isOpeningProject, setIsOpeningProject] = useState(false);
   const projectServiceRef = useRef<ProjectService | null>(null);
 
   const refreshFileStructure = useCallback(async () => {
@@ -145,6 +146,19 @@ const App: React.FC = () => {
     window.addEventListener('explorer:refresh', handler);
     return () => window.removeEventListener('explorer:refresh', handler);
   }, [refreshFileStructure]);
+
+  useEffect(() => {
+    const normalizedPath = projectPath?.trim();
+    if (!normalizedPath || !window.electron?.ipcRenderer) {
+      return;
+    }
+
+    window.electron.ipcRenderer
+      .invoke('workspace:setRoot', normalizedPath)
+      .catch(error => {
+        console.error('Failed to register workspace root:', error);
+      });
+  }, [projectPath]);
 
   const promptForName = useCallback(async (title: string, defaultValue: string) => {
     if (window.electron?.ipcRenderer) {
@@ -215,7 +229,7 @@ const App: React.FC = () => {
         window.dispatchEvent(new CustomEvent('editor:menu', { detail: { menu: 'File', actionId, data } }));
         break;
     }
-  }, [createNewTextFile, createNewFolder]);
+  }, [createNewTextFile, createNewFolder, isOpeningProject, recentProjects]);
 
   const handleEditAction = useCallback((actionId: string, data?: any) => {
     window.dispatchEvent(new CustomEvent('editor:menu', { detail: { menu: 'Edit', actionId, data } }));
@@ -247,44 +261,53 @@ const App: React.FC = () => {
 
   // Open a project at the given path
   const openProject = async (path: string) => {
-    if (!path) return;
+    const normalizedPath = path?.trim();
+    if (!normalizedPath || isOpeningProject) return;
+    setIsOpeningProject(true);
+    setPathFeedback({ text: 'Opening project...', tone: 'info' });
     try {
       // Check if the provided path is valid
-      const isValid = await window.electron?.ipcRenderer.invoke('fs:checkPathExists', path);
+      const isValid = await window.electron?.ipcRenderer.invoke('fs:checkPathExists', normalizedPath);
       if (!isValid) {
+        setPathFeedback({ text: 'The folder could not be found.', tone: 'error' });
         alert('The specified path does not exist or is not a directory.');
         return;
       }
     } catch (error) {
       console.error('Error checking path validity:', error);
+      setPathFeedback({ text: 'Could not verify the folder path.', tone: 'error' });
       alert('Error checking path validity.');
       return;
     }
 
-    console.log('Opening project:', path);
-    setProjectPath(path);
+    console.log('Opening project:', normalizedPath);
+    window.electron?.ipcRenderer
+      ?.invoke('workspace:setRoot', normalizedPath)
+      .catch(error => console.error('Failed to register workspace root during openProject:', error));
+    setProjectPath(normalizedPath);
     setShowProjectDialog(false);
-    store.set('lastProjectPath', path);
-    persistWorkspacePath(path);
-    notifyWorkspaceChanged(path);
+    store.set('lastProjectPath', normalizedPath);
+    persistWorkspacePath(normalizedPath);
+    notifyWorkspaceChanged(normalizedPath);
 
     // Update recent projects list
-    let updated = [path, ...recentProjects.filter(p => p !== path)];
+    let updated = [normalizedPath, ...recentProjects.filter(p => p !== normalizedPath)];
     if (updated.length > 8) updated = updated.slice(0, 8);
     setRecentProjects(updated);
     store.set('recentProjects', updated);
 
     try {
       // Initialize the project service for the opened workspace
-      const projectService = new ProjectService(path);
+      const projectService = new ProjectService(normalizedPath);
       projectServiceRef.current = projectService;
       setTerminalManager(null);
 
       // Load file structure for the project
       try {
-        const structure = await projectService.getFileStructure(path);
+        const structure = await projectService.getFileStructure(normalizedPath);
         console.log('File structure loaded:', structure);
         setFileStructure(structure);
+        setPathFeedback({ text: 'Project opened successfully.', tone: 'success' });
       } catch (error) {
         console.error('Error loading file structure:', error);
         // Set a default empty structure if loading fails
@@ -294,6 +317,8 @@ const App: React.FC = () => {
       console.error('Error initializing project:', error);
       // Show error in UI
       alert(`Failed to open project: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setIsOpeningProject(false);
     }
   };
 
@@ -307,7 +332,8 @@ const App: React.FC = () => {
         setProjectPath(dir);
         setIsValidPath(true);
         persistWorkspacePath(dir);
-        setPathFeedback({ text: 'Folder selected. Click "Open" to continue.', tone: 'info' });
+        setPathFeedback({ text: 'Folder selected. Opening project...', tone: 'info' });
+        await openProject(dir);
       }
     } finally {
       setIsBrowseDialogOpen(false);
@@ -357,7 +383,7 @@ const App: React.FC = () => {
         setIsValidPath(true);
         persistWorkspacePath(newProjectPath);
         setPathFeedback({ text: 'Project created. Launching editor...', tone: 'success' });
-        openProject(newProjectPath);
+        await openProject(newProjectPath);
       } catch (error) {
         console.error('Error creating project:', error);
         alert(`Error creating project: ${error instanceof Error ? error.message : String(error)}`);
@@ -487,25 +513,30 @@ const App: React.FC = () => {
                     placeholder="Enter project path..."
                     value={projectPath}
                     onChange={(e) => setProjectPath(e.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && projectPath.trim()) {
+                        openProject(projectPath);
+                      }
+                    }}
                   />
                   <button
                     onClick={() => openProject(projectPath)}
-                    disabled={!isValidPath}
-                    title={!isValidPath ? "Please enter a valid path" : "Open project"}
+                    disabled={!projectPath.trim() || isOpeningProject}
+                    title={!projectPath.trim() ? "Please enter a path" : isOpeningProject ? "Opening project..." : "Open project"}
                   >
-                    Open
+                    {isOpeningProject ? 'Opening...' : 'Open'}
                   </button>
                   <button
                     onClick={openProjectDialog}
-                    disabled={isBrowseDialogOpen}
-                    title={isBrowseDialogOpen ? "Dialog is already open" : "Browse directory"}
+                    disabled={isBrowseDialogOpen || isOpeningProject}
+                    title={isBrowseDialogOpen ? "Dialog is already open" : isOpeningProject ? "Opening project..." : "Browse directory"}
                   >
                     Browse...
                   </button>
                   <button
                     onClick={createNewProject}
-                    disabled={isBrowseDialogOpen}
-                    title={isBrowseDialogOpen ? "Dialog is already open" : "Create new project"}
+                    disabled={isBrowseDialogOpen || isOpeningProject}
+                    title={isBrowseDialogOpen ? "Dialog is already open" : isOpeningProject ? "Opening project..." : "Create new project"}
                   >
                     New Project
                   </button>

@@ -15,7 +15,7 @@ import 'prismjs';
 import 'prismjs/themes/prism.css';
 import * as fs from 'fs';
 import AdmZip from 'adm-zip';
-import { spawn as spawnProcess, exec as execProcess, ExecException, ChildProcessWithoutNullStreams } from 'child_process';
+import { spawn as spawnProcess, ChildProcessWithoutNullStreams } from 'child_process';
 import { randomUUID } from 'crypto';
 import * as https from 'https';
 
@@ -26,6 +26,7 @@ let splashShownAt = 0;
 const MIN_SPLASH_MS = 4000;
 let aiService: AIService;
 let uiService: UIService | undefined = undefined;
+const allowedWorkspaceRoots = new Set<string>();
 
 interface TerminalSession {
   id: string;
@@ -83,6 +84,46 @@ const normalizeFsPath = (candidate: string) => {
   return path.normalize(resolved);
 };
 
+const registerAllowedRoot = (candidate?: string | null) => {
+  if (!candidate) return;
+  const normalized = normalizeFsPath(candidate);
+  if (normalized) {
+    allowedWorkspaceRoots.add(normalized);
+  }
+};
+
+const getStaticAllowedRoots = () => {
+  const roots = new Set<string>();
+  try { roots.add(normalizeFsPath(process.cwd())); } catch {}
+  try { roots.add(normalizeFsPath(app.getPath('home'))); } catch {}
+  try { roots.add(normalizeFsPath(app.getPath('desktop'))); } catch {}
+  try { roots.add(normalizeFsPath(app.getPath('documents'))); } catch {}
+  try { roots.add(normalizeFsPath(app.getPath('downloads'))); } catch {}
+  try { roots.add(normalizeFsPath(app.getPath('userData'))); } catch {}
+  try { roots.add(normalizeFsPath(app.getPath('temp'))); } catch {}
+  try { roots.add(normalizeFsPath(resolveBasePromptPath())); } catch {}
+  try { roots.add(normalizeFsPath(resolveAppIconPath())); } catch {}
+  return Array.from(roots);
+};
+
+const isWithinRoot = (candidate: string, root: string) => {
+  const normalizedCandidate = normalizeFsPath(candidate).toLowerCase();
+  const normalizedRoot = normalizeFsPath(root).toLowerCase();
+  return normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(`${normalizedRoot}${path.sep}`.toLowerCase());
+};
+
+const isPathAllowed = (candidate: string) => {
+  const normalized = normalizeFsPath(candidate);
+  const allowedRoots = [...getStaticAllowedRoots(), ...Array.from(allowedWorkspaceRoots)];
+  return allowedRoots.some(root => isWithinRoot(normalized, root));
+};
+
+const assertTrustedSender = (event: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent) => {
+  if (mainWindow && event.sender !== mainWindow.webContents) {
+    throw new Error('Unauthorized IPC sender');
+  }
+};
+
 /**
  * Checks if a path is safe to access (basic path traversal protection).
  */
@@ -107,8 +148,10 @@ const isPathSafe = (untrustedPath: string): boolean => {
  */
 const validatePath = (p: any): string => {
   if (typeof p !== 'string' || !p.trim()) throw new Error('Invalid path');
-  if (!isPathSafe(p)) throw new Error(`Access denied: Path ${p} is outside allowed boundaries`);
-  return normalizeFsPath(p);
+  const normalized = normalizeFsPath(p);
+  if (!isPathSafe(normalized)) throw new Error(`Access denied: Path ${p} is outside allowed boundaries`);
+  if (!isPathAllowed(normalized)) throw new Error(`Access denied: Path ${p} is not inside an allowed workspace`);
+  return normalized;
 };
 
 interface TerminalCreateOptions {
@@ -132,6 +175,71 @@ function resolveWorkingDirectory(requested?: string): string {
     }
   }
   return process.cwd();
+}
+
+function tokenizeCommand(command: string): string[] {
+  const trimmed = command.trim();
+  if (!trimmed) return [];
+  if (/[;&|><`]/.test(trimmed) || /\$\(/.test(trimmed)) {
+    throw new Error('Unsafe shell metacharacters are not allowed.');
+  }
+
+  const tokens = trimmed.match(/"[^"]*"|'[^']*'|[^\s]+/g) ?? [];
+  return tokens.map(token => {
+    if (
+      (token.startsWith('"') && token.endsWith('"')) ||
+      (token.startsWith("'") && token.endsWith("'"))
+    ) {
+      return token.slice(1, -1);
+    }
+    return token;
+  });
+}
+
+function runSafeCommand(command: string, cwd: string): Promise<{ stdout: string; stderr: string; code: number; error?: string }> {
+  return new Promise((resolve, reject) => {
+    try {
+      const [file, ...args] = tokenizeCommand(command);
+      if (!file) {
+        throw new Error('Empty command');
+      }
+
+      const child = spawnProcess(file, args, {
+        cwd,
+        windowsHide: true,
+        shell: false,
+        env: process.env
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      child.stdout.on('data', chunk => {
+        stdout += chunk.toString();
+      });
+      child.stderr.on('data', chunk => {
+        stderr += chunk.toString();
+      });
+      child.on('error', error => {
+        resolve({
+          stdout,
+          stderr,
+          code: 1,
+          error: error.message
+        });
+      });
+      child.on('close', code => {
+        resolve({
+          stdout,
+          stderr,
+          code: typeof code === 'number' ? code : 0,
+          error: typeof code === 'number' && code !== 0 ? `Command failed with exit code ${code}` : undefined
+        });
+      });
+    } catch (error) {
+      reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
 }
 
 function resolveShellExecutable(explicit?: string): string {
@@ -578,8 +686,15 @@ ipcMain.handle('window:close', (event) => {
 
 // --- FS CHECK PATH EXISTS ---
 ipcMain.handle('fs:checkPathExists', async (event, pathToCheck: string) => {
+  assertTrustedSender(event);
   try {
-    const normalized = validatePath(pathToCheck);
+    if (typeof pathToCheck !== 'string' || !pathToCheck.trim()) {
+      return false;
+    }
+    const normalized = normalizeFsPath(pathToCheck);
+    if (!isPathSafe(normalized)) {
+      return false;
+    }
     await fs.promises.access(normalized, fs.constants.F_OK);
     return true;
   } catch {
@@ -605,10 +720,7 @@ ipcMain.handle('ai:getBasePrompt', async () => {
 });
 
 ipcMain.handle('exec', async (event, command: unknown, options?: { cwd?: string }) => {
-  // SECURITY: Only allow exec from the main window
-  if (mainWindow && event.sender !== mainWindow.webContents) {
-    throw new Error('Unauthorized execution request: Sender mismatch');
-  }
+  assertTrustedSender(event);
 
   if (typeof command !== 'string' || command.trim().length === 0) {
     throw new Error('Ungueltiger Befehl');
@@ -620,20 +732,7 @@ ipcMain.handle('exec', async (event, command: unknown, options?: { cwd?: string 
 
   return new Promise((resolve, reject) => {
     try {
-      execProcess(
-        command,
-        { cwd, windowsHide: true, timeout: 30000 },
-        (error: ExecException | null, stdout = '', stderr = '') => {
-          // Always resolve with stdout/stderr so the AI can see the output.
-          // Rejecting with a plain object causes "[object Object]" over IPC.
-          resolve({
-            stdout,
-            stderr,
-            code: error ? (error.code ?? 1) : 0,
-            error: error ? (error.message ?? 'Command failed') : undefined
-          });
-        }
-      );
+      runSafeCommand(command, cwd).then(resolve).catch(reject);
     } catch (error) {
       reject(error instanceof Error ? error : new Error(String(error)));
     }
@@ -882,18 +981,24 @@ async function initializeServices() {
 function setupIpcHandlers() {
   // IPC handler for getting code completion
   ipcMain.handle('get-code-completion', async (event, filePath: string, position: any) => {
+    assertTrustedSender(event);
+    validatePath(filePath);
     if (!aiService) throw new Error('AI service not initialized');
     return aiService!.getCodeCompletion(filePath, position);
   });
 
   // IPC handler for explaining code
   ipcMain.handle('explain-code', async (event, filePath: string, selection: any) => {
+    assertTrustedSender(event);
+    validatePath(filePath);
     if (!aiService) throw new Error('AI service not initialized');
     return aiService!.explainCode(filePath, selection);
   });
 
   // IPC handler for refactoring code
   ipcMain.handle('refactor-code', async (event, filePath: string, selection: any, refactorType: string) => {
+    assertTrustedSender(event);
+    validatePath(filePath);
     if (!aiService) throw new Error('AI service not initialized');
     return aiService!.refactorCode(filePath, selection, refactorType);
   });
@@ -905,6 +1010,7 @@ function setupIpcHandlers() {
 function setupFsIpcHandlers() {
   // File system: read directory
   ipcMain.handle('fs:readDir', async (event, dirPath) => {
+    assertTrustedSender(event);
     try {
       const normalized = validatePath(dirPath);
       const entries = await fs.promises.readdir(normalized, { withFileTypes: true });
@@ -918,7 +1024,8 @@ function setupFsIpcHandlers() {
   });
 
   // File system: read file
-  ipcMain.handle('fs:readFile', async (_event, filePath) => {
+  ipcMain.handle('fs:readFile', async (event, filePath) => {
+    assertTrustedSender(event);
     try {
       const normalizedPath = validatePath(filePath);
       return await fs.promises.readFile(normalizedPath, 'utf-8');
@@ -929,7 +1036,8 @@ function setupFsIpcHandlers() {
   });
 
   // File system: read file as base64 (for images)
-  ipcMain.handle('fs:readFileBase64', async (_event, filePath) => {
+  ipcMain.handle('fs:readFileBase64', async (event, filePath) => {
+    assertTrustedSender(event);
     try {
       const normalizedPath = validatePath(filePath);
       const buffer = await fs.promises.readFile(normalizedPath);
@@ -942,7 +1050,8 @@ function setupFsIpcHandlers() {
     }
   });
 
-  ipcMain.handle('fs:readFileBinary', async (_event, filePath) => {
+  ipcMain.handle('fs:readFileBinary', async (event, filePath) => {
+    assertTrustedSender(event);
     try {
       const normalizedPath = validatePath(filePath);
       const buffer = await fs.promises.readFile(normalizedPath);
@@ -955,7 +1064,8 @@ function setupFsIpcHandlers() {
     }
   });
 
-  ipcMain.handle('fs:writeFileBinary', async (_event, filePath, base64Content) => {
+  ipcMain.handle('fs:writeFileBinary', async (event, filePath, base64Content) => {
+    assertTrustedSender(event);
     try {
       const targetPath = validatePath(filePath);
       await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
@@ -968,7 +1078,8 @@ function setupFsIpcHandlers() {
     }
   });
 
-  ipcMain.handle('fs:stat', async (_event, filePath) => {
+  ipcMain.handle('fs:stat', async (event, filePath) => {
+    assertTrustedSender(event);
     try {
       const normalizedPath = validatePath(filePath);
       const stats = await fs.promises.stat(normalizedPath);
@@ -984,7 +1095,8 @@ function setupFsIpcHandlers() {
   });
 
   // File system: write file
-  ipcMain.handle('fs:writeFile', async (_event, filePath, content) => {
+  ipcMain.handle('fs:writeFile', async (event, filePath, content) => {
+    assertTrustedSender(event);
     try {
       const targetPath = validatePath(filePath);
       await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
@@ -999,6 +1111,7 @@ function setupFsIpcHandlers() {
 
   // File system: check if path exists
   ipcMain.handle('fs:exists', async (event, pathToCheck) => {
+    assertTrustedSender(event);
     try {
       const normalized = validatePath(pathToCheck);
       await fs.promises.access(normalized);
@@ -1010,6 +1123,7 @@ function setupFsIpcHandlers() {
 
   // File system: check if path exists and is directory
   ipcMain.handle('fs:checkPathExistsAndIsDirectory', async (event, path) => {
+    assertTrustedSender(event);
     try {
       const normalized = validatePath(path);
       const stats = await fs.promises.stat(normalized);
@@ -1021,6 +1135,7 @@ function setupFsIpcHandlers() {
 
   // File system: create directory recursively
   ipcMain.handle('fs:createDirectory', async (event, dirPath) => {
+    assertTrustedSender(event);
     try {
       const normalized = validatePath(dirPath);
       await fs.promises.mkdir(normalized, { recursive: true });
@@ -1033,6 +1148,7 @@ function setupFsIpcHandlers() {
 
   // File system: delete file
   ipcMain.handle('fs:deleteFile', async (event, filePath) => {
+    assertTrustedSender(event);
     try {
       const normalized = validatePath(filePath);
       await fs.promises.unlink(normalized);
@@ -1045,8 +1161,9 @@ function setupFsIpcHandlers() {
 
   // File system: delete directory recursively
   ipcMain.handle('fs:deleteDirectory', async (event, dirPath) => {
+    assertTrustedSender(event);
     try {
-      const normalized = normalizeFsPath(dirPath);
+      const normalized = validatePath(dirPath);
       await fs.promises.rm(normalized, { recursive: true, force: true });
       return true;
     } catch (error) {
@@ -1057,8 +1174,9 @@ function setupFsIpcHandlers() {
 
   // File system: rename file or directory
   ipcMain.handle('fs:renameFile', async (event, oldPath, newPath) => {
+    assertTrustedSender(event);
     try {
-      const sourcePath = normalizeFsPath(String(oldPath ?? ''));
+      const sourcePath = validatePath(String(oldPath ?? ''));
       let targetPath = typeof newPath === 'string' && newPath.trim().length ? newPath.trim() : '';
       if (!targetPath) {
         throw new Error('Neuer Dateiname fehlt.');
@@ -1066,7 +1184,7 @@ function setupFsIpcHandlers() {
       if (!path.isAbsolute(targetPath)) {
         targetPath = path.join(path.dirname(sourcePath), targetPath);
       }
-      targetPath = normalizeFsPath(targetPath);
+      targetPath = validatePath(targetPath);
       await fs.promises.rename(sourcePath, targetPath);
       return true;
     } catch (error) {
@@ -1113,8 +1231,15 @@ function setupFsIpcHandlers() {
   // Extension system: install extension from URL
   ipcMain.handle('extension:install', async (event, { url, fileName, targetDir }) => {
     try {
-      const tempPath = path.join(app.getPath('temp'), fileName);
-      const targetPath = normalizeFsPath(targetDir);
+      assertTrustedSender(event);
+      const parsedUrl = new URL(String(url));
+      if (parsedUrl.protocol !== 'https:' || !/(^|\.)open-vsx\.org$/i.test(parsedUrl.hostname)) {
+        throw new Error('Only HTTPS downloads from open-vsx.org are allowed.');
+      }
+
+      const safeFileName = path.basename(String(fileName || 'extension.vsix'));
+      const tempPath = path.join(app.getPath('temp'), safeFileName);
+      const targetPath = validatePath(targetDir);
 
       // Ensure target directory exists
       await fs.promises.mkdir(targetPath, { recursive: true });
@@ -1122,10 +1247,15 @@ function setupFsIpcHandlers() {
       // Download the file
       const file = fs.createWriteStream(tempPath);
       await new Promise<void>((resolve, reject) => {
-        https.get(url, (response) => {
+        https.get(parsedUrl, (response) => {
           if (response.statusCode === 301 || response.statusCode === 302) {
             // Handle redirect
-            https.get(response.headers.location!, (res2) => {
+            const redirectTarget = new URL(String(response.headers.location || ''), parsedUrl);
+            if (redirectTarget.protocol !== 'https:' || !/(^|\.)open-vsx\.org$/i.test(redirectTarget.hostname)) {
+              fs.unlink(tempPath, () => reject(new Error('Unsafe redirect target')));
+              return;
+            }
+            https.get(redirectTarget, (res2) => {
               res2.pipe(file);
               file.on('finish', () => {
                 file.close();
@@ -1155,7 +1285,10 @@ function setupFsIpcHandlers() {
         if (entry.entryName.startsWith('extension/')) {
           const targetEntryPath = entry.entryName.replace('extension/', '');
           if (targetEntryPath) {
-            const fullTargetPath = path.join(targetPath, targetEntryPath);
+            const fullTargetPath = normalizeFsPath(path.join(targetPath, targetEntryPath));
+            if (!isWithinRoot(fullTargetPath, targetPath)) {
+              throw new Error(`Unsafe extension entry path: ${entry.entryName}`);
+            }
             if (entry.isDirectory) {
               await fs.promises.mkdir(fullTargetPath, { recursive: true });
             } else {
@@ -1241,6 +1374,7 @@ function setupFsIpcHandlers() {
 
 // --- Fehlende IPC-Handler für Renderer-Kommunikation ---
 ipcMain.handle('getDirectoryEntries', async (event, dirPath) => {
+  assertTrustedSender(event);
   try {
     const normalized = validatePath(dirPath);
     const entries = await fs.promises.readdir(normalized, { withFileTypes: true });
@@ -1275,7 +1409,17 @@ ipcMain.handle('app:getUserDataPath', () => {
   return app.getPath('userData');
 });
 
+ipcMain.handle('workspace:setRoot', (event, workspacePath: unknown) => {
+  assertTrustedSender(event);
+  if (typeof workspacePath !== 'string' || !workspacePath.trim()) {
+    return false;
+  }
+  registerAllowedRoot(workspacePath);
+  return true;
+});
+
 ipcMain.handle('app:getPath', (event, name) => {
+  assertTrustedSender(event);
   return app.getPath(name as any);
 });
 
@@ -1290,6 +1434,7 @@ ipcMain.handle('app:openAbout', async () => {
 });
 
 ipcMain.handle('dialog:openDirectory', async (event) => {
+  assertTrustedSender(event);
   const win = mainWindow;
   const dialogOptions: Electron.OpenDialogOptions = {
     properties: ['openDirectory']
@@ -1298,6 +1443,7 @@ ipcMain.handle('dialog:openDirectory', async (event) => {
     ? await dialog.showOpenDialog(win, dialogOptions)
     : await dialog.showOpenDialog(dialogOptions);
   if (result.canceled || !result.filePaths.length) return null;
+  registerAllowedRoot(result.filePaths[0]);
   return result.filePaths[0];
 });
 
@@ -1318,12 +1464,13 @@ ipcMain.handle('dialog:inputBox', async (event, options) => {
 });
 
 ipcMain.handle('shell:openPath', async (_event, targetPath: unknown) => {
+  assertTrustedSender(_event);
   if (typeof targetPath !== 'string' || !targetPath.trim()) {
     return false;
   }
 
   try {
-    const normalized = path.resolve(targetPath);
+    const normalized = validatePath(targetPath);
     await fs.promises.access(normalized, fs.constants.F_OK);
     const result = await shell.openPath(normalized);
     if (result) {
@@ -1345,6 +1492,7 @@ ipcMain.handle('app:openFile', async () => {
     properties: ['openFile']
   });
   if (!result.canceled && result.filePaths.length > 0) {
+    registerAllowedRoot(path.dirname(result.filePaths[0]));
     mainWindow!.webContents.send('file:open', result.filePaths[0]);
   }
 });
@@ -1354,6 +1502,7 @@ ipcMain.handle('app:openFolder', async () => {
     properties: ['openDirectory']
   });
   if (!result.canceled && result.filePaths.length > 0) {
+    registerAllowedRoot(result.filePaths[0]);
     mainWindow!.webContents.send('folder:open', result.filePaths[0]);
   }
 });
@@ -1428,12 +1577,14 @@ ipcMain.handle('file:newTextFile', async () => {
  * IPC handler for saving all open files.
  */
 ipcMain.handle('file:saveAll', async (event, files) => {
+  assertTrustedSender(event);
   const results = [];
 
   for (const file of files) {
     try {
-      await fs.promises.writeFile(file.path, file.content, 'utf-8');
-      results.push({ path: file.path, success: true });
+      const targetPath = validatePath(file.path);
+      await fs.promises.writeFile(targetPath, file.content, 'utf-8');
+      results.push({ path: targetPath, success: true });
     } catch (error) {
       console.error(`Error saving file ${file.path}:`, error);
       results.push({ path: file.path, success: false, error: String(error) });
@@ -1447,11 +1598,13 @@ ipcMain.handle('file:saveAll', async (event, files) => {
  * IPC handler for recursive search and replace in files.
  */
 ipcMain.handle('editor:findInFiles', async (event, searchText, searchPath, options = {}) => {
+  assertTrustedSender(event);
   if (!mainWindow) return { success: false, error: 'No active window' };
 
   try {
     // Recursive search in files
-    const files = await getAllFilesRecursive(searchPath, { ignore: ['node_modules', '.git'] });
+    const normalizedSearchPath = validatePath(searchPath);
+    const files = await getAllFilesRecursive(normalizedSearchPath, { ignore: ['node_modules', '.git'] });
     const results = [];
 
     for (const file of files) {
@@ -1485,7 +1638,8 @@ ipcMain.handle('editor:findInFiles', async (event, searchText, searchPath, optio
 });
 
 // File system: list files recursively (used for extension registration)
-ipcMain.handle('fs:listFilesRecursive', async (_event, dirPath, options?: { ignore?: string[] }) => {
+ipcMain.handle('fs:listFilesRecursive', async (event, dirPath, options?: { ignore?: string[] }) => {
+  assertTrustedSender(event);
   try {
     const normalized = validatePath(dirPath);
     return await getAllFilesRecursive(normalized, options);
@@ -1497,6 +1651,7 @@ ipcMain.handle('fs:listFilesRecursive', async (_event, dirPath, options?: { igno
 
 function setupTerminalIpcHandlers() {
   ipcMain.handle('terminal:create', async (event, rawOptions: TerminalCreateOptions = {}) => {
+    assertTrustedSender(event);
     const options = rawOptions ?? {};
     const cwd = resolveWorkingDirectory(options.cwd);
     const shell = resolveShellExecutable(options.shell);
@@ -1575,6 +1730,11 @@ function setupTerminalIpcHandlers() {
   });
 
   ipcMain.on('terminal:write', (event, payload) => {
+    try {
+      assertTrustedSender(event);
+    } catch {
+      return;
+    }
     const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : undefined;
     const data = typeof payload?.data === 'string' ? payload.data : undefined;
     if (!sessionId || data === undefined) {
@@ -1598,6 +1758,11 @@ function setupTerminalIpcHandlers() {
   });
 
   ipcMain.on('terminal:resize', (event, payload) => {
+    try {
+      assertTrustedSender(event);
+    } catch {
+      return;
+    }
     const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : undefined;
     if (!sessionId) {
       return;
@@ -1610,6 +1775,7 @@ function setupTerminalIpcHandlers() {
   });
 
   ipcMain.handle('terminal:dispose', async (event, payload) => {
+    assertTrustedSender(event);
     const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : undefined;
     if (!sessionId) {
       return false;

@@ -3,7 +3,8 @@
     "allow": [
       "Bash(npx webpack --config webpack.config.js)",
       "Bash(npx tsc --noEmit --skipLibCheck)",
-      "Bash(npx tsc --noEmit)"
+      "Bash(npx tsc --noEmit)",
+      "Bash(npx tsc:*)"
     ]
   }
 }

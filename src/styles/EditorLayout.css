@@ -122,16 +122,20 @@
   min-height: 0;
   overflow: hidden;
   position: relative !important;
-  left: 0 !important;
-  right: 0 !important;
+  left: 0px !important;
+  right: 0px !important;
   align-self: stretch;
   z-index: 2;
   max-width: 70%;
+  box-sizing: border-box;
 }
 
 .ai-panel-resizable > * {
-  width: 100%;
+  width: 100% !important;
+  max-width: 100% !important;
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
+  overflow: hidden;
+  box-sizing: border-box;
 }

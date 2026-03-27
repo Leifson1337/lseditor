@@ -383,6 +383,25 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
     return () => window.removeEventListener('editor:openFile', handler as EventListener);
   }, []);
 
+  useEffect(() => {
+    const handler = async (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail;
+      if (typeof detail !== 'string') return;
+      const normalizedPath = normalizeEditorFilePath(detail);
+      if (!normalizedPath) return;
+      const content = await readFileContent(normalizedPath);
+      setTabs(prev =>
+        prev.map(tab =>
+          tab.path === normalizedPath
+            ? { ...tab, content, dirty: false }
+            : tab
+        )
+      );
+    };
+    window.addEventListener('editor:fileChanged', handler as EventListener);
+    return () => window.removeEventListener('editor:fileChanged', handler as EventListener);
+  }, [normalizeEditorFilePath, readFileContent]);
+
   // Handle editor content change
   const handleEditorChange = (val: string | undefined) => {
     if (!activeTab) return;
@@ -768,16 +787,16 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                 maxWidth="70%"
                 enable={{ left: true }}
                 className="ai-panel-resizable"
-                style={{ position: 'relative', left: 0, right: 0 }}
-                onResize={(_e, _dir, ref) => {
+                onResize={(_e, _dir, ref, d) => {
                   ref.style.left = '0';
                   ref.style.right = '0';
-                  setAiPanelWidth(ref.offsetWidth);
+                  ref.style.position = 'relative';
                 }}
-                onResizeStop={(_e, _dir, ref) => {
+                onResizeStop={(_e, _dir, ref, d) => {
                   ref.style.left = '0';
                   ref.style.right = '0';
-                  setAiPanelWidth(ref.offsetWidth);
+                  ref.style.position = 'relative';
+                  setAiPanelWidth(prev => Math.max(320, prev + d.width));
                 }}
               >
                 <AIChatPanel

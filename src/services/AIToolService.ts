@@ -200,6 +200,25 @@ function resolvePath(filePath: string, projectPath?: string): string {
   return filePath;
 }
 
+function notifyFileChanged(filePath: string) {
+  window.dispatchEvent(new CustomEvent('editor:fileChanged', { detail: filePath }));
+  window.dispatchEvent(new CustomEvent('editor:openFile', { detail: filePath }));
+  window.dispatchEvent(new Event('explorer:refresh'));
+}
+
+function quoteWindowsCommandPath(command: string): string {
+  const trimmed = String(command || '').trim();
+  const match = trimmed.match(/^(python(?:\d+(?:\.\d+)?)?|py(?:\s+-\d+(?:\.\d+)?)?|node)\s+([A-Za-z]:\\[^"\r\n]+?\.[A-Za-z0-9]+)(.*)$/i);
+  if (!match) return trimmed;
+
+  const [, executable, scriptPath, rest] = match;
+  if (scriptPath.includes(' ') && !scriptPath.startsWith('"')) {
+    return `${executable} "${scriptPath}"${rest || ''}`;
+  }
+
+  return trimmed;
+}
+
 function normalizeForMatch(target: string): string {
   return String(target || '')
     .replace(/\\/g, '/')
@@ -398,8 +417,7 @@ export async function executeToolCall(
       case 'writeFile': {
         const fullPath = resolvePath(args.path, projectPath);
         await renderer.invoke('fs:writeFile', fullPath, args.content);
-        window.dispatchEvent(new CustomEvent('editor:openFile', { detail: fullPath }));
-        window.dispatchEvent(new Event('explorer:refresh'));
+        notifyFileChanged(fullPath);
         result = `File written successfully: ${fullPath}`;
         break;
       }
@@ -439,8 +457,7 @@ export async function executeToolCall(
         }
 
         await renderer.invoke('fs:writeFile', resolvedPath, updatedContent);
-        window.dispatchEvent(new CustomEvent('editor:openFile', { detail: resolvedPath }));
-        window.dispatchEvent(new Event('explorer:refresh'));
+        notifyFileChanged(resolvedPath);
         const prefix = guessed ? `[Resolved from ${args.path} to ${resolvedPath}] ` : '';
         result = `${prefix}Updated ${resolvedPath} (${replacements} replacement${replacements === 1 ? '' : 's'})`;
         break;
@@ -523,11 +540,13 @@ export async function executeToolCall(
       }
 
       case 'runCommand': {
-        const execResult = await renderer.invoke('exec', args.command, {
+        const normalizedCommand = quoteWindowsCommandPath(String(args.command ?? ''));
+        const execResult = await renderer.invoke('exec', normalizedCommand, {
           cwd: args.cwd ? resolvePath(args.cwd, projectPath) : projectPath
         });
         if (execResult && typeof execResult === 'object') {
           const parts: string[] = [];
+          parts.push(`[command] ${normalizedCommand}`);
           if (execResult.stdout) parts.push(execResult.stdout);
           if (execResult.stderr) parts.push(`[stderr] ${execResult.stderr}`);
           if (execResult.error) parts.push(`[error] ${execResult.error}`);
@@ -557,6 +576,7 @@ export async function executeToolCall(
         } else {
           await renderer.invoke('fs:deleteFile', fullPath);
         }
+        window.dispatchEvent(new CustomEvent('editor:fileChanged', { detail: fullPath }));
         window.dispatchEvent(new Event('explorer:refresh'));
         result = `Deleted: ${fullPath}`;
         break;

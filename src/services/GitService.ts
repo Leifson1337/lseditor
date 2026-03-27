@@ -5,9 +5,6 @@ import * as monaco from 'monaco-editor';
 import { GitBranch, GitCommit, GitDiff } from '../types/GitTypes';
 import { v4 as uuidv4 } from 'uuid';
 import * as fs from 'fs';
-import { exec, ExecException } from 'child_process';
-import { promisify } from 'util';
-import { Readable } from 'stream';
 import { execAsync } from './AIService';
 
 // ExecResult represents the result of executing a shell command
@@ -710,6 +707,28 @@ export class GitService extends EventEmitter {
     }
   }
 
+  private async githubApiRequest<T>(endpoint: string, token: string, init?: RequestInit): Promise<T> {
+    if (!token || !token.trim()) {
+      throw new Error('Missing GitHub token');
+    }
+
+    const response = await fetch(`https://api.github.com${endpoint}`, {
+      ...init,
+      headers: {
+        Accept: 'application/vnd.github.v3+json',
+        Authorization: `token ${token}`,
+        ...(init?.headers ?? {})
+      }
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      throw new Error(`GitHub API ${response.status}: ${errorText || response.statusText}`);
+    }
+
+    return response.json() as Promise<T>;
+  }
+
   /**
    * Creates a new GitHub repository.
    * @param name Repository name
@@ -725,16 +744,17 @@ export class GitService extends EventEmitter {
     token: string
   ): Promise<GitHubRepo | null> {
     try {
-      const command = `
-        curl -X POST \\
-        -H "Authorization: token ${token}" \\
-        -H "Accept: application/vnd.github.v3+json" \\
-        https://api.github.com/user/repos \\
-        -d '{"name":"${name}","description":"${description}","private":${isPrivate}}'
-      `;
-      
-      const result = await execAsync(command);
-      const repo = JSON.parse(result.stdout);
+      const repo = await this.githubApiRequest<any>('/user/repos', token, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          name,
+          description,
+          private: isPrivate
+        })
+      });
       
       return {
         name: repo.name,
@@ -792,15 +812,10 @@ export class GitService extends EventEmitter {
       const repoInfo = await this.getGitHubRepoInfo();
       if (!repoInfo) throw new Error('Not a GitHub repository');
 
-      const command = `
-        curl -X GET \\
-        -H "Authorization: token ${token}" \\
-        -H "Accept: application/vnd.github.v3+json" \\
-        https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}/issues
-      `;
-      
-      const result = await execAsync(command);
-      const issues = JSON.parse(result.stdout);
+      const issues = await this.githubApiRequest<any[]>(
+        `/repos/${encodeURIComponent(repoInfo.owner)}/${encodeURIComponent(repoInfo.repo)}/issues`,
+        token
+      );
       
       return issues.map((issue: any) => ({
         id: issue.id,
@@ -835,16 +850,17 @@ export class GitService extends EventEmitter {
       const repoInfo = await this.getGitHubRepoInfo();
       if (!repoInfo) throw new Error('Not a GitHub repository');
 
-      const command = `
-        curl -X POST \\
-        -H "Authorization: token ${token}" \\
-        -H "Accept: application/vnd.github.v3+json" \\
-        https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}/issues \\
-        -d '{"title":"${title}","body":"${body}"}'
-      `;
-      
-      const result = await execAsync(command);
-      const issue = JSON.parse(result.stdout);
+      const issue = await this.githubApiRequest<any>(
+        `/repos/${encodeURIComponent(repoInfo.owner)}/${encodeURIComponent(repoInfo.repo)}/issues`,
+        token,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ title, body })
+        }
+      );
       
       return {
         id: issue.id,
@@ -873,15 +889,10 @@ export class GitService extends EventEmitter {
       const repoInfo = await this.getGitHubRepoInfo();
       if (!repoInfo) throw new Error('Not a GitHub repository');
 
-      const command = `
-        curl -X GET \\
-        -H "Authorization: token ${token}" \\
-        -H "Accept: application/vnd.github.v3+json" \\
-        https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}/pulls
-      `;
-      
-      const result = await execAsync(command);
-      const prs = JSON.parse(result.stdout);
+      const prs = await this.githubApiRequest<any[]>(
+        `/repos/${encodeURIComponent(repoInfo.owner)}/${encodeURIComponent(repoInfo.repo)}/pulls`,
+        token
+      );
       
       return prs.map((pr: any) => ({
         id: pr.id,
@@ -921,16 +932,17 @@ export class GitService extends EventEmitter {
       const repoInfo = await this.getGitHubRepoInfo();
       if (!repoInfo) throw new Error('Not a GitHub repository');
 
-      const command = `
-        curl -X POST \\
-        -H "Authorization: token ${token}" \\
-        -H "Accept: application/vnd.github.v3+json" \\
-        https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}/pulls \\
-        -d '{"title":"${title}","body":"${body}","head":"${head}","base":"${base}"}'
-      `;
-      
-      const result = await execAsync(command);
-      const pr = JSON.parse(result.stdout);
+      const pr = await this.githubApiRequest<any>(
+        `/repos/${encodeURIComponent(repoInfo.owner)}/${encodeURIComponent(repoInfo.repo)}/pulls`,
+        token,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ title, body, head, base })
+        }
+      );
       
       return {
         id: pr.id,
