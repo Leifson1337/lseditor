@@ -87,8 +87,26 @@ const getLanguageFromPath = (filePath?: string) => {
 const configureDiagnostics = (monaco: Monaco) => {
   if (monaco?.languages?.typescript) {
     monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
-      noSemanticValidation: true,
-      noSyntaxValidation: true
+      noSemanticValidation: false,
+      noSyntaxValidation: false,
+      diagnosticCodesToIgnore: [
+        // Ignore "cannot find module" for non-TS projects where types aren't available
+        2307, 2304, 2503, 7016
+      ]
+    });
+    monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
+      target: monaco.languages.typescript.ScriptTarget.ESNext,
+      module: monaco.languages.typescript.ModuleKind.ESNext,
+      moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
+      jsx: monaco.languages.typescript.JsxEmit.ReactJSX,
+      allowJs: true,
+      checkJs: false,
+      strict: false,
+      noEmit: true,
+      esModuleInterop: true,
+      allowSyntheticDefaultImports: true,
+      skipLibCheck: true,
+      allowNonTsExtensions: true
     });
   }
 
@@ -98,8 +116,9 @@ const configureDiagnostics = (monaco: Monaco) => {
 
   if (languages?.javascript) {
     languages.javascript.javascriptDefaults.setDiagnosticsOptions({
-      noSemanticValidation: true,
-      noSyntaxValidation: true
+      noSemanticValidation: false,
+      noSyntaxValidation: false,
+      diagnosticCodesToIgnore: [2307, 2304, 2503, 7016]
     });
   }
 };
@@ -279,17 +298,66 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
     return () => window.removeEventListener('extensions:changed', handler);
   }, [loadExtensions]);
 
+  const monacoInstanceRef = useRef<Monaco | null>(null);
+  const markerListenerRef = useRef<{ dispose: () => void } | null>(null);
+
+  const handleEditorBeforeMount = useCallback((monaco: Monaco) => {
+    monacoInstanceRef.current = monaco;
+    configureDiagnostics(monaco);
+  }, []);
+
   const handleEditorMount = useCallback((editorInstance: any) => {
     editorRef.current = editorInstance;
     editorInstance.updateOptions({
       lineNumbers: 'on',
       lineNumbersMinChars: 4,
-      glyphMargin: false,
+      glyphMargin: true,
       lineDecorationsWidth: 12,
       folding: true,
       renderLineHighlightGutter: true
     });
     editorInstance.layout();
+
+    // Listen for diagnostic marker changes and dispatch them as a custom event
+    const monaco = monacoInstanceRef.current;
+    if (monaco) {
+      markerListenerRef.current?.dispose();
+      markerListenerRef.current = monaco.editor.onDidChangeMarkers((uris) => {
+        const allDiagnostics: Array<{
+          file: string;
+          severity: string;
+          message: string;
+          startLine: number;
+          startColumn: number;
+          endLine: number;
+          endColumn: number;
+          code?: string;
+        }> = [];
+
+        for (const uri of uris) {
+          const markers = monaco.editor.getModelMarkers({ resource: uri });
+          const filePath = uri.path || uri.toString();
+          for (const marker of markers) {
+            // Only report errors and warnings (severity 8 = Error, 4 = Warning)
+            if (marker.severity < 4) continue;
+            allDiagnostics.push({
+              file: filePath,
+              severity: marker.severity === 8 ? 'error' : 'warning',
+              message: marker.message,
+              startLine: marker.startLineNumber,
+              startColumn: marker.startColumn,
+              endLine: marker.endLineNumber,
+              endColumn: marker.endColumn,
+              code: marker.code ? String(typeof marker.code === 'object' ? marker.code.value : marker.code) : undefined
+            });
+          }
+        }
+
+        window.dispatchEvent(new CustomEvent('editor:diagnosticsChanged', {
+          detail: { diagnostics: allDiagnostics }
+        }));
+      });
+    }
   }, []);
 
   const normalizedProjectRoot = useMemo(() => normalizeProjectRoot(projectPath), [projectPath]);
@@ -733,7 +801,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                     height="100%"
                     language={editorLanguage}
                     value={activeTabContent}
-                    beforeMount={configureDiagnostics}
+                    beforeMount={handleEditorBeforeMount}
                     onChange={handleEditorChange}
                     path={activeTabData?.path}
                     onMount={handleEditorMount}
@@ -746,7 +814,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                       automaticLayout: true,
                       lineNumbers: 'on',
                       lineNumbersMinChars: 4,
-                      glyphMargin: false,
+                      glyphMargin: true,
                       lineDecorationsWidth: 12,
                       folding: true,
                       renderLineHighlight: 'all',

@@ -8,7 +8,7 @@ import React, {
   useState
 } from 'react';
 import path from 'path';
-import { AI_TOOLS, executeToolCall, ToolCall, ToolResult } from '../services/AIToolService';
+import { AI_TOOLS, executeToolCall, ToolCall, ToolResult, EditorDiagnostic, setCurrentDiagnostics, getErrorDiagnostics } from '../services/AIToolService';
 import { isAbsoluteFilePath, joinPathPreserveAbsolute } from '../utils/pathUtils';
 
 export type ChatSender = 'user' | 'ai' | 'system' | 'tool';
@@ -136,32 +136,55 @@ const defaultSettings: AISettings = {
   yoloMode: false
 };
 
-const MAX_AGENT_LOOPS = 24;
-const MAX_TOOL_WRITE_LINES = 220;
+const MAX_AGENT_LOOPS = 30;
+const MAX_TOOL_WRITE_LINES = 140;
+const MAX_TOOL_APPEND_LINES = 120;
+const COMPLETION_REQUEST_TIMEOUT_MS = 120000;
+const COMPLETION_MAX_RETRIES = 4;
+const DIAGNOSTIC_SETTLE_MS = 1200;
+const MAX_AUTO_FIX_ROUNDS = 3;
 
 const DEFAULT_BASE_PROMPT = `Du bist LS AI, der integrierte Assistent des LS Editors. Du hast Zugriff auf Tools zum Lesen, Schreiben, Suchen und Ausfuehren von Dateien und Befehlen im Workspace des Benutzers.
 
 WICHTIG - Tool-Nutzung:
 - Wenn der Benutzer dich bittet Code zu schreiben, eine Datei zu erstellen oder zu aendern: Benutze IMMER ein echtes Tool um die Datei direkt zu aendern. Gib den Code NICHT als Text aus.
 - Bevorzuge replaceInFile fuer gezielte Aenderungen an bestehenden Dateien. Benutze writeFile nur fuer neue Dateien oder komplette Rewrite-Faelle.
+- Fuer neue groessere Dateien: erst eine kleine Grundstruktur mit writeFile anlegen und dann mehrere appendToFile- oder kleine replaceInFile-Schritte verwenden. Keine komplette grosse Datei in einem einzigen Schritt schreiben.
 - Arbeite inkrementell und in kleinen Chunks. Schreibe nach Moeglichkeit keine riesigen 300-500-Zeilen-Bloecke auf einmal.
 - Wenn du eine neue groessere Datei erstellst: erst kleines Grundgeruest anlegen, dann schrittweise erweitern.
 - Wenn der Benutzer dich bittet etwas zu testen: Benutze IMMER das runCommand Tool (z.B. "python datei.py", "node datei.js", "npm test")
 - Lies Dateien mit readFile bevor du sie aenderst
+- Lies groessere Dateien niemals komplett auf einmal. Benutze readFile immer in Abschnitten mit startLine und endLine und arbeite dich stueckweise durch die Datei.
 - Wenn der genaue Dateipfad unbekannt ist, benutze zuerst findFile
 - Fuehre Befehle mit runCommand aus wenn noetig (z.B. npm install, git status, npm test, npm run build)
 
 Ablauf wenn der Benutzer Code will:
 1. Lies die Datei mit readFile (falls sie existiert)
 2. Aendere gezielt mit replaceInFile oder schreibe mit writeFile in die Datei
-3. Optional: Teste mit runCommand
-4. Antworte kurz was du getan hast
+3. Pruefe mit getDiagnostics ob der Editor Fehler meldet. Falls ja, behebe sie sofort.
+4. Optional: Teste mit runCommand (z.B. npm run build, npm test)
+5. Antworte kurz was du getan hast
+
+Fehlerbehandlung:
+- Nach JEDER Code-Aenderung: Rufe getDiagnostics auf um zu pruefen ob Syntaxfehler oder Typfehler entstanden sind
+- Falls Fehler gemeldet werden: Lies die betroffene Stelle erneut und behebe den Fehler sofort mit replaceInFile
+- Wiederhole getDiagnostics bis keine Fehler mehr vorhanden sind oder maximal 3 Runden
+- Falls ein replaceInFile fehlschlaegt (search text not found): Lies die Datei erneut und passe den Suchtext an
+- Falls ein runCommand einen Fehler meldet: Analysiere die Ausgabe und behebe den Fehler
+- Gib NIEMALS auf und behaupte das Problem sei geloest wenn noch Fehler bestehen
 
 Verboten:
 - Gib NIEMALS Code als Antworttext aus wenn du ihn stattdessen mit einem Tool in die Datei schreiben kannst
 - Behaupte niemals, dass eine Datei geaendert wurde, ohne ein mutierendes Tool aufgerufen zu haben
+- Behaupte niemals, dass ein Fehler behoben wurde, ohne getDiagnostics aufgerufen zu haben
 - Gib niemals interne Gedanken, Analyse oder Pseudo-Tool-Protokoll aus
-- Antworte IMMER in normalem Text. Benutze NIEMALS interne Protokoll-Marker oder Channel-Tags`;
+- Antworte IMMER in normalem Text. Benutze NIEMALS interne Protokoll-Marker oder Channel-Tags
+
+Pflicht fuer die Schlussantwort:
+- Beende jede abgeschlossene Anfrage mit den Ueberschriften "## Ergebnis", "## Vorgehen" und "## Validierung"
+- Unter "## Ergebnis" beschreibst du knapp das Resultat
+- Unter "## Vorgehen" fasst du die real ausgefuehrten Schritte zusammen
+- Unter "## Validierung" nennst du Tests, Builds, Checks oder offene Punkte (inkl. getDiagnostics-Ergebnis)`;
 
 const createId = () => {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -319,7 +342,7 @@ const containsPseudoToolProtocol = (content: string): boolean => {
 
 const claimsFileMutationWithoutTool = (content: string): boolean => {
   if (!content) return false;
-  return /(updated|created|deleted|renamed|fixed|changed|modified|wrote|saved|aktualisiert|erstellt|geloescht|umbenannt|gefixt|geaendert|gespeichert)/i.test(content);
+  return /(updated|created|deleted|renamed|fixed|changed|modified|wrote|saved|resolved|repaired|corrected|patched|behoben|korrigiert|repariert|geloesst|aktualisiert|erstellt|geloescht|umbenannt|gefixt|geaendert|gespeichert)/i.test(content);
 };
 
 const containsCodeBlockThatShouldBeWritten = (content: string): boolean => {
@@ -339,8 +362,8 @@ const statesIntentWithoutActing = (content: string): boolean => {
   return /(I'll now|I will now|Let me now|I'm going to|Ich werde|Ich füge|Lass mich|Als nächstes|Now I'll|Next I'll|Let me |I'll |I need to |I should ).*(\.|:|\.\.\.)\s*$/im.test(content);
 };
 
-const READ_ONLY_TOOL_NAMES = new Set(['findFile', 'readFile', 'listFiles', 'searchFiles']);
-const MUTATING_TOOL_NAMES = new Set(['writeFile', 'replaceInFile', 'createDirectory', 'deleteFile', 'renameFile']);
+const READ_ONLY_TOOL_NAMES = new Set(['findFile', 'readFile', 'listFiles', 'searchFiles', 'getDiagnostics']);
+const MUTATING_TOOL_NAMES = new Set(['writeFile', 'appendToFile', 'replaceInFile', 'createDirectory', 'deleteFile', 'renameFile']);
 const EXECUTION_TOOL_NAMES = new Set(['runCommand']);
 
 const toolNeedsApproval = (toolName: string) =>
@@ -356,14 +379,19 @@ const getToolsForMode = (settings: AISettings) => {
 const createRuntimeModePrompt = (settings: AISettings) => {
   const common = [
     'Use real tool calls whenever you need to inspect files, write files, search the workspace, or run commands.',
+    'Use searchWorkspace when you need to find files by name, locate content across the workspace, or combine both kinds of search.',
+    'Never read a large file in one full readFile call. Use startLine and endLine and inspect files in chunks.',
     'Never print pseudo tool syntax like functions.writeFile(...).',
-    'If tool calls are available, edit existing files with replaceInFile whenever possible, and use writeFile for new files or full rewrites.',
+    'If tool calls are available, edit existing files with replaceInFile whenever possible, and use writeFile only for new files or truly justified full rewrites.',
+    'Use appendToFile to extend newly created files in small chunks after creating a scaffold.',
     'Do not paste full files into chat when a tool call can apply the change directly.',
-    'Work in small incremental chunks. Avoid very large single writeFile/replaceInFile payloads.',
+    'Work in small incremental chunks. Avoid very large single writeFile/appendToFile/replaceInFile payloads.',
     'For larger new files, create a scaffold first and then extend it in follow-up tool calls.',
     'For substantial tasks, start with a short markdown checklist using "- [ ]" items and update it to "- [x]" as you complete steps.',
     'Whenever you finish a checklist step, show the updated checklist in the visible chat output so the UI can reflect progress.',
-    'When the task is done, end with a concise final summary using markdown headings for what changed, how you changed it, and validation/results.'
+    'IMPORTANT: After every code change, call getDiagnostics to check for errors. If errors are reported, fix them immediately before continuing.',
+    'If getDiagnostics reports errors, read the affected lines with readFile and fix them with replaceInFile. Repeat until clean.',
+    'When the task is done, end with a concise final summary using the exact markdown headings "## Ergebnis", "## Vorgehen", and "## Validierung".'
   ];
 
   if (settings.mode === 'qa') {
@@ -380,9 +408,9 @@ const createRuntimeModePrompt = (settings: AISettings) => {
       'Current mode: Autonomous mode.',
       'Act like a senior engineer working the task through to completion.',
       'Before substantial work, produce a short markdown checklist plan and keep updating the checklist as you make progress.',
-      'Read files first, then edit, then run validations/tests/builds when relevant.',
-      'After the initial checklist is done, keep testing, validating, and making concrete improvements until there is no meaningful next improvement left.',
-      'Only stop when the checklist is done and the remaining work is either verified complete or no further useful improvement can be justified.',
+      'Read files first, then edit, then call getDiagnostics to verify no errors, then run validations/tests/builds when relevant.',
+      'After the initial checklist is done, keep testing, validating with getDiagnostics, and making concrete improvements until there is no meaningful next improvement left.',
+      'Only stop when the checklist is done, getDiagnostics reports no errors, and the remaining work is either verified complete or no further useful improvement can be justified.',
       ...common
     ].join('\n');
   }
@@ -405,6 +433,8 @@ const summarizeToolCall = (toolCall: ToolCall): string => {
         return `Reading ${args.path || 'file'}`;
       case 'writeFile':
         return `Writing ${args.path || 'file'}`;
+      case 'appendToFile':
+        return `Appending to ${args.path || 'file'}`;
       case 'replaceInFile':
         return `Editing ${args.path || 'file'}`;
       case 'findFile':
@@ -413,6 +443,8 @@ const summarizeToolCall = (toolCall: ToolCall): string => {
         return `Listing ${args.path || 'directory'}`;
       case 'searchFiles':
         return `Searching ${args.pattern || 'workspace'}`;
+      case 'searchWorkspace':
+        return `Searching workspace for ${args.query || 'matches'}`;
       case 'runCommand':
         return `Running ${args.command || 'command'}`;
       case 'createDirectory':
@@ -439,6 +471,83 @@ const buildAssistantToolMessage = (toolCalls: ToolCall[], content?: string | nul
   }))
 });
 
+const delay = (ms: number) =>
+  new Promise<void>(resolve => {
+    setTimeout(resolve, ms);
+  });
+
+const shouldRetryCompletionRequest = (status: number, message: string) => {
+  if ([408, 409, 425, 429, 500, 502, 503, 504].includes(status)) return true;
+  return /(timeout|timed out|network|fetch failed|econnreset|econnrefused|socket hang up|temporar|overloaded|rate limit|too many requests|aborted|broken pipe|connection reset|unexpected end|failed to fetch|load failed|server error|internal error|service unavailable)/i.test(
+    message
+  );
+};
+
+const extractErrorMessage = async (response: Response) => {
+  try {
+    const payload = await response.json();
+    return payload?.error?.message || payload?.message || JSON.stringify(payload);
+  } catch {
+    return await response.text();
+  }
+};
+
+interface ExecutedToolRecord {
+  name: string;
+  summary: string;
+  result: string;
+  status: 'done' | 'error';
+}
+
+const buildRequestSummary = (
+  combinedContent: string,
+  executedTools: ExecutedToolRecord[],
+  stopReason?: string
+) => {
+  const sanitizedContent = combinedContent.trim();
+  const requiredHeadings = ['## Ergebnis', '## Vorgehen', '## Validierung'];
+  if (requiredHeadings.every(heading => sanitizedContent.includes(heading))) {
+    return combinedContent;
+  }
+
+  const successfulTools = executedTools.filter(tool => tool.status === 'done');
+  const failedTools = executedTools.filter(tool => tool.status === 'error');
+  const resultLine = sanitizedContent
+    ? sanitizedContent
+    : successfulTools.length
+      ? 'Die angeforderte Aufgabe wurde bearbeitet.'
+      : 'Die Anfrage wurde beantwortet, ohne Workspace-Aktionen auszufuehren.';
+
+  const approachLines = successfulTools.length
+    ? successfulTools.map(tool => `- ${tool.summary}: ${tool.result.replace(/\s+/g, ' ').trim().slice(0, 220)}`)
+    : ['- Es waren keine Tool-Aufrufe fuer diese Antwort erforderlich.'];
+
+  const validationLines = [
+    ...executedTools
+      .filter(tool => tool.name === 'runCommand')
+      .map(tool => `- Befehl ausgefuehrt: ${tool.result.replace(/\s+/g, ' ').trim().slice(0, 220)}`),
+    ...failedTools.map(tool => `- Offener Punkt: ${tool.summary} -> ${tool.result.replace(/\s+/g, ' ').trim().slice(0, 220)}`),
+    ...(stopReason ? [`- Abschlussstatus: ${stopReason}`] : [])
+  ];
+
+  if (!validationLines.length) {
+    validationLines.push('- Kein separater Test- oder Build-Schritt wurde in dieser Anfrage ausgefuehrt.');
+  }
+
+  const summaryBlock = [
+    '## Ergebnis',
+    resultLine,
+    '',
+    '## Vorgehen',
+    ...approachLines,
+    '',
+    '## Validierung',
+    ...validationLines
+  ].join('\n');
+
+  return sanitizedContent ? `${sanitizedContent}\n\n${summaryBlock}` : summaryBlock;
+};
+
 const countLines = (value: string) => String(value || '').replace(/\r/g, '').split('\n').length;
 
 const containsOversizedWriteToolCall = (toolCalls: ToolCall[]) => {
@@ -447,11 +556,21 @@ const containsOversizedWriteToolCall = (toolCalls: ToolCall[]) => {
     if (tc.function.name === 'writeFile') {
       return countLines(typeof args.content === 'string' ? args.content : '') > MAX_TOOL_WRITE_LINES;
     }
+    if (tc.function.name === 'appendToFile') {
+      return countLines(typeof args.content === 'string' ? args.content : '') > MAX_TOOL_APPEND_LINES;
+    }
     if (tc.function.name === 'replaceInFile') {
       return countLines(typeof args.replace === 'string' ? args.replace : '') > MAX_TOOL_WRITE_LINES;
     }
     return false;
   });
+};
+
+const isLargeNewFileWrite = (toolCall: ToolCall, preview?: ToolCallPreview) => {
+  if (toolCall.function.name !== 'writeFile') return false;
+  if (!preview || preview.kind !== 'file' || preview.action !== 'create') return false;
+  const args = safeJsonParse(toolCall.function.arguments || '{}');
+  return countLines(typeof args.content === 'string' ? args.content : '') > 60;
 };
 
 const isRiskyWritePreview = (preview?: ToolCallPreview) => {
@@ -548,34 +667,6 @@ const extractPseudoToolCalls = (content: string): ToolCall[] => {
   return calls;
 };
 
-const extractFirstCodeBlock = (content: string) => {
-  const match = content.match(/```[\w.-]*\n([\s\S]*?)```/);
-  return match?.[1]?.trim() || '';
-};
-
-const inferRequestedFilePath = (request: string) => {
-  if (!request) return '';
-  const match = request.match(/(?:^|\s)([A-Za-z0-9_./\\-]+\.[A-Za-z0-9]{1,8})(?=$|\s|[,.!?])/);
-  return match?.[1]?.trim() || '';
-};
-
-const inferSyntheticWriteToolCall = (request: string, responseContent: string): ToolCall | null => {
-  const filePath = inferRequestedFilePath(request);
-  const code = extractFirstCodeBlock(responseContent);
-  if (!filePath || !code || countLines(code) > MAX_TOOL_WRITE_LINES) return null;
-  return {
-    id: createId(),
-    type: 'function',
-    function: {
-      name: 'writeFile',
-      arguments: JSON.stringify({
-        path: filePath,
-        content: code.endsWith('\n') ? code : `${code}\n`
-      })
-    }
-  };
-};
-
 const safeJsonParse = (value: string) => {
   try {
     return JSON.parse(value || '{}');
@@ -583,6 +674,9 @@ const safeJsonParse = (value: string) => {
     return {};
   }
 };
+
+const normalizeTrackedPath = (value: string) =>
+  String(value || '').replace(/\\/g, '/').trim().toLowerCase();
 
 interface CompletionResult {
   content: string;
@@ -610,6 +704,12 @@ interface AgentLoopState {
   toolProtocolCorrectionSent: boolean;
   lastNormalizedResponse?: string;
   repeatedResponseCount: number;
+  executedTools: ExecutedToolRecord[];
+  replaceReReadRequiredPaths: string[];
+  nonMutatingToolRounds: number;
+  completionWithoutMutationCorrectionSent: boolean;
+  autoFixRounds: number;
+  consecutiveEmptyResponses: number;
 }
 
 interface PendingToolExecutionState extends AgentLoopState {
@@ -691,6 +791,9 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
         const newContent = replaceAll
           ? diskContent.split(search).join(replace)
           : diskContent.replace(search, replace);
+        if (newContent === diskContent) {
+          return undefined;
+        }
         return {
           kind: 'file',
           path: targetPath,
@@ -741,6 +844,18 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
   useEffect(() => {
     projectPathRef.current = projectPath;
   }, [projectPath]);
+
+  // Listen for editor diagnostic changes and store them globally
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail && Array.isArray(detail.diagnostics)) {
+        setCurrentDiagnostics(detail.diagnostics as EditorDiagnostic[]);
+      }
+    };
+    window.addEventListener('editor:diagnosticsChanged', handler);
+    return () => window.removeEventListener('editor:diagnosticsChanged', handler);
+  }, []);
 
   const loadBasePrompt = useCallback(async (): Promise<string> => {
     try {
@@ -1068,28 +1183,69 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
         body.tool_choice = toolChoice;
       }
 
-      const response = await fetch(`${sanitizeBaseUrl(settings.baseUrl)}/v1/chat/completions`, {
-        method: 'POST',
-        signal,
-        headers: {
-          'Content-Type': 'application/json',
-          ...(settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {})
-        },
-        body: JSON.stringify(body)
-      });
+      let payload: any;
+      let lastAttemptError: Error | null = null;
 
-      if (!response.ok) {
-        let detail = '';
-        try {
-          const problem = await response.json();
-          detail = problem?.error?.message || problem?.message || JSON.stringify(problem);
-        } catch {
-          detail = await response.text();
+      for (let attempt = 1; attempt <= COMPLETION_MAX_RETRIES; attempt += 1) {
+        if (signal.aborted) {
+          throw new DOMException('Aborted', 'AbortError');
         }
-        throw new Error(detail || `LM Studio antwortete mit Status ${response.status}`);
+
+        const attemptController = new AbortController();
+        const timeoutId = setTimeout(() => attemptController.abort(), COMPLETION_REQUEST_TIMEOUT_MS);
+        const abortRelay = () => attemptController.abort();
+        signal.addEventListener('abort', abortRelay, { once: true });
+
+        try {
+          const response = await fetch(`${sanitizeBaseUrl(settings.baseUrl)}/v1/chat/completions`, {
+            method: 'POST',
+            signal: attemptController.signal,
+            headers: {
+              'Content-Type': 'application/json',
+              ...(settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {})
+            },
+            body: JSON.stringify(body)
+          });
+
+          if (!response.ok) {
+            const detail = await extractErrorMessage(response);
+            const message = detail || `LM Studio antwortete mit Status ${response.status}`;
+            if (attempt < COMPLETION_MAX_RETRIES && shouldRetryCompletionRequest(response.status, message)) {
+              lastAttemptError = new Error(message);
+              await delay(Math.min(500 * Math.pow(2, attempt - 1), 5000));
+              continue;
+            }
+            throw new Error(message);
+          }
+
+          payload = await response.json();
+          lastAttemptError = null;
+          break;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const attemptTimedOut = attemptController.signal.aborted && !signal.aborted;
+
+          if (signal.aborted) {
+            throw error instanceof Error ? error : new Error(message);
+          }
+
+          if (attempt < COMPLETION_MAX_RETRIES && (attemptTimedOut || shouldRetryCompletionRequest(0, message))) {
+            lastAttemptError = error instanceof Error ? error : new Error(message);
+            await delay(Math.min(500 * Math.pow(2, attempt - 1), 5000));
+            continue;
+          }
+
+          throw error instanceof Error ? error : new Error(message);
+        } finally {
+          clearTimeout(timeoutId);
+          signal.removeEventListener('abort', abortRelay);
+        }
       }
 
-      const payload = await response.json();
+      if (!payload) {
+        throw lastAttemptError || new Error('The model returned no payload.');
+      }
+
       const choice = payload?.choices?.[0];
       const rawContent = choice?.message?.content?.trim() || '';
       const reasoningContent = sanitizeReasoningContent(choice?.message?.reasoning_content?.trim() || '');
@@ -1115,12 +1271,8 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       }
 
       if (!aiContent && !reasoningContent && !toolCalls?.length) {
-        // If the raw content had pseudo-tool protocol but sanitization removed everything,
-        // return empty so the caller can re-prompt instead of erroring.
-        if (rawContent && containsPseudoToolProtocol(rawContent)) {
-          return { content: '', finishReason: choice?.finish_reason, toolCalls: undefined, usage: payload?.usage };
-        }
-        throw new Error('The model returned an empty response. Try rephrasing your message.');
+        // Return empty so the agent loop can re-prompt instead of crashing
+        return { content: '', finishReason: choice?.finish_reason, toolCalls: undefined, usage: payload?.usage };
       }
 
       return {
@@ -1227,14 +1379,15 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       conversationId: string,
       combinedContent: string,
       combinedReasoning: string[],
-      stopReason?: string
+      stopReason?: string,
+      executedTools: ExecutedToolRecord[] = []
     ) => {
       const parts: string[] = [];
       if (combinedContent) parts.push(combinedContent);
       if (stopReason) parts.push(`\n\n---\n*${stopReason}*`);
       const aiMessage: Message = {
         id: createId(),
-        content: parts.join('') || '(No response)',
+        content: buildRequestSummary(parts.join('') || '(No response)', executedTools, stopReason),
         reasoning: combinedReasoning.join('\n\n').trim() || undefined,
         sender: 'ai',
         timestamp: new Date()
@@ -1293,6 +1446,41 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
               ];
               continue;
             }
+            const invalidReadCall = toolCalls.find(tc => {
+              if (tc.function.name !== 'readFile') return false;
+              const args = safeJsonParse(tc.function.arguments || '{}');
+              return args.startLine == null && args.endLine == null;
+            });
+            if (invalidReadCall) {
+              currentState.apiMessages = [
+                ...currentState.apiMessages,
+                buildAssistantToolMessage(toolCalls, result.content),
+                {
+                  role: 'user',
+                  content:
+                    'Do not read full files in one call. Use readFile with explicit startLine and endLine, then continue with the next range if needed.'
+                }
+              ];
+              continue;
+            }
+            const blockedReplaceCall = toolCalls.find(tc => {
+              if (tc.function.name !== 'replaceInFile') return false;
+              const args = safeJsonParse(tc.function.arguments || '{}');
+              const pathKey = normalizeTrackedPath(String(args.path || ''));
+              return currentState.replaceReReadRequiredPaths.includes(pathKey);
+            });
+            if (blockedReplaceCall) {
+              currentState.apiMessages = [
+                ...currentState.apiMessages,
+                buildAssistantToolMessage(toolCalls, result.content),
+                {
+                  role: 'user',
+                  content:
+                    'You must reread that file in chunks with readFile using startLine/endLine before trying replaceInFile again. Do not retry the same edit against stale content.'
+                }
+              ];
+              continue;
+            }
             const toolCallInfos: ToolCallInfo[] = await Promise.all(
               toolCalls.map(tc => buildToolCallInfo(tc))
             );
@@ -1309,6 +1497,21 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
                   role: 'user',
                   content:
                     'This writeFile looks destructive because it would overwrite an existing file with much less content. Do not replace the whole file. Read the current file again if needed and use a precise replaceInFile-based edit or a clearly justified full rewrite.'
+                }
+              ];
+              continue;
+            }
+            const largeNewFileWrite = toolCallInfos.find(
+              (info, index) => isLargeNewFileWrite(toolCalls[index], info.preview)
+            );
+            if (largeNewFileWrite) {
+              currentState.apiMessages = [
+                ...currentState.apiMessages,
+                buildAssistantToolMessage(toolCalls, result.content),
+                {
+                  role: 'user',
+                  content:
+                    'This new file is too large for a single writeFile call. First create a minimal scaffold with writeFile, then continue in multiple appendToFile or small replaceInFile chunks. Keep each chunk small and meaningful.'
                 }
               ];
               continue;
@@ -1358,6 +1561,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
             }
 
             const toolResults: ToolResult[] = [];
+            let roundPerformedMutation = false;
             for (let index = 0; index < toolCalls.length; index += 1) {
               const tc = toolCalls[index];
               setToolStatus(summarizeToolCall(tc));
@@ -1378,6 +1582,25 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
                 !toolResult.content.startsWith('Error')
               ) {
                 currentState.performedMutationTool = true;
+                roundPerformedMutation = true;
+              }
+              currentState.executedTools = [
+                ...currentState.executedTools,
+                {
+                  name: tc.function.name,
+                  summary: summarizeToolCall(tc),
+                  result: toolResult.content,
+                  status: toolResult.content.startsWith('Error') ? 'error' : 'done'
+                }
+              ];
+              if (tc.function.name === 'readFile' && !toolResult.content.startsWith('Error')) {
+                const args = safeJsonParse(tc.function.arguments || '{}');
+                if (args.startLine != null || args.endLine != null) {
+                  const readPath = normalizeTrackedPath(String(args.path || ''));
+                  currentState.replaceReReadRequiredPaths = currentState.replaceReReadRequiredPaths.filter(
+                    tracked => tracked !== readPath
+                  );
+                }
               }
 
               updateToolMessage(currentState.conversationId, toolMessage.id, current =>
@@ -1417,16 +1640,71 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
             );
             const replaceSearchMiss = findReplaceSearchMiss(toolCalls, toolResults);
             if (replaceSearchMiss) {
+              const trackedPath = normalizeTrackedPath(
+                replaceSearchMiss.resolvedPath || replaceSearchMiss.failedPath || ''
+              );
+              if (trackedPath && !currentState.replaceReReadRequiredPaths.includes(trackedPath)) {
+                currentState.replaceReReadRequiredPaths = [
+                  ...currentState.replaceReReadRequiredPaths,
+                  trackedPath
+                ];
+              }
               currentState.apiMessages = [
                 ...currentState.apiMessages,
                 {
                   role: 'user',
-                  content: `The previous replaceInFile failed because the search text no longer matched in ${replaceSearchMiss.resolvedPath || replaceSearchMiss.failedPath || 'the file'}. Read the file again first, inspect the current contents, and then apply a smaller replacement against the latest text. Do not repeat the same replaceInFile call unchanged.`
+                  content: `The previous replaceInFile failed because the search text no longer matched in ${replaceSearchMiss.resolvedPath || replaceSearchMiss.failedPath || 'the file'}. Read that file again in chunks with explicit startLine and endLine, inspect the latest content, and only then apply a smaller replacement. Do not repeat the same replaceInFile call unchanged.`
                 }
               ];
               setToolStatus(undefined);
               continue;
             }
+            if (
+              !roundPerformedMutation &&
+              userRequestLikelyNeedsTools(initialUserContent, settings.mode)
+            ) {
+              currentState.nonMutatingToolRounds += 1;
+              if (currentState.nonMutatingToolRounds >= 3) {
+                currentState.apiMessages = [
+                  ...currentState.apiMessages,
+                  {
+                    role: 'user',
+                    content:
+                      'You have spent multiple rounds only reading or analyzing. Stop narrating. Either make one concrete code change now with a mutating tool, run a validating command, or explain in one short paragraph why no safe change can be made yet.'
+                  }
+                ];
+                setToolStatus(undefined);
+                continue;
+              }
+            } else {
+              currentState.nonMutatingToolRounds = 0;
+            }
+
+            // Auto-error-detection: after mutations, wait for Monaco diagnostics and inject errors
+            if (
+              roundPerformedMutation &&
+              (currentState.autoFixRounds ?? 0) < MAX_AUTO_FIX_ROUNDS
+            ) {
+              await delay(DIAGNOSTIC_SETTLE_MS);
+              const errors = getErrorDiagnostics();
+              if (errors.length > 0) {
+                const errorLines = errors
+                  .slice(0, 15)
+                  .map(d => `[ERROR] ${d.file}:${d.startLine}:${d.startColumn} - ${d.message}${d.code ? ` (${d.code})` : ''}`)
+                  .join('\n');
+                currentState.autoFixRounds = (currentState.autoFixRounds ?? 0) + 1;
+                currentState.apiMessages = [
+                  ...currentState.apiMessages,
+                  {
+                    role: 'user',
+                    content: `The editor detected ${errors.length} error(s) after your changes. Fix them now:\n${errorLines}\n\nRead the affected file(s) if needed and apply corrections with replaceInFile. Do not ignore these errors.`
+                  }
+                ];
+                setToolStatus('Fixing detected errors...');
+                continue;
+              }
+            }
+
             setToolStatus(undefined);
             continue;
           }
@@ -1485,6 +1763,14 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
               continue;
             }
           } else if (!result.content && !result.toolCalls?.length && !currentState.controller.signal.aborted) {
+            currentState.consecutiveEmptyResponses = (currentState.consecutiveEmptyResponses ?? 0) + 1;
+            if (currentState.consecutiveEmptyResponses >= 3) {
+              currentState.stopReason = 'Stopped: model returned multiple empty responses.';
+              currentState.combinedContent += currentState.combinedContent
+                ? '\n\nDas Modell konnte keine Antwort generieren. Bitte versuche es mit einer praeziseren Anfrage erneut.'
+                : 'Das Modell konnte keine Antwort generieren. Bitte versuche es mit einer praeziseren Anfrage erneut.';
+              break;
+            }
             currentState.apiMessages = [
               ...currentState.apiMessages,
               {
@@ -1499,99 +1785,6 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
           }
 
           if (result.content) {
-            const syntheticWriteTool =
-              settings.mode !== 'qa' &&
-              settings.toolsEnabled &&
-              !currentState.performedMutationTool &&
-              userRequestLikelyNeedsTools(initialUserContent, settings.mode)
-                ? inferSyntheticWriteToolCall(initialUserContent, result.content)
-                : null;
-
-            if (syntheticWriteTool) {
-              const syntheticInfo: ToolCallInfo = await buildToolCallInfo(syntheticWriteTool);
-              const toolMessage: Message = {
-                id: createId(),
-                content: 'Fallback tool execution generated from the returned code block.',
-                sender: 'tool',
-                timestamp: new Date(),
-                toolCalls: [syntheticInfo]
-              };
-              addMessageToConversation(currentState.conversationId, toolMessage);
-
-              currentState.apiMessages = [
-                ...currentState.apiMessages,
-                {
-                  role: 'assistant',
-                  content: result.content,
-                  tool_calls: [
-                    {
-                      id: syntheticWriteTool.id,
-                      type: 'function',
-                      function: {
-                        name: syntheticWriteTool.function.name,
-                        arguments: syntheticWriteTool.function.arguments
-                      }
-                    }
-                  ]
-                }
-              ];
-
-              if (!settings.yoloMode) {
-                const approvalId = createId();
-                pendingToolExecutionRef.current.set(approvalId, {
-                  ...currentState,
-                  id: approvalId,
-                  messageId: toolMessage.id,
-                  toolCalls: [syntheticWriteTool]
-                });
-                setPendingToolApprovals(prev => [
-                  ...prev,
-                  {
-                    id: approvalId,
-                    conversationId: currentState.conversationId,
-                    messageId: toolMessage.id,
-                    summary: summarizeToolCall(syntheticWriteTool),
-                    toolCalls: [syntheticInfo]
-                  }
-                ]);
-                setToolStatus('Waiting for approval');
-                abortControllerRef.current = null;
-                setIsThinking(false);
-                setIsCancelling(false);
-                return currentState.combinedContent;
-              }
-
-              const toolResult = await executeToolCall(syntheticWriteTool, projectPathRef.current, {
-                signal: currentState.controller.signal,
-                requestId: `${currentState.requestId}:${syntheticWriteTool.id}`
-              });
-              updateToolMessage(currentState.conversationId, toolMessage.id, current =>
-                current.map(entry => ({
-                  ...entry,
-                  status: toolResult.content.startsWith('Error') ? 'error' : 'done',
-                  result: toolResult.content.substring(0, 500)
-                }))
-              );
-              currentState.performedMutationTool = true;
-              currentState.apiMessages = [
-                ...currentState.apiMessages,
-                {
-                  role: 'tool',
-                  tool_call_id: toolResult.tool_call_id,
-                  content: toolResult.content
-                }
-              ];
-              updateToolMessage(currentState.conversationId, toolMessage.id, current =>
-                current.map(entry => ({
-                  ...entry,
-                  status: toolResult.content.startsWith('Error') ? 'error' : 'done',
-                  result: entry.result ?? toolResult.content.substring(0, 500)
-                }))
-              );
-              setToolStatus(undefined);
-              continue;
-            }
-
             if (
               settings.toolsEnabled &&
               !currentState.performedMutationTool &&
@@ -1667,6 +1860,23 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
             continue;
           }
 
+          if (
+            userRequestLikelyNeedsTools(initialUserContent, settings.mode) &&
+            !currentState.performedMutationTool &&
+            !currentState.completionWithoutMutationCorrectionSent
+          ) {
+            currentState.completionWithoutMutationCorrectionSent = true;
+            currentState.apiMessages = [
+              ...currentState.apiMessages,
+              {
+                role: 'user',
+                content:
+                  'You have not completed the requested file change yet. Do not claim the issue is fixed or resolved. Use a mutating tool now to apply the change, or explicitly state that no safe change was made.'
+              }
+            ];
+            continue;
+          }
+
           currentState.stopReason =
             settings.mode === 'autonomous'
               ? 'Stopped: no further concrete improvements remained.'
@@ -1681,7 +1891,8 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
           currentState.conversationId,
           currentState.combinedContent,
           currentState.combinedReasoning,
-          stopReason
+          stopReason,
+          currentState.executedTools
         );
         return currentState.combinedContent;
       } catch (error) {
@@ -1791,7 +2002,49 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
               (tc, index) =>
                 MUTATING_TOOL_NAMES.has(tc.function.name) &&
                 !toolResults[index]?.content?.startsWith('Error')
+            ),
+          executedTools: [
+            ...pending.executedTools,
+            ...pending.toolCalls.map((tc, index) => ({
+              name: tc.function.name,
+              summary: summarizeToolCall(tc),
+              result: toolResults[index]?.content || 'No tool result returned.',
+              status: toolResults[index]?.content?.startsWith('Error') ? 'error' as const : 'done' as const
+            }))
+          ],
+          replaceReReadRequiredPaths: (() => {
+            const next = [...pending.replaceReReadRequiredPaths];
+            pending.toolCalls.forEach((tc, index) => {
+              const args = safeJsonParse(tc.function.arguments || '{}');
+              if (
+                tc.function.name === 'readFile' &&
+                !toolResults[index]?.content?.startsWith('Error') &&
+                (args.startLine != null || args.endLine != null)
+              ) {
+                const readPath = normalizeTrackedPath(String(args.path || ''));
+                const idx = next.indexOf(readPath);
+                if (idx >= 0) next.splice(idx, 1);
+              }
+            });
+            const replaceSearchMissPath = normalizeTrackedPath(
+              replaceSearchMiss?.resolvedPath || replaceSearchMiss?.failedPath || ''
+            );
+            if (replaceSearchMissPath && !next.includes(replaceSearchMissPath)) {
+              next.push(replaceSearchMissPath);
+            }
+            return next;
+          })(),
+          nonMutatingToolRounds:
+            pending.toolCalls.some(
+              (tc, index) =>
+                MUTATING_TOOL_NAMES.has(tc.function.name) &&
+                !toolResults[index]?.content?.startsWith('Error')
             )
+              ? 0
+              : pending.nonMutatingToolRounds + 1,
+          completionWithoutMutationCorrectionSent: pending.completionWithoutMutationCorrectionSent,
+          autoFixRounds: pending.autoFixRounds ?? 0,
+          consecutiveEmptyResponses: 0
         },
         ''
       );
@@ -1832,7 +2085,21 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
               tool_call_id: tr.tool_call_id,
               content: tr.content
             }))
-          ]
+          ],
+          executedTools: [
+            ...pending.executedTools,
+            ...pending.toolCalls.map(tc => ({
+              name: tc.function.name,
+              summary: summarizeToolCall(tc),
+              result: 'Tool call rejected by the user.',
+              status: 'error' as const
+            }))
+          ],
+          replaceReReadRequiredPaths: pending.replaceReReadRequiredPaths,
+          nonMutatingToolRounds: pending.nonMutatingToolRounds,
+          completionWithoutMutationCorrectionSent: pending.completionWithoutMutationCorrectionSent,
+          autoFixRounds: pending.autoFixRounds ?? 0,
+          consecutiveEmptyResponses: 0
         },
         ''
       );
@@ -1898,7 +2165,13 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
           performedMutationTool: false,
           mutationCorrectionSent: false,
           toolProtocolCorrectionSent: false,
-          repeatedResponseCount: 0
+          repeatedResponseCount: 0,
+          executedTools: [],
+          replaceReReadRequiredPaths: [],
+          nonMutatingToolRounds: 0,
+          completionWithoutMutationCorrectionSent: false,
+          autoFixRounds: 0,
+          consecutiveEmptyResponses: 0
         },
         rawContent
       );

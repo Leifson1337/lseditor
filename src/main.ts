@@ -178,12 +178,11 @@ function resolveWorkingDirectory(requested?: string): string {
   return process.cwd();
 }
 
+const SHELL_META_CHARS = /[;&|><`$(){}!#*?~]/;
+
 function tokenizeCommand(command: string): string[] {
   const trimmed = command.trim();
   if (!trimmed) return [];
-  if (/[;&|><`]/.test(trimmed) || /\$\(/.test(trimmed)) {
-    throw new Error('Unsafe shell metacharacters are not allowed.');
-  }
 
   const tokens = trimmed.match(/"[^"]*"|'[^']*'|[^\s]+/g) ?? [];
   return tokens.map(token => {
@@ -197,6 +196,10 @@ function tokenizeCommand(command: string): string[] {
   });
 }
 
+function needsShell(command: string): boolean {
+  return SHELL_META_CHARS.test(command);
+}
+
 function runSafeCommand(
   command: string,
   cwd: string,
@@ -204,17 +207,36 @@ function runSafeCommand(
 ): Promise<{ stdout: string; stderr: string; code: number; error?: string }> {
   return new Promise((resolve, reject) => {
     try {
-      const [file, ...args] = tokenizeCommand(command);
-      if (!file) {
+      const trimmed = command.trim();
+      if (!trimmed) {
         throw new Error('Empty command');
       }
 
-      const child = spawnProcess(file, args, {
-        cwd,
-        windowsHide: true,
-        shell: false,
-        env: process.env
-      });
+      let child;
+      if (needsShell(trimmed)) {
+        // Route through shell for commands that need pipes, redirects, chaining etc.
+        const shellExe = process.platform === 'win32'
+          ? (process.env.COMSPEC || 'cmd.exe')
+          : (process.env.SHELL || '/bin/bash');
+        const shellFlag = process.platform === 'win32' ? '/c' : '-c';
+        child = spawnProcess(shellExe, [shellFlag, trimmed], {
+          cwd,
+          windowsHide: true,
+          shell: false,
+          env: process.env
+        });
+      } else {
+        const [file, ...args] = tokenizeCommand(trimmed);
+        if (!file) {
+          throw new Error('Empty command');
+        }
+        child = spawnProcess(file, args, {
+          cwd,
+          windowsHide: true,
+          shell: false,
+          env: process.env
+        });
+      }
       const requestId = options?.requestId?.trim();
       if (requestId) {
         aiCommandProcesses.set(requestId, child);
@@ -1138,6 +1160,20 @@ function setupFsIpcHandlers() {
       return true;
     } catch (error) {
       console.error('Error writing file:', error);
+      return false;
+    }
+  });
+
+  ipcMain.handle('fs:appendFile', async (event, filePath, content) => {
+    assertTrustedSender(event);
+    try {
+      const targetPath = validatePath(filePath);
+      await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+      const data = typeof content === 'string' ? content : String(content ?? '');
+      await fs.promises.appendFile(targetPath, data, 'utf-8');
+      return true;
+    } catch (error) {
+      console.error('Error appending file:', error);
       return false;
     }
   });

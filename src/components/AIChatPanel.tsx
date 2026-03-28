@@ -15,6 +15,7 @@ import {
   stripFileProtocol,
   stripRelativeDrivePrefix
 } from '../utils/pathUtils';
+import { EditorDiagnostic } from '../services/AIToolService';
 
 marked.setOptions({ breaks: true });
 
@@ -331,6 +332,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
   const [dismissedBanners, setDismissedBanners] = useState<Set<string>>(new Set());
   const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(new Set());
   const [expandedReasoning, setExpandedReasoning] = useState<Set<string>>(new Set());
+  const [editorDiagnostics, setEditorDiagnostics] = useState<EditorDiagnostic[]>([]);
   const [revertingToolCalls, setRevertingToolCalls] = useState<Set<string>>(new Set());
   const [revertedToolCalls, setRevertedToolCalls] = useState<Set<string>>(new Set());
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
@@ -524,6 +526,18 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       checkToolCallSupport();
     }
   }, [settings.model, connectionStatus, checkToolCallSupport]);
+
+  // Listen for editor diagnostics
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail && Array.isArray(detail.diagnostics)) {
+        setEditorDiagnostics(detail.diagnostics);
+      }
+    };
+    window.addEventListener('editor:diagnosticsChanged', handler);
+    return () => window.removeEventListener('editor:diagnosticsChanged', handler);
+  }, []);
 
   // Handle click on code copy buttons
   useEffect(() => {
@@ -799,6 +813,8 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     });
   };
 
+  const diagnosticErrorCount = useMemo(() => editorDiagnostics.filter(d => d.severity === 'error').length, [editorDiagnostics]);
+  const diagnosticWarningCount = useMemo(() => editorDiagnostics.filter(d => d.severity === 'warning').length, [editorDiagnostics]);
   const inputDisabled = !settings.model || isThinking || isAutoContextBusy;
 
   const rejectEdit = (id: string) => setPendingEdits(prev => prev.filter(edit => edit.id !== id));
@@ -1024,6 +1040,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
   };
 
   const renderReasoning = (message: typeof messages[number]) => {
+    if (message.sender !== 'ai') return null;
     if (!message.reasoning?.trim()) return null;
     const reasoningKey = `reasoning-${message.id}`;
     const isExpanded = expandedReasoning.has(reasoningKey);
@@ -1088,6 +1105,16 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
           </div>
           <div className="ai-chat-header-right">
             <span className={`ai-chat-status-dot ai-chat-status-dot-${connectionStatus}`} title={connectionLabel} />
+            {diagnosticErrorCount > 0 && (
+              <span className="ai-chat-diagnostic-badge ai-chat-diagnostic-error" title={`${diagnosticErrorCount} error(s) detected`}>
+                <FiAlertTriangle size={11} /> {diagnosticErrorCount}
+              </span>
+            )}
+            {diagnosticWarningCount > 0 && diagnosticErrorCount === 0 && (
+              <span className="ai-chat-diagnostic-badge ai-chat-diagnostic-warning" title={`${diagnosticWarningCount} warning(s)`}>
+                <FiAlertTriangle size={11} /> {diagnosticWarningCount}
+              </span>
+            )}
             {settings.yoloMode && <span className="ai-chat-yolo-badge" title="YOLO Mode active">YOLO</span>}
             {conversations.length > 1 && (
               <button
@@ -1176,7 +1203,6 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
               {isSummaryMessage ? renderSummaryCard(message) : <div className="ai-chat-message-bubble">
                 {message.toolCalls && message.toolCalls.length > 0 ? (
                   <div className="ai-chat-tool-calls">
-                    {renderReasoning(message)}
                     {message.toolCalls.map((tc, idx) => {
                       const tcKey = `${message.id}-tc-${idx}`;
                       const isExpanded = expandedToolCalls.has(tcKey);
@@ -1205,7 +1231,6 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                         </div>
                       );
                     })}
-                    {body && renderMessageContent(body)}
                   </div>
                 ) : (
                   <>

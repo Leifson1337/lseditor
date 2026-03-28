@@ -5,7 +5,7 @@ const listeners = new Map();
 
 // Whitelist for allowed IPC channels
 const ALLOWED_INVOKE_CHANNELS = [
-  'fs:readDir', 'fs:readFile', 'fs:writeFile', 'fs:exists', 'fs:listFilesRecursive',
+  'fs:readDir', 'fs:readFile', 'fs:writeFile', 'fs:appendFile', 'fs:exists', 'fs:listFilesRecursive',
   'fs:checkPathExistsAndIsDirectory', 'fs:createDirectory',
   'fs:deleteFile', 'fs:deleteDirectory', 'fs:renameFile', 'fs:checkPathExists',
   'fs:stat', 'fs:readFileBinary', 'fs:writeFileBinary',
