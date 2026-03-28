@@ -331,6 +331,8 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
   const [dismissedBanners, setDismissedBanners] = useState<Set<string>>(new Set());
   const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(new Set());
   const [expandedReasoning, setExpandedReasoning] = useState<Set<string>>(new Set());
+  const [revertingToolCalls, setRevertingToolCalls] = useState<Set<string>>(new Set());
+  const [revertedToolCalls, setRevertedToolCalls] = useState<Set<string>>(new Set());
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -910,6 +912,92 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     );
   };
 
+  const isRiskyOverwrite = (toolCall: any) => {
+    const preview = toolCall.preview;
+    if (!preview || preview.kind !== 'file') return false;
+    if (toolCall.name !== 'writeFile' || preview.action !== 'update') return false;
+    const oldLines = (preview.originalContent || '').replace(/\r/g, '').split('\n').length;
+    const newLines = (preview.newContent || '').replace(/\r/g, '').split('\n').length;
+    return oldLines >= 20 && newLines <= Math.max(5, Math.floor(oldLines * 0.4));
+  };
+
+  const revertToolPreview = async (toolKey: string, toolCall: any) => {
+    const preview = toolCall.preview;
+    if (!preview || preview.kind !== 'file') return;
+    setRevertingToolCalls(prev => new Set(prev).add(toolKey));
+    try {
+      if (preview.action === 'create') {
+        await window.electron?.ipcRenderer?.invoke('fs:deleteFile', ensureAbsolutePath(preview.path));
+      } else {
+        await window.electron?.ipcRenderer?.invoke(
+          'fs:writeFile',
+          ensureAbsolutePath(preview.path),
+          preview.originalContent ?? ''
+        );
+      }
+      window.dispatchEvent(new CustomEvent('editor:fileChanged', { detail: ensureAbsolutePath(preview.path) }));
+      window.dispatchEvent(new CustomEvent('editor:openFile', { detail: ensureAbsolutePath(preview.path) }));
+      window.dispatchEvent(new Event('explorer:refresh'));
+      setRevertedToolCalls(prev => new Set(prev).add(toolKey));
+    } catch (error) {
+      alert(`Failed to revert change: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setRevertingToolCalls(prev => {
+        const next = new Set(prev);
+        next.delete(toolKey);
+        return next;
+      });
+    }
+  };
+
+  const renderExecutedToolPreview = (toolKey: string, toolCall: any) => {
+    if (!toolCall.preview || toolCall.preview.kind !== 'file') return null;
+    const preview = toolCall.preview;
+    const rows = buildDiffRows(
+      preview.originalContent ?? '',
+      preview.newContent ?? '',
+      `${toolKey}-executed`
+    );
+    const reverting = revertingToolCalls.has(toolKey);
+    const reverted = revertedToolCalls.has(toolKey);
+
+    return (
+      <div className="ai-chat-tool-preview">
+        <div className="ai-chat-tool-preview-header">
+          <strong>{preview.path}</strong>
+          <div className="ai-chat-tool-preview-badges">
+            <span className={`tag tag-${preview.action}`}>{preview.action}</span>
+            {isRiskyOverwrite(toolCall) && <span className="tag tag-warning">overwrite</span>}
+          </div>
+        </div>
+        <pre className="ai-diff compact">
+          {rows.map(row => (
+            <div key={row.key} className={`ai-diff-line ${row.type}`}>
+              <span className="ai-diff-line-number">{row.oldLineNumber ?? ''}</span>
+              <span className="ai-diff-line-number">{row.newLineNumber ?? ''}</span>
+              <span className="ai-diff-gutter">
+                {row.type === 'added' ? '+' : row.type === 'removed' ? '-' : ' '}
+              </span>
+              <span className="ai-diff-code">{row.text || '\u00A0'}</span>
+            </div>
+          ))}
+        </pre>
+        {toolCall.status === 'done' && (
+          <div className="ai-chat-tool-preview-actions">
+            <button
+              type="button"
+              className="ai-chat-tool-revert"
+              disabled={reverting || reverted}
+              onClick={() => revertToolPreview(toolKey, toolCall)}
+            >
+              {reverted ? 'Reverted' : reverting ? 'Reverting...' : 'Revert'}
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderApprovalDetails = (toolCall: any) => {
     try {
       const args = JSON.parse(toolCall.arguments || '{}');
@@ -1107,8 +1195,10 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                               {tc.status === 'done' ? <FiCheck /> : tc.status === 'error' ? <FiX /> : <LuLoader2 />}
                             </span>
                             <span className="ai-chat-tool-call-name">{tc.name}</span>
+                            {isRiskyOverwrite(tc) && <span className="tag tag-warning">risky overwrite</span>}
                             {parsedArgs && <span className="ai-chat-tool-call-args">({parsedArgs})</span>}
                           </div>
+                          {(tc.name === 'replaceInFile' || tc.preview) && isExpanded && renderExecutedToolPreview(tcKey, tc)}
                           {isExpanded && tc.result && (
                             <pre className="ai-chat-tool-call-result">{tc.result}</pre>
                           )}

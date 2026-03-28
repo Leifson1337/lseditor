@@ -848,6 +848,62 @@
   border-radius: 2px;
 }
 
+.ai-chat-tool-preview {
+  margin: 0 8px 8px;
+  border: 1px solid #23262f;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #141821;
+}
+
+.ai-chat-tool-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #23262f;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.ai-chat-tool-preview-header strong {
+  font-size: 11px;
+  color: #e5e7eb;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-chat-tool-preview-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.ai-chat-tool-preview-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 10px 10px;
+  border-top: 1px solid #23262f;
+}
+
+.ai-chat-tool-revert {
+  border: none;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  background: rgba(248, 113, 113, 0.14);
+  color: #fca5a5;
+}
+
+.ai-chat-tool-revert:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
 /* ─── Thinking indicator ─── */
 
 .ai-chat-thinking {
@@ -1519,6 +1575,7 @@
 .tag-create { background: rgba(52, 211, 153, 0.12); color: #34d399; }
 .tag-update { background: rgba(59, 130, 246, 0.12); color: #60a5fa; }
 .tag-delete { background: rgba(248, 113, 113, 0.12); color: #f87171; }
+.tag-warning { background: rgba(251, 191, 36, 0.14); color: #fbbf24; }
 
 .ai-edit-file-actions {
   display: flex;

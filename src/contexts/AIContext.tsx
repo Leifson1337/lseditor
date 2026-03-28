@@ -454,6 +454,13 @@ const containsOversizedWriteToolCall = (toolCalls: ToolCall[]) => {
   });
 };
 
+const isRiskyWritePreview = (preview?: ToolCallPreview) => {
+  if (!preview || preview.kind !== 'file' || preview.action !== 'update') return false;
+  const originalLines = countLines(preview.originalContent || '');
+  const newLines = countLines(preview.newContent || '');
+  return originalLines >= 20 && newLines <= Math.max(5, Math.floor(originalLines * 0.4));
+};
+
 const findReplaceSearchMiss = (toolCalls: ToolCall[], toolResults: ToolResult[]) => {
   for (let index = 0; index < toolCalls.length; index += 1) {
     const toolCall = toolCalls[index];
@@ -1289,6 +1296,23 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
             const toolCallInfos: ToolCallInfo[] = await Promise.all(
               toolCalls.map(tc => buildToolCallInfo(tc))
             );
+            const riskyOverwrite = toolCallInfos.find(
+              (info, index) =>
+                toolCalls[index]?.function.name === 'writeFile' &&
+                isRiskyWritePreview(info.preview)
+            );
+            if (riskyOverwrite) {
+              currentState.apiMessages = [
+                ...currentState.apiMessages,
+                buildAssistantToolMessage(toolCalls, result.content),
+                {
+                  role: 'user',
+                  content:
+                    'This writeFile looks destructive because it would overwrite an existing file with much less content. Do not replace the whole file. Read the current file again if needed and use a precise replaceInFile-based edit or a clearly justified full rewrite.'
+                }
+              ];
+              continue;
+            }
 
             currentState.apiMessages = [
               ...currentState.apiMessages,
