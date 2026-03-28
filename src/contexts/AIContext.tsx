@@ -144,47 +144,18 @@ const COMPLETION_MAX_RETRIES = 4;
 const DIAGNOSTIC_SETTLE_MS = 1200;
 const MAX_AUTO_FIX_ROUNDS = 3;
 
-const DEFAULT_BASE_PROMPT = `Du bist LS AI, der integrierte Assistent des LS Editors. Du hast Zugriff auf Tools zum Lesen, Schreiben, Suchen und Ausfuehren von Dateien und Befehlen im Workspace des Benutzers.
+const DEFAULT_BASE_PROMPT = `Du bist LS AI, der integrierte Assistent des LS Editors.
+Du hast Tools zum Lesen, Schreiben, Suchen und Ausfuehren von Dateien und Befehlen im Workspace.
 
-WICHTIG - Tool-Nutzung:
-- Wenn der Benutzer dich bittet Code zu schreiben, eine Datei zu erstellen oder zu aendern: Benutze IMMER ein echtes Tool um die Datei direkt zu aendern. Gib den Code NICHT als Text aus.
-- Bevorzuge replaceInFile fuer gezielte Aenderungen an bestehenden Dateien. Benutze writeFile nur fuer neue Dateien oder komplette Rewrite-Faelle.
-- Fuer neue groessere Dateien: erst eine kleine Grundstruktur mit writeFile anlegen und dann mehrere appendToFile- oder kleine replaceInFile-Schritte verwenden. Keine komplette grosse Datei in einem einzigen Schritt schreiben.
-- Arbeite inkrementell und in kleinen Chunks. Schreibe nach Moeglichkeit keine riesigen 300-500-Zeilen-Bloecke auf einmal.
-- Wenn du eine neue groessere Datei erstellst: erst kleines Grundgeruest anlegen, dann schrittweise erweitern.
-- Wenn der Benutzer dich bittet etwas zu testen: Benutze IMMER das runCommand Tool (z.B. "python datei.py", "node datei.js", "npm test")
-- Lies Dateien mit readFile bevor du sie aenderst
-- Lies groessere Dateien niemals komplett auf einmal. Benutze readFile immer in Abschnitten mit startLine und endLine und arbeite dich stueckweise durch die Datei.
-- Wenn der genaue Dateipfad unbekannt ist, benutze zuerst findFile
-- Fuehre Befehle mit runCommand aus wenn noetig (z.B. npm install, git status, npm test, npm run build)
-
-Ablauf wenn der Benutzer Code will:
-1. Lies die Datei mit readFile (falls sie existiert)
-2. Aendere gezielt mit replaceInFile oder schreibe mit writeFile in die Datei
-3. Pruefe mit getDiagnostics ob der Editor Fehler meldet. Falls ja, behebe sie sofort.
-4. Optional: Teste mit runCommand (z.B. npm run build, npm test)
-5. Antworte kurz was du getan hast
-
-Fehlerbehandlung:
-- Nach JEDER Code-Aenderung: Rufe getDiagnostics auf um zu pruefen ob Syntaxfehler oder Typfehler entstanden sind
-- Falls Fehler gemeldet werden: Lies die betroffene Stelle erneut und behebe den Fehler sofort mit replaceInFile
-- Wiederhole getDiagnostics bis keine Fehler mehr vorhanden sind oder maximal 3 Runden
-- Falls ein replaceInFile fehlschlaegt (search text not found): Lies die Datei erneut und passe den Suchtext an
-- Falls ein runCommand einen Fehler meldet: Analysiere die Ausgabe und behebe den Fehler
-- Gib NIEMALS auf und behaupte das Problem sei geloest wenn noch Fehler bestehen
-
-Verboten:
-- Gib NIEMALS Code als Antworttext aus wenn du ihn stattdessen mit einem Tool in die Datei schreiben kannst
-- Behaupte niemals, dass eine Datei geaendert wurde, ohne ein mutierendes Tool aufgerufen zu haben
-- Behaupte niemals, dass ein Fehler behoben wurde, ohne getDiagnostics aufgerufen zu haben
-- Gib niemals interne Gedanken, Analyse oder Pseudo-Tool-Protokoll aus
-- Antworte IMMER in normalem Text. Benutze NIEMALS interne Protokoll-Marker oder Channel-Tags
-
-Pflicht fuer die Schlussantwort:
-- Beende jede abgeschlossene Anfrage mit den Ueberschriften "## Ergebnis", "## Vorgehen" und "## Validierung"
-- Unter "## Ergebnis" beschreibst du knapp das Resultat
-- Unter "## Vorgehen" fasst du die real ausgefuehrten Schritte zusammen
-- Unter "## Validierung" nennst du Tests, Builds, Checks oder offene Punkte (inkl. getDiagnostics-Ergebnis)`;
+Kernregeln:
+- Benutze IMMER echte Tool-Calls um Dateien zu aendern. Gib Code NICHT als Chat-Text aus.
+- Lies Dateien mit readFile BEVOR du sie aenderst. Lies grosse Dateien in Abschnitten (startLine/endLine).
+- Bevorzuge replaceInFile fuer gezielte Aenderungen. writeFile nur fuer neue Dateien.
+- Arbeite inkrementell: max ~120 Zeilen pro writeFile/appendToFile/replaceInFile.
+- Nach JEDER Code-Aenderung: getDiagnostics aufrufen. Fehler sofort beheben, nicht ignorieren.
+- Falls replaceInFile fehlschlaegt: Datei erneut lesen, Suchtext anpassen, erneut versuchen.
+- Gib niemals interne Gedanken, Analyse-Tags oder Pseudo-Tool-Syntax aus.
+- Beende abgeschlossene Aufgaben mit: ## Ergebnis, ## Vorgehen, ## Validierung`;
 
 const createId = () => {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -377,51 +348,38 @@ const getToolsForMode = (settings: AISettings) => {
 };
 
 const createRuntimeModePrompt = (settings: AISettings) => {
-  const common = [
-    'Use real tool calls whenever you need to inspect files, write files, search the workspace, or run commands.',
-    'Use searchWorkspace when you need to find files by name, locate content across the workspace, or combine both kinds of search.',
-    'Never read a large file in one full readFile call. Use startLine and endLine and inspect files in chunks.',
-    'Never print pseudo tool syntax like functions.writeFile(...).',
-    'If tool calls are available, edit existing files with replaceInFile whenever possible, and use writeFile only for new files or truly justified full rewrites.',
-    'Use appendToFile to extend newly created files in small chunks after creating a scaffold.',
-    'Do not paste full files into chat when a tool call can apply the change directly.',
-    'Work in small incremental chunks. Avoid very large single writeFile/appendToFile/replaceInFile payloads.',
-    'For larger new files, create a scaffold first and then extend it in follow-up tool calls.',
-    'For substantial tasks, start with a short markdown checklist using "- [ ]" items and update it to "- [x]" as you complete steps.',
-    'Whenever you finish a checklist step, show the updated checklist in the visible chat output so the UI can reflect progress.',
-    'IMPORTANT: After every code change, call getDiagnostics to check for errors. If errors are reported, fix them immediately before continuing.',
-    'If getDiagnostics reports errors, read the affected lines with readFile and fix them with replaceInFile. Repeat until clean.',
-    'When the task is done, end with a concise final summary using the exact markdown headings "## Ergebnis", "## Vorgehen", and "## Validierung".'
-  ];
+  const toolGuidance = [
+    'Tool workflow: readFile (in chunks) -> edit with replaceInFile -> getDiagnostics -> fix errors -> repeat until clean.',
+    'Use searchWorkspace to find files by name or content. Use findFile when exact path is unknown.',
+    'For new larger files: create a small scaffold with writeFile, then extend with appendToFile in chunks.',
+    'After code changes, ALWAYS call getDiagnostics. If errors found, read affected lines and fix with replaceInFile.',
+    'For substantial tasks, use a markdown checklist (- [ ] / - [x]) and update it as you progress.',
+    'End completed tasks with: ## Ergebnis, ## Vorgehen, ## Validierung.'
+  ].join('\n');
 
   if (settings.mode === 'qa') {
     return [
-      'Current mode: QA mode.',
-      'You may inspect the workspace with read-only tools, but you must not modify files, create files, rename files, delete files, or run commands that change the project.',
-      'Answer questions, explain code, and propose changes. If the user wants implementation, tell them to switch to Coder or Autonomous mode.',
-      ...common
+      'Mode: QA. Read-only tools only. Do not modify files or run mutating commands.',
+      'Answer questions, explain code, propose changes. For implementation, tell user to switch to Coder mode.',
+      toolGuidance
     ].join('\n');
   }
 
   if (settings.mode === 'autonomous') {
     return [
-      'Current mode: Autonomous mode.',
-      'Act like a senior engineer working the task through to completion.',
-      'Before substantial work, produce a short markdown checklist plan and keep updating the checklist as you make progress.',
-      'Read files first, then edit, then call getDiagnostics to verify no errors, then run validations/tests/builds when relevant.',
-      'After the initial checklist is done, keep testing, validating with getDiagnostics, and making concrete improvements until there is no meaningful next improvement left.',
-      'Only stop when the checklist is done, getDiagnostics reports no errors, and the remaining work is either verified complete or no further useful improvement can be justified.',
-      ...common
+      'Mode: Autonomous. Work like a senior engineer: plan, implement, validate, iterate.',
+      'Create a checklist plan first. Execute step by step. After each step, validate with getDiagnostics and runCommand.',
+      'Keep improving until the checklist is done and getDiagnostics reports no errors.',
+      'Only stop when work is verified complete.',
+      toolGuidance
     ].join('\n');
   }
 
   return [
-    'Current mode: Coder mode.',
-    'You may read files, write files, create files, and run commands to complete coding tasks.',
-    'Prefer direct tool calls over describing code in prose.',
-    'Create a short checklist for the task, execute it step by step, and stop once the checklist is completed.',
-    'Do not keep iterating after the planned work is finished unless the user explicitly asks for more improvements.',
-    ...common
+    'Mode: Coder. Read, write, create files and run commands to complete coding tasks.',
+    'Prefer tool calls over prose. Create a short checklist, execute it, stop when done.',
+    'Do not keep iterating beyond the plan unless user asks for more.',
+    toolGuidance
   ].join('\n');
 };
 
@@ -619,9 +577,12 @@ const serializeToolMessageForModel = (message: Message) => {
 
 const userRequestLikelyNeedsTools = (content: string, mode: AISettings['mode']) => {
   if (mode === 'qa') return false;
-  return /(program|implement|create|write|save|edit|change|modify|update|fix|refactor|build|run|test|erstell|schreib|programmier|aender|änder|fixe|teste|baue)/i.test(
-    content
-  );
+  // Action verbs that clearly imply file mutations
+  const actionPattern = /\b(program|implement|create|write|save|edit|change|modify|update|fix|refactor|build|run|test|add|remove|delete|rename|move|install|deploy|optimize|improve|replace|insert|append|merge|setup|configure|erstell|schreib|programmier|aender|änder|fixe|teste|baue|hinzufüg|entfern|lösch|verschieb|installier|einricht|optimier|verbesse|fuer mich|mach|mache)\b/i;
+  // Exclude purely informational queries even if they contain action words
+  const infoPattern = /^(was |wie |warum |wann |wo |wer |erkl|beschreib|zeig|explain|describe|show|what |how |why |when |where |who |tell me|can you explain|can i|should i|is it|do i need)/i;
+  if (infoPattern.test(content.trim())) return false;
+  return actionPattern.test(content);
 };
 
 const extractPseudoToolCalls = (content: string): ToolCall[] => {
@@ -1148,6 +1109,71 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       });
   }, []);
 
+  /** Prune API messages to stay within a rough character budget.
+   *  Keeps:
+   *  - All system messages (prompts)
+   *  - The last user message
+   *  - The most recent N messages fitting the budget
+   *  - A summary note of dropped messages
+   */
+  const pruneApiMessages = useCallback((messages: any[], charBudget: number = 60000): any[] => {
+    // Split into system messages and conversation messages
+    const systemMessages = messages.filter((m: any) => m.role === 'system');
+    const conversationMessages = messages.filter((m: any) => m.role !== 'system');
+
+    if (conversationMessages.length <= 4) return messages;
+
+    // Estimate character cost of each message
+    const estimateChars = (msg: any): number => {
+      if (typeof msg.content === 'string') return msg.content.length;
+      if (Array.isArray(msg.content)) {
+        return msg.content.reduce((sum: number, part: any) => {
+          if (part.type === 'text') return sum + (part.text?.length || 0);
+          if (part.type === 'image_url') return sum + 500; // rough estimate for image ref
+          return sum;
+        }, 0);
+      }
+      return JSON.stringify(msg).length;
+    };
+
+    const systemChars = systemMessages.reduce((sum, m) => sum + estimateChars(m), 0);
+    const remainingBudget = charBudget - systemChars;
+
+    // Always keep the first user message (original request context) and the last 2 messages
+    const firstUserIdx = conversationMessages.findIndex((m: any) => m.role === 'user');
+    const firstUserMsg = firstUserIdx >= 0 ? conversationMessages[firstUserIdx] : null;
+
+    // Build from the end, keeping recent messages within budget
+    const kept: any[] = [];
+    let usedChars = 0;
+
+    for (let i = conversationMessages.length - 1; i >= 0; i--) {
+      const msg = conversationMessages[i];
+      const cost = estimateChars(msg);
+      if (usedChars + cost > remainingBudget && kept.length >= 4) {
+        break;
+      }
+      kept.unshift(msg);
+      usedChars += cost;
+    }
+
+    // If we dropped messages and the first user message isn't in kept, prepend it
+    const droppedCount = conversationMessages.length - kept.length;
+    if (droppedCount > 0) {
+      if (firstUserMsg && !kept.includes(firstUserMsg)) {
+        kept.unshift(firstUserMsg);
+      }
+      // Add a summary note so the model knows context was pruned
+      const summaryNote = {
+        role: 'system',
+        content: `[Context note: ${droppedCount} earlier message(s) were pruned to save context space. The conversation continues from the most recent exchanges. If you need earlier file contents, re-read them.]`
+      };
+      return [...systemMessages, summaryNote, ...kept];
+    }
+
+    return [...systemMessages, ...kept];
+  }, []);
+
   const performCompletion = useCallback(
     async (
       payloadMessages: any[],
@@ -1421,6 +1447,12 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
             currentState.mutationCorrectionSent &&
             !currentState.performedMutationTool;
 
+          // Prune context if message history has grown large
+          const prunedMessages = pruneApiMessages(currentState.apiMessages);
+          if (prunedMessages.length < currentState.apiMessages.length) {
+            currentState.apiMessages = prunedMessages;
+          }
+
           const result = await performCompletion(
             currentState.apiMessages,
             currentState.controller.signal,
@@ -1664,13 +1696,27 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
               userRequestLikelyNeedsTools(initialUserContent, settings.mode)
             ) {
               currentState.nonMutatingToolRounds += 1;
-              if (currentState.nonMutatingToolRounds >= 3) {
+              // Allow up to 6 read-only rounds (reading large files in chunks is normal).
+              // Only warn after 6, force after 8.
+              if (currentState.nonMutatingToolRounds >= 8) {
                 currentState.apiMessages = [
                   ...currentState.apiMessages,
                   {
                     role: 'user',
                     content:
-                      'You have spent multiple rounds only reading or analyzing. Stop narrating. Either make one concrete code change now with a mutating tool, run a validating command, or explain in one short paragraph why no safe change can be made yet.'
+                      'You have spent 8 rounds only reading without making any changes. Make a concrete code change now or explain why no change can be made.'
+                  }
+                ];
+                setToolStatus(undefined);
+                continue;
+              }
+              if (currentState.nonMutatingToolRounds === 6) {
+                currentState.apiMessages = [
+                  ...currentState.apiMessages,
+                  {
+                    role: 'user',
+                    content:
+                      'Reminder: you have been reading files for several rounds. Once you have enough context, proceed with the actual code change using a mutating tool.'
                   }
                 ];
                 setToolStatus(undefined);
@@ -1920,6 +1966,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       buildToolCallInfo,
       finalizeAssistantMessage,
       performCompletion,
+      pruneApiMessages,
       settings,
       shouldContinue,
       toolCallSupported,

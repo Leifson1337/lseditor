@@ -651,7 +651,27 @@ export async function executeToolCall(
   }
 
   try {
-    const args = JSON.parse(toolCall.function.arguments);
+    let args: any;
+    try {
+      args = JSON.parse(toolCall.function.arguments || '{}');
+    } catch (parseError) {
+      // Try to salvage common malformed JSON from models
+      const raw = (toolCall.function.arguments || '').trim();
+      // Fix trailing commas before } or ]
+      const sanitized = raw.replace(/,\s*([}\]])/g, '$1');
+      try {
+        args = JSON.parse(sanitized);
+      } catch {
+        return {
+          tool_call_id: toolCall.id,
+          role: 'tool',
+          content: `Error: Malformed JSON in ${toolCall.function.name} arguments. The arguments must be valid JSON. Received: ${raw.slice(0, 200)}${raw.length > 200 ? '...' : ''}. Fix the JSON and retry the tool call.`
+        };
+      }
+    }
+    if (typeof args !== 'object' || args === null) {
+      args = {};
+    }
     let result: string;
 
     switch (toolCall.function.name) {
@@ -698,13 +718,17 @@ export async function executeToolCall(
             const sliced = allLines.slice(start - 1, end);
             const numbered = sliced.map((line: string, i: number) => `${String(start + i).padStart(4, ' ')}| ${line}`).join('\n');
 
+            const remainingLines = totalLines - end;
             if (hasRange) {
-              result = `${prefix}[Lines ${start}-${end} of ${totalLines}]\n${numbered}`;
+              const rangeNote = remainingLines > 0
+                ? ` (${remainingLines} lines remaining, next: startLine=${end + 1} endLine=${Math.min(totalLines, end + DEFAULT_READFILE_CHUNK_LINES)})`
+                : '';
+              result = `${prefix}[Lines ${start}-${end} of ${totalLines}${rangeNote}]\n${numbered}`;
             } else {
               const continuationNote =
-                totalLines > end
-                  ? `\n[Partial read only. Continue with readFile using startLine=${end + 1} and an endLine value. Never request the whole file at once.]`
-                  : '\n[Full file returned because it fits in a single safe chunk.]';
+                remainingLines > 0
+                  ? `\n[Showing ${end} of ${totalLines} lines. ${remainingLines} remaining. Next chunk: readFile with startLine=${end + 1} endLine=${Math.min(totalLines, end + DEFAULT_READFILE_CHUNK_LINES)}]`
+                  : '';
               result = `${prefix}[Lines 1-${end} of ${totalLines}]\n${numbered}${continuationNote}`;
             }
           }
@@ -719,19 +743,15 @@ export async function executeToolCall(
           result = workspaceError;
           break;
         }
-        const writeSucceeded = await renderer.invoke('fs:writeFile', fullPath, args.content);
+        const contentToWrite = typeof args.content === 'string' ? args.content : String(args.content ?? '');
+        const writeSucceeded = await renderer.invoke('fs:writeFile', fullPath, contentToWrite);
         if (!writeSucceeded) {
           result = `Error: Failed to write file: ${fullPath}`;
           break;
         }
-        const writtenContent = await renderer.invoke('fs:readFile', fullPath);
-        const expectedContent = typeof args.content === 'string' ? args.content : String(args.content ?? '');
-        if (typeof writtenContent !== 'string' || writtenContent !== expectedContent) {
-          result = `Error: Post-write verification failed for ${fullPath}`;
-          break;
-        }
         notifyFileChanged(fullPath);
-        result = `File written successfully: ${fullPath}`;
+        const lineCount = contentToWrite.split('\n').length;
+        result = `File written successfully: ${fullPath} (${lineCount} lines)`;
         break;
       }
 
@@ -747,24 +767,15 @@ export async function executeToolCall(
           result = `Error: File not found: ${fullPath}. Create it first with writeFile.`;
           break;
         }
-        const beforeAppend = await renderer.invoke('fs:readFile', fullPath);
-        const appendSucceeded = await renderer.invoke('fs:appendFile', fullPath, args.content);
-        if (!appendSucceeded) {
-          result = `Error: Failed to append file: ${fullPath}`;
-          break;
-        }
-        const afterAppend = await renderer.invoke('fs:readFile', fullPath);
         const appendContent = typeof args.content === 'string' ? args.content : String(args.content ?? '');
-        if (
-          typeof beforeAppend !== 'string' ||
-          typeof afterAppend !== 'string' ||
-          afterAppend !== `${beforeAppend}${appendContent}`
-        ) {
-          result = `Error: Post-append verification failed for ${fullPath}`;
+        const appendSucceeded = await renderer.invoke('fs:appendFile', fullPath, appendContent);
+        if (!appendSucceeded) {
+          result = `Error: Failed to append to file: ${fullPath}`;
           break;
         }
         notifyFileChanged(fullPath);
-        result = `Appended content to: ${fullPath}`;
+        const appendedLines = appendContent.split('\n').length;
+        result = `Appended ${appendedLines} lines to: ${fullPath}`;
         break;
       }
 
@@ -812,7 +823,11 @@ export async function executeToolCall(
             ? replaceSingleLineByTrimmedMatch(content, search, replace)
             : null;
           if (!fallback) {
-            result = `Error: Search text not found in ${resolvedPath}`;
+            // Give the AI helpful context about why the search failed
+            const totalLines = content.split('\n').length;
+            const searchPreview = search.length > 80 ? search.slice(0, 80) + '...' : search;
+            const searchLines = search.split('\n').length;
+            result = `Error: Search text not found in ${resolvedPath} (file has ${totalLines} lines). Your search string (${searchLines} line(s)): "${searchPreview}" does not match any part of the file. The file content may have changed. Re-read the file with readFile to see the current content, then retry with the correct search text.`;
             break;
           }
           updatedContent = fallback.updatedContent;
