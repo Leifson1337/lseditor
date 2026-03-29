@@ -1355,6 +1355,14 @@ function setupFsIpcHandlers() {
         if (entry.entryName.startsWith('extension/')) {
           const targetEntryPath = entry.entryName.replace('extension/', '');
           if (targetEntryPath) {
+            // Explicitly reject path traversal components before any path operations
+            const normalizedEntry = targetEntryPath.replace(/\\/g, '/');
+            if (
+              normalizedEntry.split('/').some(part => part === '..') ||
+              normalizedEntry.includes('\0')
+            ) {
+              throw new Error(`Unsafe extension entry path: ${entry.entryName}`);
+            }
             const fullTargetPath = normalizeFsPath(path.join(targetPath, targetEntryPath));
             if (!isWithinRoot(fullTargetPath, targetPath)) {
               throw new Error(`Unsafe extension entry path: ${entry.entryName}`);

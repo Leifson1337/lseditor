@@ -500,7 +500,7 @@ const App: React.FC = () => {
 
   return (
     <ThemeProvider>
-      <AIProvider projectPath={projectPath}>
+      <AIProvider projectPath={projectPath} activeFilePath={activeFile}>
         <div className="app">
           {/* SettingsIcon is now placed in the MenuBar, no separate popup */}
           {showProjectDialog ? (

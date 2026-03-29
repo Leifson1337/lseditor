@@ -1,51 +1,96 @@
-import React from 'react';
+import React, { useRef, useState } from 'react';
 import { CloseIcon } from './Icons';
 import { ExtensionActions } from './ExtensionActions';
 import '../styles/TabBar.css';
 
-// Tab represents a single tab in the TabBar
-interface Tab {
-  id: string;         // Unique identifier for the tab
-  title: string;      // Display title of the tab
-  path: string;       // Path to the file represented by the tab
-  dirty?: boolean;    // True if the tab has unsaved changes
+export interface Tab {
+  id: string;
+  title: string;
+  path: string;
+  dirty?: boolean;
+  content: string;
 }
 
-// Props for the TabBar component
 interface TabBarProps {
-  tabs: Tab[];                        // Array of tabs to display
-  activeTab: string | null;           // ID of the currently active tab
-  onTabClose: (tabId: string) => void; // Callback when a tab is closed
-  onTabSelect: (tabId: string) => void; // Callback when a tab is selected
+  tabs: Tab[];
+  activeTab: string | null;
+  onTabClose: (tabId: string) => void;
+  onTabSelect: (tabId: string) => void;
+  onTabsReorder?: (newOrder: Tab[]) => void;
 }
 
-// TabBar displays a horizontal list of tabs for open files
 export const TabBar: React.FC<TabBarProps> = ({
   tabs,
   activeTab,
   onTabClose,
-  onTabSelect
+  onTabSelect,
+  onTabsReorder
 }) => {
+  const dragSrcId = useRef<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+
+  const handleDragStart = (e: React.DragEvent, tabId: string) => {
+    dragSrcId.current = tabId;
+    e.dataTransfer.effectAllowed = 'move';
+    // Use empty image so the browser ghost doesn't flicker
+    const ghost = document.createElement('div');
+    ghost.style.position = 'absolute';
+    ghost.style.top = '-1000px';
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, 0, 0);
+    requestAnimationFrame(() => document.body.removeChild(ghost));
+  };
+
+  const handleDragOver = (e: React.DragEvent, tabId: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (tabId !== dragSrcId.current) {
+      setDragOverId(tabId);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent, targetId: string) => {
+    e.preventDefault();
+    setDragOverId(null);
+    const srcId = dragSrcId.current;
+    if (!srcId || srcId === targetId || !onTabsReorder) return;
+
+    const srcIdx = tabs.findIndex(t => t.id === srcId);
+    const tgtIdx = tabs.findIndex(t => t.id === targetId);
+    if (srcIdx === -1 || tgtIdx === -1) return;
+
+    const next = [...tabs];
+    const [removed] = next.splice(srcIdx, 1);
+    next.splice(tgtIdx, 0, removed);
+    onTabsReorder(next);
+  };
+
+  const handleDragEnd = () => {
+    dragSrcId.current = null;
+    setDragOverId(null);
+  };
+
   return (
     <div className="tab-bar">
       <div className="tabs-scroll-container">
-        {/* Render each tab */}
         {tabs.map(tab => (
           <div
             key={tab.id}
-            className={`tab ${tab.id === activeTab ? 'active' : ''}`}
+            className={`tab ${tab.id === activeTab ? 'active' : ''} ${dragOverId === tab.id ? 'drag-over' : ''}`}
             onClick={() => onTabSelect(tab.id)}
+            draggable
+            onDragStart={e => handleDragStart(e, tab.id)}
+            onDragOver={e => handleDragOver(e, tab.id)}
+            onDrop={e => handleDrop(e, tab.id)}
+            onDragEnd={handleDragEnd}
+            onDragLeave={() => setDragOverId(null)}
           >
             <span className="tab-title">
               {tab.title}{tab.dirty ? ' *' : ''}
             </span>
-            {/* Close button for the tab */}
             <button
               className="tab-close"
-              onClick={(e) => {
-                e.stopPropagation();
-                onTabClose(tab.id);
-              }}
+              onClick={e => { e.stopPropagation(); onTabClose(tab.id); }}
               title={`Close ${tab.title}`}
             >
               <CloseIcon />

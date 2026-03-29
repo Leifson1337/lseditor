@@ -279,6 +279,21 @@ export const AI_TOOLS: ToolDefinition[] = [
         required: []
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'spawnSubAgent',
+      description: 'Spawn an isolated sub-agent to work on a specific sub-task in parallel. The sub-agent runs with its own context and returns its result. Use this when you want to delegate a focused task to another agent while you continue with other work.',
+      parameters: {
+        type: 'object',
+        properties: {
+          task: { type: 'string', description: 'The specific task for the sub-agent to complete' },
+          systemPrompt: { type: 'string', description: 'Custom instructions / persona for this sub-agent. Be specific about what files it should touch and what it must avoid.' }
+        },
+        required: ['task', 'systemPrompt']
+      }
+    }
   }
 ];
 
@@ -1005,6 +1020,19 @@ export async function executeToolCall(
           );
           result = `Found ${filtered.length} diagnostic(s):\n${lines.join('\n')}`;
         }
+        break;
+      }
+
+      case 'spawnSubAgent': {
+        const task = String(args.task || '');
+        const systemPrompt = String(args.systemPrompt || '');
+        if (!task) {
+          result = 'Error: task is required';
+          break;
+        }
+        const agentId = `subagent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        window.dispatchEvent(new CustomEvent('ai:spawnSubAgent', { detail: { agentId, task, systemPrompt } }));
+        result = JSON.stringify({ agentId, task, status: 'spawned', message: 'Sub-agent spawned. The result will be reported back when the agent finishes.' });
         break;
       }
 

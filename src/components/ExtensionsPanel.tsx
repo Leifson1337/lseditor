@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import path from 'path';
 import { FaCube, FaPlusCircle, FaSyncAlt, FaSearch, FaDownload, FaStore, FaTimes } from 'react-icons/fa';
 import './ExtensionsPanel.css';
+import { getExtensionRoots } from '../utils/extensionRoots';
 
 interface ExtensionInfo {
   id: string;
@@ -9,6 +10,7 @@ interface ExtensionInfo {
   version?: string;
   description?: string;
   location: string;
+  source: 'user' | 'project' | 'bundled';
   manifestPath: string;
   publisher?: string;
 }
@@ -28,7 +30,6 @@ interface ExtensionsPanelProps {
   onOpenExtension?: (manifestPath: string) => void;
 }
 
-const EXTENSIONS_DIR_NAME = 'extensions';
 const DEFAULT_EXTENSION_VERSION = '0.1.0';
 
 const sanitizeExtensionName = (input: string): string => {
@@ -82,11 +83,21 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
 
   const baseExtensionsPath = useMemo(() => {
     if (!userDataPath) return null;
-    return path.join(userDataPath, EXTENSIONS_DIR_NAME);
+    return path.join(userDataPath, 'extensions');
   }, [userDataPath]);
 
+  const extensionRoots = useMemo(
+    () =>
+      getExtensionRoots({
+        userDataPath,
+        projectPath,
+        appRoot: typeof process !== 'undefined' && typeof process.cwd === 'function' ? process.cwd() : null
+      }),
+    [projectPath, userDataPath]
+  );
+
   const loadExtensions = useCallback(async () => {
-    if (!baseExtensionsPath) {
+    if (!extensionRoots.length) {
       setExtensions([]);
       return;
     }
@@ -95,53 +106,74 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
     setError(null);
 
     try {
-      const exists = await safeInvoke<boolean>('fs:checkPathExistsAndIsDirectory', baseExtensionsPath);
-      if (!exists) {
-        setExtensions([]);
-        setIsLoading(false);
-        return;
-      }
-
-      const entries = (await safeInvoke<Array<{ name: string; isDirectory: boolean }>>(
-        'fs:readDir',
-        baseExtensionsPath
-      )) ?? [];
-
       const collected: ExtensionInfo[] = [];
+      const seenExtensionIds = new Set<string>();
 
-      for (const entry of entries) {
-        if (!entry.isDirectory) continue;
-
-        const extensionDir = path.join(baseExtensionsPath, entry.name);
-        const manifestPath = path.join(extensionDir, 'extension.json');
-        const packageJsonPath = path.join(extensionDir, 'package.json');
-        let manifest: any = null;
-
-        try {
-          const extExists = await safeInvoke<boolean>('fs:exists', manifestPath);
-          if (extExists) {
-            const content = await safeInvoke<string>('fs:readFile', manifestPath);
-            if (content) manifest = JSON.parse(content);
-          } else {
-            const pkgExists = await safeInvoke<boolean>('fs:exists', packageJsonPath);
-            if (pkgExists) {
-              const content = await safeInvoke<string>('fs:readFile', packageJsonPath);
-              if (content) manifest = JSON.parse(content);
-            }
-          }
-        } catch (manifestError) {
-          console.warn('Failed to read extension manifest:', manifestError);
+      for (const root of extensionRoots) {
+        const exists = await safeInvoke<boolean>('fs:checkPathExistsAndIsDirectory', root.path);
+        if (!exists) {
+          continue;
         }
 
-        collected.push({
-          id: entry.name,
-          name: manifest?.displayName ?? manifest?.name ?? entry.name,
-          version: manifest?.version,
-          description: manifest?.description,
-          location: extensionDir,
-          manifestPath: manifestPath,
-          publisher: manifest?.publisher
-        });
+        const entries = (await safeInvoke<Array<{ name: string; isDirectory: boolean }>>(
+          'fs:readDir',
+          root.path
+        )) ?? [];
+
+        for (const entry of entries) {
+          if (!entry.isDirectory) continue;
+
+          const extensionDir = path.join(root.path, entry.name);
+          const extensionJsonPath = path.join(extensionDir, 'extension.json');
+          const packageJsonPath = path.join(extensionDir, 'package.json');
+          let manifest: any = null;
+          let resolvedManifestPath = packageJsonPath;
+
+          try {
+            const extensionJsonExists = await safeInvoke<boolean>('fs:exists', extensionJsonPath);
+            if (extensionJsonExists) {
+              const content = await safeInvoke<string>('fs:readFile', extensionJsonPath);
+              if (content) {
+                manifest = JSON.parse(content);
+                resolvedManifestPath = extensionJsonPath;
+              }
+            }
+
+            if (!manifest) {
+              const pkgExists = await safeInvoke<boolean>('fs:exists', packageJsonPath);
+              if (pkgExists) {
+                const content = await safeInvoke<string>('fs:readFile', packageJsonPath);
+                if (content) {
+                  manifest = JSON.parse(content);
+                  resolvedManifestPath = packageJsonPath;
+                }
+              }
+            }
+          } catch (manifestError) {
+            console.warn('Failed to read extension manifest:', manifestError);
+          }
+
+          const fallbackPublisher = root.source === 'user' ? undefined : root.source;
+          const fallbackName = manifest?.name ?? entry.name;
+          const extensionId = manifest?.publisher
+            ? `${manifest.publisher}.${fallbackName}`
+            : entry.name;
+          if (seenExtensionIds.has(extensionId)) {
+            continue;
+          }
+          seenExtensionIds.add(extensionId);
+
+          collected.push({
+            id: extensionId,
+            name: manifest?.displayName ?? fallbackName,
+            version: manifest?.version,
+            description: manifest?.description,
+            location: extensionDir,
+            source: root.source,
+            manifestPath: resolvedManifestPath,
+            publisher: manifest?.publisher ?? fallbackPublisher
+          });
+        }
       }
 
       collected.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
@@ -152,7 +184,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [baseExtensionsPath]);
+  }, [extensionRoots]);
 
   useEffect(() => {
     loadExtensions().catch(err => console.error('Extension load error:', err));
@@ -415,6 +447,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
 
             <div className="extensions-panel__detail-meta">
               <span>Version: {selectedExtension.version || 'unbekannt'}</span>
+              {!isMarketplace && <span>Quelle: {(selectedExtension as ExtensionInfo).source}</span>}
             </div>
           </div>
         </div>
@@ -482,6 +515,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
                     </div>
                     <div className="extensions-panel__item-meta">
                       <span>v{extension.version ?? 'unbekannt'}</span>
+                      <span>{extension.source}</span>
                     </div>
                     {extension.description && (
                       <div className="extensions-panel__item-description">{extension.description}</div>

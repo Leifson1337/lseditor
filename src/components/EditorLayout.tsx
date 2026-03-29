@@ -4,6 +4,7 @@ import { Editor } from '@monaco-editor/react';
 import type { Monaco } from '@monaco-editor/react';
 import { FileExplorer } from './FileExplorer';
 import { TabBar } from './TabBar';
+import type { Tab } from './TabBar';
 import Sidebar from './Sidebar';
 import AIChatPanel from './AIChatPanel';
 import { IntegratedTerminal } from './IntegratedTerminal';
@@ -29,6 +30,8 @@ import { Registry as VSCodeRegistry } from '@codingame/monaco-vscode-api/vscode/
 import { SyncDescriptor } from '@codingame/monaco-vscode-api/vscode/vs/platform/instantiation/common/descriptors';
 import { ViewPaneContainer } from '@codingame/monaco-vscode-views-service-override';
 import { TreeViewPane } from '@codingame/monaco-vscode-api/vscode/vs/workbench/browser/parts/views/treeView';
+import { ExtensionService } from '../services/ExtensionService';
+import { getExtensionRoots } from '../utils/extensionRoots';
 
 // Props for the EditorLayout component
 interface EditorLayoutProps {
@@ -201,7 +204,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   // State for currently active tab
   const [activeTab, setActiveTab] = useState<string | null>(null);
   // State for all open tabs
-  const [tabs, setTabs] = useState<Array<{ id: string; title: string; path: string; content: string; dirty: boolean }>>([]);
+  const [tabs, setTabs] = useState<Tab[]>([]);
   // State for selected sidebar tab
   const [sidebarTab, setSidebarTab] = useState<string>('explorer');
   const [wordWrapEnabled, setWordWrapEnabled] = useState(true);
@@ -321,28 +324,24 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
     const seenExtensions = new Set<string>();
 
     const ipc = window.electron?.ipcRenderer;
+    let userDataPath: string | null = null;
     if (ipc) {
       try {
-        const userDataPath = await ipc.invoke('app:getUserDataPath');
-        if (userDataPath) {
-          const userExtensionsDir = path.join(userDataPath, 'extensions');
-          await loadExtensionsFromDir(userExtensionsDir, seenExtensions);
-        }
+        userDataPath = await ipc.invoke('app:getUserDataPath');
       } catch (err) {
-        console.warn('Failed to load user extensions directory', err);
+        console.warn('Failed to resolve user extensions directory', err);
       }
     }
 
-    if (projectPath) {
-      // Load project-specific extensions
-      const projectExtensionsDir = path.join(projectPath, 'extensions');
-      await loadExtensionsFromDir(projectExtensionsDir, seenExtensions);
-    }
+    const appRoot = typeof process !== 'undefined' && typeof process.cwd === 'function' ? process.cwd() : null;
+    const extensionRoots = getExtensionRoots({
+      userDataPath,
+      projectPath,
+      appRoot
+    });
 
-    const appRoot = typeof process !== 'undefined' && typeof process.cwd === 'function' ? process.cwd() : '';
-    if (appRoot) {
-      const vsCodeMainExtensionsDir = path.join(appRoot, 'vscode-main', 'extensions');
-      await loadExtensionsFromDir(vsCodeMainExtensionsDir, seenExtensions);
+    for (const root of extensionRoots) {
+      await loadExtensionsFromDir(root.path, seenExtensions);
     }
 
     for (const [extensionId, registration] of registeredExtensionsRef.current.entries()) {
@@ -356,6 +355,42 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   useEffect(() => {
     loadExtensions();
   }, [loadExtensions]);
+
+  useEffect(() => {
+    let disposed = false;
+
+    const syncExtensionRoots = async () => {
+      const ipc = window.electron?.ipcRenderer;
+      let userDataPath: string | null = null;
+
+      if (ipc) {
+        try {
+          userDataPath = await ipc.invoke('app:getUserDataPath');
+        } catch (error) {
+          console.warn('Failed to resolve extension roots for sidebar sync', error);
+        }
+      }
+
+      if (disposed) {
+        return;
+      }
+
+      const appRoot = typeof process !== 'undefined' && typeof process.cwd === 'function' ? process.cwd() : null;
+      const roots = getExtensionRoots({
+        userDataPath,
+        projectPath,
+        appRoot
+      }).map(root => root.path);
+
+      ExtensionService.getInstance().syncExtensionRoots(roots);
+    };
+
+    syncExtensionRoots();
+
+    return () => {
+      disposed = true;
+    };
+  }, [projectPath]);
 
   useEffect(() => {
     const handler = () => {
@@ -568,6 +603,10 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
       return updated;
     });
   }, [activeTab]);
+
+  const handleTabsReorder = useCallback((newOrder: Tab[]) => {
+    setTabs(newOrder);
+  }, []);
 
   const saveAllTabs = async () => {
     if (!window.electron?.ipcRenderer) return;
@@ -854,6 +893,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                 activeTab={activeTab}
                 onTabClose={handleTabClose}
                 onTabSelect={setActiveTab}
+                onTabsReorder={handleTabsReorder}
               />
               <div className="editor-path-display" title={activeTabData?.path || 'Keine Datei geöffnet'}>
                 <span className="editor-path-label">Pfad:</span>

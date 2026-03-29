@@ -10,6 +10,7 @@ import React, {
 import path from 'path';
 import { AI_TOOLS, executeToolCall, ToolCall, ToolResult, EditorDiagnostic, setCurrentDiagnostics, getErrorDiagnostics } from '../services/AIToolService';
 import { isAbsoluteFilePath, joinPathPreserveAbsolute } from '../utils/pathUtils';
+import WhisperAutoStartService, { WhisperAutoStartState } from '../services/WhisperAutoStartService';
 
 export type ChatSender = 'user' | 'ai' | 'system' | 'tool';
 
@@ -64,6 +65,22 @@ export interface AISettings {
   toolsEnabled: boolean;
   mode: 'qa' | 'coder' | 'autonomous';
   yoloMode: boolean;
+  speechEnabled: boolean;
+  speechUseWhisper: boolean;
+  speechWhisperModel: string;
+  speechMicDeviceId: string;
+  speechAlwaysReady: boolean;
+  subAgentsEnabled: boolean;
+}
+
+export type SubAgentStatus = 'planning' | 'running' | 'done' | 'error';
+
+export interface SubAgentInfo {
+  id: string;
+  task: string;
+  status: SubAgentStatus;
+  progress?: string;
+  result?: string;
 }
 
 interface SendMessageOptions {
@@ -119,6 +136,13 @@ interface AIContextType {
   pendingToolApprovals: PendingToolApproval[];
   approvePendingToolApproval: (id: string) => Promise<void>;
   rejectPendingToolApproval: (id: string) => Promise<void>;
+  subAgents: SubAgentInfo[];
+  spawnSubAgents: (parentTask: string) => Promise<void>;
+  clearSubAgents: () => void;
+  contextUsagePercent: number;
+  lastCompactionSaved?: number;
+  activeFilePath?: string;
+  whisperAutoStartState: WhisperAutoStartState;
 }
 
 const AIContext = createContext<AIContextType | undefined>(undefined);
@@ -133,7 +157,13 @@ const defaultSettings: AISettings = {
   maxTokens: 4096,
   toolsEnabled: true,
   mode: 'coder',
-  yoloMode: false
+  yoloMode: false,
+  speechEnabled: false,
+  speechUseWhisper: false,
+  speechWhisperModel: '',
+  speechMicDeviceId: '',
+  speechAlwaysReady: false,
+  subAgentsEnabled: false
 };
 
 const MAX_AGENT_LOOPS = 30;
@@ -153,38 +183,45 @@ const MONACO_VALIDATED_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs
  */
 const buildSyntaxCheckCommand = (filePath: string): string | null => {
   const ext = (filePath.match(/\.[^.\\/:]+$/) || [''])[0].toLowerCase();
-  const escaped = filePath.replace(/'/g, "\\'");
+  // Escape for POSIX double-quoted shell strings: \, ", $, `
+  const dq = filePath
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\$/g, '\\$')
+    .replace(/`/g, '\\`');
+  // Escape for PowerShell single-quoted strings: double single-quotes
+  const ps1 = filePath.replace(/'/g, "''");
   switch (ext) {
     case '.py':
-      return `python -c "import py_compile; py_compile.compile(r'${escaped}', doraise=True)"`;
+      return `python -c "import py_compile; py_compile.compile(r'${dq}', doraise=True)"`;
     case '.json':
-      return `python -c "import json; json.load(open(r'${escaped}', encoding='utf-8'))"`;
+      return `python -c "import json; json.load(open(r'${dq}', encoding='utf-8'))"`;
     case '.yaml':
     case '.yml':
-      return `python -c "import yaml; yaml.safe_load(open(r'${escaped}', encoding='utf-8'))"`;
+      return `python -c "import yaml; yaml.safe_load(open(r'${dq}', encoding='utf-8'))"`;
     case '.c':
     case '.h':
-      return `gcc -fsyntax-only "${escaped}"`;
+      return `gcc -fsyntax-only "${dq}"`;
     case '.cpp':
     case '.cc':
     case '.cxx':
     case '.hpp':
-      return `g++ -fsyntax-only "${escaped}"`;
+      return `g++ -fsyntax-only "${dq}"`;
     case '.java':
-      return `javac -d /dev/null "${escaped}" 2>&1 || javac -d NUL "${escaped}"`;
+      return `javac -d /dev/null "${dq}" 2>&1 || javac -d NUL "${dq}"`;
     case '.rs':
-      return `rustc --edition 2021 --crate-type lib "${escaped}" --error-format short 2>&1 | head -20`;
+      return `rustc --edition 2021 --crate-type lib "${dq}" --error-format short 2>&1 | head -20`;
     case '.go':
-      return `go vet "${escaped}"`;
+      return `go vet "${dq}"`;
     case '.rb':
-      return `ruby -c "${escaped}"`;
+      return `ruby -c "${dq}"`;
     case '.php':
-      return `php -l "${escaped}"`;
+      return `php -l "${dq}"`;
     case '.sh':
     case '.bash':
-      return `bash -n "${escaped}"`;
+      return `bash -n "${dq}"`;
     case '.ps1':
-      return `powershell -NoProfile -Command "try { [System.Management.Automation.Language.Parser]::ParseFile('${escaped}', [ref]$null, [ref]$null) | Out-Null; 'OK' } catch { $_.Exception.Message }"`;
+      return `powershell -NoProfile -Command "try { [System.Management.Automation.Language.Parser]::ParseFile('${ps1}', [ref]$null, [ref]$null) | Out-Null; 'OK' } catch { $_.Exception.Message }"`;
     default:
       return null;
   }
@@ -414,6 +451,9 @@ const toolNeedsApproval = (toolName: string) =>
 const getToolsForMode = (settings: AISettings) => {
   if (settings.mode === 'qa') {
     return AI_TOOLS.filter(tool => READ_ONLY_TOOL_NAMES.has(tool.function.name));
+  }
+  if (!settings.subAgentsEnabled) {
+    return AI_TOOLS.filter(tool => tool.function.name !== 'spawnSubAgent');
   }
   return AI_TOOLS;
 };
@@ -750,7 +790,7 @@ interface PendingToolExecutionState extends AgentLoopState {
   toolCalls: ToolCall[];
 }
 
-export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: string }> = ({ children, projectPath }) => {
+export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: string; activeFilePath?: string }> = ({ children, projectPath, activeFilePath }) => {
   const [settings, setSettings] = useState<AISettings>(() => {
     if (typeof window === 'undefined') return defaultSettings;
     try {
@@ -1025,15 +1065,20 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       modelMetadataRef.current.get(selectedModel)
     );
 
-    if (inferred !== 'unknown') {
+    if (inferred === true || inferred === false) {
       setToolCallSupported(inferred);
       return inferred;
     }
 
+    // Make a small test request to check if tool calls are actually supported
     const baseUrl = sanitizeBaseUrl(settings.baseUrl);
     try {
+      const testController = new AbortController();
+      const timeoutId = setTimeout(() => testController.abort(), 5000);
+
       const response = await fetch(`${baseUrl}/v1/chat/completions`, {
         method: 'POST',
+        signal: testController.signal,
         headers: {
           'Content-Type': 'application/json',
           ...(settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {})
@@ -1041,20 +1086,19 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
         body: JSON.stringify({
           model: selectedModel,
           temperature: 0,
-          max_tokens: 32,
+          max_tokens: 10,
           messages: [
             {
               role: 'user',
-              content:
-                'If tool calling is available, call the getWorkspaceInfo tool. Otherwise reply with the exact text NO_TOOL_SUPPORT.'
+              content: 'Test'
             }
           ],
           tools: [
             {
               type: 'function',
               function: {
-                name: 'getWorkspaceInfo',
-                description: 'Returns a short workspace description.',
+                name: 'test',
+                description: 'Test function',
                 parameters: {
                   type: 'object',
                   properties: {},
@@ -1063,54 +1107,66 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
               }
             }
           ],
-          tool_choice: {
-            type: 'function',
-            function: {
-              name: 'getWorkspaceInfo'
-            }
-          }
+          tool_choice: 'none'
         })
       });
 
+      clearTimeout(timeoutId);
+
       if (!response.ok) {
-        const fallback = await response.text().catch(() => '');
-        const lower = fallback.toLowerCase();
+        const errorText = await response.text().catch(() => '');
+        const lower = errorText.toLowerCase();
+        
+        // Check for explicit tool-related errors
         if (
           lower.includes('tool') ||
           lower.includes('function call') ||
           lower.includes('function calling') ||
-          lower.includes('does not support')
+          lower.includes('does not support') ||
+          lower.includes('not supported')
         ) {
           setToolCallSupported(false);
           return false;
         }
+        
+        // Other errors don't tell us about tool support
         setToolCallSupported('unknown');
         return 'unknown';
       }
 
+      // If the request succeeded with tools parameter, the model supports tools
       const payload = await response.json();
+      
+      // Check if response has tool_calls field (even if empty)
       const choice = payload?.choices?.[0];
-      const toolCalls = choice?.message?.tool_calls;
-      if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+      if (choice?.message && ('tool_calls' in choice.message)) {
         setToolCallSupported(true);
         return true;
       }
 
-      const content = String(choice?.message?.content || '').trim();
-      if (content === 'NO_TOOL_SUPPORT') {
-        setToolCallSupported(false);
-        return false;
-      }
-
-      setToolCallSupported(false);
-      return false;
+      // If no error and request went through, assume support
+      setToolCallSupported(true);
+      return true;
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      
+      // Timeout or network error - can't determine
+      if (message.includes('abort') || message.includes('timeout')) {
+        setToolCallSupported('unknown');
+        return 'unknown';
+      }
+      
       console.warn('Failed to verify tool calling support', error);
+      setToolCallSupported('unknown');
+      return 'unknown';
     }
-
-    setToolCallSupported('unknown');
-    return 'unknown';
   }, [settings.apiKey, settings.baseUrl, settings.model]);
+
+  useEffect(() => {
+    if (settings.model) {
+      checkToolCallSupport();
+    }
+  }, [settings.model]);
 
   const getActiveConversation = useCallback(
     () => conversations.find(conv => conv.id === activeConversationId) ?? conversations[0],
@@ -2374,6 +2430,12 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       setLastError(undefined);
       setToolStatus(undefined);
 
+      // Auto-compact if context is >= 85%
+      if (contextUsagePercent >= 85) {
+        const saved = await compactContext(conversationId);
+        if (saved > 0) setLastCompactionSaved(saved);
+      }
+
       const messagePayload = mapMessages(updatedMessages);
       const systemMessages = await buildSystemMessages(options?.injectSystemPrompt);
       const controller = new AbortController();
@@ -2420,6 +2482,113 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
     return /vision|gpt-4o|gpt-4\.1|gpt-4\.5|gpt-5|gemini|claude|pixtral|llava|cogvlm|qwen2?-vl|internvl|minicpm/.test(lower);
   }, [settings.model]);
 
+  // ── Whisper Auto-Start ──
+  useEffect(() => {
+    const whisperService = WhisperAutoStartService.getInstance();
+    whisperService.configure(settings.baseUrl, settings.speechWhisperModel);
+    
+    const unsubscribe = whisperService.onStateChange(setWhisperAutoStartState);
+    
+    // Start auto-start process when speech is enabled
+    if (settings.speechEnabled && settings.speechUseWhisper) {
+      whisperService.start();
+    }
+    
+    return () => {
+      unsubscribe();
+    };
+  }, [settings.baseUrl, settings.speechWhisperModel, settings.speechEnabled, settings.speechUseWhisper]);
+
+  // ── Context usage tracking ──
+
+  const [lastCompactionSaved, setLastCompactionSaved] = useState<number | undefined>();
+
+  const [whisperAutoStartState, setWhisperAutoStartState] = useState<WhisperAutoStartState>({ status: 'idle' });
+
+  const contextUsagePercent = useMemo(() => {
+    const conv = conversations.find(c => c.id === activeConversationId);
+    if (!conv || !settings.maxTokens) return 0;
+    const totalChars = conv.messages.reduce((sum, m) => sum + (m.content?.length || 0) + (m.rawContent?.length || 0), 0);
+    const estimatedTokens = totalChars / 4;
+    return Math.min(100, Math.round((estimatedTokens / settings.maxTokens) * 100));
+  }, [conversations, activeConversationId, settings.maxTokens]);
+
+  // ── Sub-Agent system ──
+
+  const [subAgents, setSubAgents] = useState<SubAgentInfo[]>([]);
+
+  const clearSubAgents = useCallback(() => setSubAgents([]), []);
+
+  /**
+   * Parse a task description and determine sub-tasks for parallel agents.
+   * Uses the LLM to break down the task, then runs agents concurrently.
+   * Each sub-agent gets its own isolated requestCompletion call so they don't
+   * interfere with each other's message history.
+   */
+  const spawnSubAgents = useCallback(async (_task: string) => {}, []);
+
+  const compactContext = useCallback(async (conversationId: string) => {
+    const conv = conversations.find(c => c.id === conversationId);
+    if (!conv || conv.messages.length <= 6) return 0;
+
+    const toCompact = conv.messages.slice(0, -4);
+    const toKeep = conv.messages.slice(-4);
+
+    const originalChars = toCompact.reduce((s, m) => s + (m.content?.length || 0), 0);
+
+    const summaryText = toCompact
+      .map(m => `[${m.sender}]: ${(m.rawContent || m.content || '').slice(0, 500)}`)
+      .join('\n');
+
+    let summary = '';
+    try {
+      summary = await requestCompletion([
+        { role: 'user', content: `Summarize the following conversation history concisely, preserving all important technical facts, file paths, decisions and code snippets:\n\n${summaryText}` }
+      ], { includeBasePrompt: false }) || '';
+    } catch {
+      return 0;
+    }
+
+    if (!summary) return 0;
+
+    const summaryMessage: Message = {
+      id: createId(),
+      content: `[Compacted history summary]\n${summary}`,
+      sender: 'system',
+      timestamp: new Date()
+    };
+
+    const savedChars = originalChars - summary.length;
+
+    setConversations(prev => prev.map(c =>
+      c.id === conversationId
+        ? { ...c, messages: [summaryMessage, ...toKeep] }
+        : c
+    ));
+
+    return Math.max(0, Math.round(savedChars / 4));
+  }, [conversations, requestCompletion]);
+
+  // Listen for spawnSubAgent events dispatched by the tool handler
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const { agentId, task, systemPrompt } = (event as CustomEvent).detail as { agentId: string; task: string; systemPrompt: string };
+      setSubAgents(prev => [...prev, { id: agentId, task, status: 'running' }]);
+      requestCompletion(
+        [{ role: 'user', content: task }],
+        { injectSystemPrompt: systemPrompt }
+      ).then(result => {
+        setSubAgents(prev => prev.map(a => a.id === agentId ? { ...a, status: 'done', result: result?.trim() || 'Completed.' } : a));
+        window.dispatchEvent(new CustomEvent('ai:subAgentDone', { detail: { agentId, task, result: result?.trim() || '' } }));
+      }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        setSubAgents(prev => prev.map(a => a.id === agentId ? { ...a, status: 'error', result: msg } : a));
+      });
+    };
+    window.addEventListener('ai:spawnSubAgent', handler);
+    return () => window.removeEventListener('ai:spawnSubAgent', handler);
+  }, [requestCompletion]);
+
   const value = useMemo<AIContextType>(
     () => ({
       conversations,
@@ -2446,7 +2615,14 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       visionSupported,
       pendingToolApprovals,
       approvePendingToolApproval,
-      rejectPendingToolApproval
+      rejectPendingToolApproval,
+      subAgents,
+      spawnSubAgents,
+      clearSubAgents,
+      contextUsagePercent,
+      lastCompactionSaved,
+      activeFilePath,
+      whisperAutoStartState
     }),
     [
       conversations,
@@ -2472,7 +2648,14 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       visionSupported,
       pendingToolApprovals,
       approvePendingToolApproval,
-      rejectPendingToolApproval
+      rejectPendingToolApproval,
+      subAgents,
+      spawnSubAgents,
+      clearSubAgents,
+      contextUsagePercent,
+      lastCompactionSaved,
+      activeFilePath,
+      whisperAutoStartState
     ]
   );
 

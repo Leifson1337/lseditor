@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import path from 'path';
-import { FiRefreshCw, FiSend, FiPlus, FiSettings, FiCopy, FiCheck, FiAlertTriangle, FiX, FiMessageSquare, FiCode, FiFileText, FiTerminal, FiPaperclip, FiZap, FiShield } from 'react-icons/fi';
+import { FiRefreshCw, FiSend, FiPlus, FiSettings, FiCopy, FiCheck, FiAlertTriangle, FiX, FiMessageSquare, FiCode, FiFileText, FiTerminal, FiPaperclip, FiZap, FiShield, FiMic, FiMicOff } from 'react-icons/fi';
 import { LuLoader2 } from 'react-icons/lu';
+import { VoiceInputService, MicDevice } from '../services/VoiceInputService';
 import { diffLines } from 'diff';
 import '../styles/AIChatPanel.css';
 import { useAI } from '../contexts/AIContext';
@@ -299,7 +300,14 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     visionSupported,
     pendingToolApprovals,
     approvePendingToolApproval,
-    rejectPendingToolApproval
+    rejectPendingToolApproval,
+    subAgents,
+    spawnSubAgents,
+    clearSubAgents,
+    contextUsagePercent,
+    lastCompactionSaved,
+    activeFilePath: contextActiveFilePath,
+    whisperAutoStartState
   } = useAI();
 
   const activeConversation = useMemo(
@@ -338,6 +346,17 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // ── Voice input state ──
+  const [voiceState, setVoiceState] = useState<import('../services/VoiceInputService').VoiceState>('idle');
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [micDevices, setMicDevices] = useState<MicDevice[]>([]);
+  const [showMicPicker, setShowMicPicker] = useState(false);
+  const stopVoiceRef = useRef<(() => void) | null>(null);
+  const micPickerRef = useRef<HTMLDivElement | null>(null);
+
+  // ── Sub-agent trigger state ──
+  const [showSubAgentPanel, setShowSubAgentPanel] = useState(false);
 
   const ensureAbsolutePath = useMemo(() => {
     const resolveBaseDirectory = () => {
@@ -599,6 +618,8 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
           .map(item => item.replace(/^\.\/+/, ''))
           .map(item => item.replace(/\\/g, '/'));
         const set = new Set<string>();
+        // Always include active file first so it has priority in context injection
+        if (activeRelativePath && availableFiles.includes(activeRelativePath)) set.add(activeRelativePath);
         normalized.forEach(item => { if (availableFiles.includes(item)) set.add(item); });
         preferredFiles.forEach(item => set.add(item));
         heuristicFiles.forEach(item => { if (set.size < MAX_CONTEXT_FILES) set.add(item); });
@@ -720,6 +741,94 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     setAttachedFiles(prev => prev.filter((_, i) => i !== index));
   };
 
+  // ── Voice service sync with settings ──
+  useEffect(() => {
+    const svc = VoiceInputService.getInstance();
+    svc.updateSettings({
+      enabled: settings.speechEnabled,
+      useWhisper: settings.speechUseWhisper,
+      whisperModel: settings.speechWhisperModel,
+      whisperBaseUrl: settings.baseUrl,
+      micDeviceId: settings.speechMicDeviceId,
+      alwaysReady: settings.speechAlwaysReady
+    });
+    const off = svc.onStateChange(setVoiceState);
+    return off;
+  }, [
+    settings.speechEnabled,
+    settings.speechUseWhisper,
+    settings.speechWhisperModel,
+    settings.baseUrl,
+    settings.speechMicDeviceId,
+    settings.speechAlwaysReady
+  ]);
+
+  // Close mic picker when clicking outside
+  useEffect(() => {
+    if (!showMicPicker) return;
+    const handle = (e: MouseEvent) => {
+      if (micPickerRef.current && !micPickerRef.current.contains(e.target as Node)) {
+        setShowMicPicker(false);
+      }
+    };
+    document.addEventListener('mousedown', handle);
+    return () => document.removeEventListener('mousedown', handle);
+  }, [showMicPicker]);
+
+  const handleVoiceClick = useCallback(async () => {
+    if (!settings.speechEnabled) return;
+    const svc = VoiceInputService.getInstance();
+
+    // If currently recording → stop
+    if (voiceState === 'recording') {
+      stopVoiceRef.current?.();
+      return;
+    }
+
+    setVoiceError(null);
+
+    // If no mic selected and no warm stream → show picker
+    if (!settings.speechMicDeviceId) {
+      const devices = await svc.getAvailableMics();
+      setMicDevices(devices);
+      if (devices.length > 1) {
+        setShowMicPicker(true);
+        return;
+      }
+      // Only one device → auto-select and proceed
+      if (devices[0]) {
+        updateSettings({ speechMicDeviceId: devices[0].deviceId });
+      }
+    }
+
+    const stop = await svc.startRecording(
+      (text) => {
+        if (text) setInput(prev => prev ? `${prev} ${text}` : text);
+      },
+      (err) => setVoiceError(err)
+    );
+    stopVoiceRef.current = stop;
+  }, [settings.speechEnabled, settings.speechMicDeviceId, updateSettings, voiceState]);
+
+  const handleMicSelect = useCallback(async (deviceId: string) => {
+    updateSettings({ speechMicDeviceId: deviceId });
+    setShowMicPicker(false);
+    const svc = VoiceInputService.getInstance();
+    const stop = await svc.startRecording(
+      (text) => { if (text) setInput(prev => prev ? `${prev} ${text}` : text); },
+      (err) => setVoiceError(err)
+    );
+    stopVoiceRef.current = stop;
+  }, [updateSettings]);
+
+  const handleSubAgentTrigger = useCallback(async () => {
+    const task = input.trim();
+    if (!task) return;
+    setInput('');
+    setShowSubAgentPanel(true);
+    await spawnSubAgents(task);
+  }, [input, spawnSubAgents]);
+
   const handleSend = async () => {
     if (!input.trim() && !attachedFiles.length) return;
     if (isThinking || isAutoContextBusy) return;
@@ -778,10 +887,16 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     }
   };
 
-  const handleQuickPrompt = (prompt: string) => {
-    setInput(prompt);
+  const handleQuickPrompt = useCallback((prompt: string) => {
+    const currentFile = contextActiveFilePath || activeFilePath;
+    if (currentFile && (prompt.toLowerCase().includes('current file') || prompt.toLowerCase().includes('selected code'))) {
+      const fileName = currentFile.split(/[\\/]/).pop() || currentFile;
+      setInput(`${prompt}\n\nActive file: ${fileName}\nFull path: ${currentFile}`);
+    } else {
+      setInput(prompt);
+    }
     textareaRef.current?.focus();
-  };
+  }, [contextActiveFilePath, activeFilePath]);
 
   // Close settings menu when clicking outside
   useEffect(() => {
@@ -1190,6 +1305,23 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
             </select>
           </div>
           <div className="ai-chat-header-right">
+            <div className="ai-context-usage-indicator" title={`Context: ${contextUsagePercent}%`}>
+              <svg width="20" height="20" viewBox="0 0 20 20">
+                <circle cx="10" cy="10" r="8" fill="none" stroke="#2d313a" strokeWidth="2" />
+                <circle
+                  cx="10"
+                  cy="10"
+                  r="8"
+                  fill="none"
+                  stroke={contextUsagePercent >= 85 ? '#f87171' : contextUsagePercent >= 60 ? '#fbbf24' : '#34d399'}
+                  strokeWidth="2"
+                  strokeDasharray={`${(contextUsagePercent / 100) * 50.27} 50.27`}
+                  strokeLinecap="round"
+                  transform="rotate(-90 10 10)"
+                />
+              </svg>
+              <span className="ai-context-usage-text">{contextUsagePercent}%</span>
+            </div>
             <span className={`ai-chat-status-dot ai-chat-status-dot-${connectionStatus}`} title={connectionLabel} />
             {diagnosticErrorCount > 0 && (
               <span className="ai-chat-diagnostic-badge ai-chat-diagnostic-error" title={`${diagnosticErrorCount} error(s) detected`}>
@@ -1344,6 +1476,11 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
             )}
           </div>
         )}
+        {lastCompactionSaved && lastCompactionSaved > 0 && (
+          <div className="ai-chat-compaction-notice">
+            <FiCheck size={12} /> Context compacted: ~{lastCompactionSaved} tokens saved
+          </div>
+        )}
         <div ref={messageEndRef} />
       </div>
 
@@ -1483,13 +1620,55 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
             >
               <FiSettings size={15} />
             </button>
+            {settings.speechEnabled && (
+              <div style={{ position: 'relative' }}>
+                <button
+                  type="button"
+                  className={`ai-chat-input-icon-btn ai-voice-btn ${voiceState === 'recording' ? 'recording' : voiceState === 'transcribing' ? 'transcribing' : ''}`}
+                  onClick={handleVoiceClick}
+                  title={voiceState === 'recording' ? 'Stop recording' : voiceState === 'transcribing' ? 'Transcribing...' : 'Start voice input'}
+                  disabled={voiceState === 'transcribing' || voiceState === 'acquiring'}
+                >
+                  {voiceState === 'recording' ? <FiMicOff size={15} /> : <FiMic size={15} />}
+                </button>
+                {showMicPicker && micDevices.length > 0 && (
+                  <div className="ai-mic-picker" ref={micPickerRef}>
+                    <div className="ai-mic-picker-title">Select Microphone</div>
+                    {micDevices.map(d => (
+                      <button
+                        key={d.deviceId}
+                        type="button"
+                        className={`ai-mic-picker-item ${d.deviceId === settings.speechMicDeviceId ? 'active' : ''}`}
+                        onClick={() => handleMicSelect(d.deviceId)}
+                      >
+                        {d.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             {autoContextEnabled && (
               <span className="ai-chat-context-indicator" title="Smart Context active">
                 <FiZap size={12} /> Context
               </span>
             )}
+            {voiceError && (
+              <span className="ai-voice-error" title={voiceError}>
+                <FiAlertTriangle size={12} />
+              </span>
+            )}
           </div>
           <div className="ai-chat-input-bar-right">
+            <button
+              type="button"
+              className="ai-chat-input-icon-btn"
+              onClick={() => { setShowSubAgentPanel(v => !v); if (subAgents.length === 0 && !showSubAgentPanel) {} }}
+              title="Sub-Agents"
+              style={{ opacity: subAgents.length > 0 ? 1 : 0.5 }}
+            >
+              <FiShield size={13} />
+            </button>
             <span className="ai-chat-input-hint">
               {settings.model ? settings.model.split('/').pop() : 'No model'}
             </span>
@@ -1500,6 +1679,54 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
             )}
           </div>
         </div>
+
+        {/* ─── Sub-Agent panel ─── */}
+        {showSubAgentPanel && (
+          <div className="ai-subagent-panel">
+            <div className="ai-subagent-header">
+              <span>Sub-Agents</span>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <button
+                  type="button"
+                  className="ai-chat-input-icon-btn"
+                  title="Spawn sub-agents for current input"
+                  disabled={!input.trim() || isThinking}
+                  onClick={handleSubAgentTrigger}
+                >
+                  <FiZap size={13} />
+                </button>
+                <button
+                  type="button"
+                  className="ai-chat-input-icon-btn"
+                  title="Clear agents"
+                  onClick={() => { clearSubAgents(); setShowSubAgentPanel(false); }}
+                >
+                  <FiX size={13} />
+                </button>
+              </div>
+            </div>
+            {subAgents.length === 0 ? (
+              <div className="ai-subagent-empty">Type a task and click ⚡ to spawn parallel agents.</div>
+            ) : (
+              <div className="ai-subagent-list">
+                {subAgents.map(agent => (
+                  <div key={agent.id} className={`ai-subagent-item status-${agent.status}`}>
+                    <div className="ai-subagent-item-header">
+                      <span className="ai-subagent-status-dot" />
+                      <span className="ai-subagent-task">{agent.task}</span>
+                      <span className="ai-subagent-badge">{agent.status}</span>
+                    </div>
+                    {(agent.progress || agent.result) && (
+                      <div className="ai-subagent-result">
+                        {agent.progress ?? agent.result}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ─── Settings popup menu ─── */}
         {showSettingsMenu && (
@@ -1583,6 +1810,24 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
 
                   <div className="ai-settings-popup-section">
                     <div className="ai-settings-popup-label">
+                      <FiShield size={12} /> Sub-Agents
+                    </div>
+                    <button
+                      type="button"
+                      className={`ai-chat-toggle ${settings.subAgentsEnabled ? 'active' : ''}`}
+                      onClick={() => updateSettings({ subAgentsEnabled: !settings.subAgentsEnabled })}
+                    >
+                      {settings.subAgentsEnabled ? 'Enabled' : 'Disabled'}
+                    </button>
+                    <span className="ai-settings-popup-hint">
+                      {settings.subAgentsEnabled
+                        ? 'Main agent can spawn sub-agents for parallel tasks'
+                        : 'Sub-agent spawning disabled'}
+                    </span>
+                  </div>
+
+                  <div className="ai-settings-popup-section">
+                    <div className="ai-settings-popup-label">
                       <FiShield size={12} /> Execution
                     </div>
                     <div className="ai-settings-popup-row">
@@ -1639,6 +1884,85 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                       <span className="ai-settings-popup-hint warning">
                         All actions execute without confirmation. Fully unrestricted.
                       </span>
+                    )}
+                  </div>
+
+                  {/* ── Speech section ── */}
+                  <div className="ai-settings-popup-section">
+                    <div className="ai-settings-popup-label"><FiMic size={12} /> Speech to Code</div>
+                    <button
+                      type="button"
+                      className={`ai-chat-toggle ${settings.speechEnabled ? 'active' : ''}`}
+                      onClick={() => updateSettings({ speechEnabled: !settings.speechEnabled })}
+                    >
+                      {settings.speechEnabled ? 'Enabled' : 'Disabled'}
+                    </button>
+                    {settings.speechEnabled && (
+                      <>
+                        <div className="ai-settings-popup-row" style={{ marginTop: 6 }}>
+                          <button
+                            type="button"
+                            className={`ai-chat-toggle ${!settings.speechUseWhisper ? 'active' : ''}`}
+                            onClick={() => updateSettings({ speechUseWhisper: false })}
+                          >
+                            Browser
+                          </button>
+                          <button
+                            type="button"
+                            className={`ai-chat-toggle ${settings.speechUseWhisper ? 'active' : ''}`}
+                            onClick={() => updateSettings({ speechUseWhisper: true })}
+                          >
+                            Whisper
+                          </button>
+                        </div>
+                        {settings.speechUseWhisper && (
+                          <input
+                            className="ai-settings-popup-input"
+                            placeholder="Whisper model (e.g. whisper-1)"
+                            value={settings.speechWhisperModel}
+                            onChange={e => updateSettings({ speechWhisperModel: e.target.value })}
+                            style={{ marginTop: 4 }}
+                          />
+                        )}
+                        <div className="ai-settings-popup-row" style={{ marginTop: 4 }}>
+                          <button
+                            type="button"
+                            className={`ai-chat-toggle ${settings.speechAlwaysReady ? 'active' : ''}`}
+                            onClick={() => updateSettings({ speechAlwaysReady: !settings.speechAlwaysReady })}
+                          >
+                            Always ready
+                          </button>
+                        </div>
+                        <span className="ai-settings-popup-hint">
+                          {settings.speechUseWhisper
+                            ? 'Uses Whisper via LM Studio /v1/audio/transcriptions'
+                            : 'Uses browser built-in SpeechRecognition'}
+                          {settings.speechAlwaysReady ? '. Mic kept warm for instant response.' : ''}
+                        </span>
+                        {settings.speechUseWhisper && whisperAutoStartState.status !== 'idle' && (
+                          <div className="ai-whisper-status">
+                            <span className={`ai-whisper-status-dot status-${whisperAutoStartState.status}`} />
+                            <span className="ai-whisper-status-text">
+                              {whisperAutoStartState.status === 'checking' && 'Checking Whisper...'}
+                              {whisperAutoStartState.status === 'downloading' && `Loading model... ${whisperAutoStartState.progress || 0}%`}
+                              {whisperAutoStartState.status === 'ready' && '✓ Whisper ready'}
+                              {whisperAutoStartState.status === 'error' && `Error: ${whisperAutoStartState.error || 'Unknown'}`}
+                            </span>
+                          </div>
+                        )}
+                        <button
+                          type="button"
+                          className="ai-chat-toggle"
+                          style={{ marginTop: 4 }}
+                          onClick={async () => {
+                            const devices = await VoiceInputService.getInstance().getAvailableMics();
+                            setMicDevices(devices);
+                            setShowMicPicker(true);
+                          }}
+                        >
+                          <FiMic size={11} /> Change Microphone
+                        </button>
+                      </>
                     )}
                   </div>
                 </>

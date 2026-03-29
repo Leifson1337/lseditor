@@ -36,13 +36,14 @@ export class ExtensionService {
     if (typeof window !== 'undefined' && window.electron) {
       this.userDataPath = await window.electron.ipcRenderer.invoke('app:getUserDataPath');
       if (this.userDataPath) {
-        const userExtDir = this.userDataPath + '/extensions';
-        if (!this.extensionRoots.includes(userExtDir)) {
-          this.extensionRoots.push(userExtDir);
-        }
-        this.loadExtensions();
+        this.syncExtensionRoots([this.userDataPath + '/extensions']);
       }
     }
+  }
+
+  private normalizeRoot(root: string): string {
+    const normalized = root.replace(/\\/g, '/').replace(/\/+$/, '');
+    return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
   }
 
   /**
@@ -52,6 +53,32 @@ export class ExtensionService {
   public addExtensionRoot(dir: string): void {
     if (!dir || this.extensionRoots.includes(dir)) return;
     this.extensionRoots.push(dir);
+    this.loadExtensions();
+  }
+
+  public syncExtensionRoots(dirs: string[]): void {
+    const uniqueDirs: string[] = [];
+    const seen = new Set<string>();
+
+    for (const dir of dirs) {
+      if (!dir) continue;
+      const key = this.normalizeRoot(dir);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      uniqueDirs.push(dir);
+    }
+
+    const currentKeys = this.extensionRoots.map(root => this.normalizeRoot(root));
+    const nextKeys = uniqueDirs.map(root => this.normalizeRoot(root));
+    const changed =
+      currentKeys.length !== nextKeys.length ||
+      currentKeys.some((key, index) => key !== nextKeys[index]);
+
+    if (!changed) {
+      return;
+    }
+
+    this.extensionRoots = uniqueDirs;
     this.loadExtensions();
   }
 
