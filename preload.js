@@ -8,7 +8,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   'fs:readDir', 'fs:readFile', 'fs:writeFile', 'fs:appendFile', 'fs:exists', 'fs:listFilesRecursive',
   'fs:checkPathExistsAndIsDirectory', 'fs:createDirectory',
   'fs:deleteFile', 'fs:deleteDirectory', 'fs:renameFile', 'fs:checkPathExists',
-  'fs:stat', 'fs:readFileBinary', 'fs:writeFileBinary',
+  'fs:stat', 'fs:readFileBinary', 'fs:writeFileBinary', 'fs:watch', 'fs:unwatch', 'fs:copy',
   'getDirectoryEntries', 'extension:search', 'extension:install', 'extension:uninstall', 'extension:list',
   'window:minimize', 'window:maximize', 'window:unmaximize', 'window:close', 'window:isMaximized',
   'ai:getBasePrompt', 'ai:chat', 'ai:refactor',
@@ -29,7 +29,8 @@ const ALLOWED_SEND_CHANNELS = [
 const ALLOWED_ON_CHANNELS = [
   'terminal:data', 'terminal:exit', 'terminal:error', 'terminal:output',
   'editor:openFile', 'editor:menu', 'sidebar:switch', 'create-new-text-file',
-  'folder:open', 'file:open', 'editor:findInFilesResults', 'explorer:refresh'
+  'folder:open', 'file:open', 'editor:findInFilesResults', 'explorer:refresh',
+  'fs:watchEvent'
 ];
 
 contextBridge.exposeInMainWorld('electron', {

@@ -838,12 +838,16 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
 
   // ─── Render helpers ───
 
+  const DIFF_CONTEXT_LINES = 3;
+
   const buildDiffRows = (originalContent: string, newContent: string, keyPrefix: string) => {
     const diff = diffLines(originalContent ?? '', newContent ?? '');
-    const rows: Array<{
+
+    // First pass: build all rows with line numbers
+    const allRows: Array<{
       key: string;
       text: string;
-      type: 'added' | 'removed' | 'context';
+      type: 'added' | 'removed' | 'context' | 'separator';
       oldLineNumber: number | null;
       newLineNumber: number | null;
     }> = [];
@@ -857,7 +861,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       const lineCount = text.endsWith('\n') ? lines.length - 1 : lines.length;
 
       for (let index = 0; index < lineCount; index += 1) {
-        rows.push({
+        allRows.push({
           key: `${keyPrefix}-${partIndex}-${index}`,
           text: lines[index] ?? '',
           type,
@@ -867,24 +871,102 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       }
     });
 
-    if (!rows.length) {
-      rows.push({
+    if (!allRows.length) {
+      return [{
         key: `${keyPrefix}-empty`,
         text: '(no changes)',
-        type: 'context',
+        type: 'context' as const,
         oldLineNumber: null,
         newLineNumber: null
-      });
+      }];
     }
 
-    return rows;
+    // Second pass: collapse large context blocks, keep only DIFF_CONTEXT_LINES around changes
+    const hasChanges = allRows.some(r => r.type !== 'context');
+    if (!hasChanges) {
+      return allRows.length <= 10 ? allRows : [{
+        key: `${keyPrefix}-nochange`,
+        text: '(no changes)',
+        type: 'context' as const,
+        oldLineNumber: null,
+        newLineNumber: null
+      }];
+    }
+
+    // Mark which rows to keep (within DIFF_CONTEXT_LINES of a change)
+    const keep = new Array(allRows.length).fill(false);
+    for (let i = 0; i < allRows.length; i++) {
+      if (allRows[i].type !== 'context') {
+        // Keep this row and context lines around it
+        for (let j = Math.max(0, i - DIFF_CONTEXT_LINES); j <= Math.min(allRows.length - 1, i + DIFF_CONTEXT_LINES); j++) {
+          keep[j] = true;
+        }
+      }
+    }
+
+    // Build collapsed result with separator rows for skipped sections
+    const result: typeof allRows = [];
+    let lastKeptIndex = -1;
+
+    for (let i = 0; i < allRows.length; i++) {
+      if (keep[i]) {
+        if (lastKeptIndex >= 0 && i - lastKeptIndex > 1) {
+          const skipped = i - lastKeptIndex - 1;
+          result.push({
+            key: `${keyPrefix}-sep-${i}`,
+            text: `~~~ ${skipped} unchanged line${skipped === 1 ? '' : 's'} ~~~`,
+            type: 'separator',
+            oldLineNumber: null,
+            newLineNumber: null
+          });
+        }
+        result.push(allRows[i]);
+        lastKeptIndex = i;
+      } else if (i === 0 && !keep[i]) {
+        // We'll add separator when first kept row appears
+      }
+    }
+
+    // Add leading separator if first rows were skipped
+    if (result.length > 0 && result[0] !== allRows[0]) {
+      const firstKept = allRows.indexOf(result[0]);
+      if (firstKept > 0) {
+        result.unshift({
+          key: `${keyPrefix}-sep-start`,
+          text: `~~~ ${firstKept} unchanged line${firstKept === 1 ? '' : 's'} ~~~`,
+          type: 'separator',
+          oldLineNumber: null,
+          newLineNumber: null
+        });
+      }
+    }
+
+    // Add trailing separator if last rows were skipped
+    if (result.length > 0) {
+      const lastResult = result[result.length - 1];
+      const lastIdx = allRows.indexOf(lastResult);
+      const trailingSkipped = allRows.length - 1 - lastIdx;
+      if (trailingSkipped > 0) {
+        result.push({
+          key: `${keyPrefix}-sep-end`,
+          text: `~~~ ${trailingSkipped} unchanged line${trailingSkipped === 1 ? '' : 's'} ~~~`,
+          type: 'separator',
+          oldLineNumber: null,
+          newLineNumber: null
+        });
+      }
+    }
+
+    return result;
   };
 
   const renderDiff = (edit: PendingFileEdit) => {
     const rows = buildDiffRows(edit.originalContent ?? '', edit.newContent ?? '', edit.id);
     return (
       <pre className="ai-diff">
-        {rows.map(row => (
+        {rows.map(row => row.type === 'separator' ? (
+          <div key={row.key} className="ai-diff-line separator">{row.text}</div>
+        ) : (
           <div key={row.key} className={`ai-diff-line ${row.type}`}>
             <span className="ai-diff-line-number">{row.oldLineNumber ?? ''}</span>
             <span className="ai-diff-line-number">{row.newLineNumber ?? ''}</span>
@@ -913,7 +995,9 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
           <span className={`tag tag-${preview.action}`}>{preview.action}</span>
         </div>
         <pre className="ai-diff compact">
-          {rows.map(row => (
+          {rows.map(row => row.type === 'separator' ? (
+            <div key={row.key} className="ai-diff-line separator">{row.text}</div>
+          ) : (
             <div key={row.key} className={`ai-diff-line ${row.type}`}>
               <span className="ai-diff-line-number">{row.oldLineNumber ?? ''}</span>
               <span className="ai-diff-line-number">{row.newLineNumber ?? ''}</span>
@@ -987,7 +1071,9 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
           </div>
         </div>
         <pre className="ai-diff compact">
-          {rows.map(row => (
+          {rows.map(row => row.type === 'separator' ? (
+            <div key={row.key} className="ai-diff-line separator">{row.text}</div>
+          ) : (
             <div key={row.key} className={`ai-diff-line ${row.type}`}>
               <span className="ai-diff-line-number">{row.oldLineNumber ?? ''}</span>
               <span className="ai-diff-line-number">{row.newLineNumber ?? ''}</span>

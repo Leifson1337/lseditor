@@ -845,11 +845,6 @@ export async function executeToolCall(
           result = `Error: Failed to write updated content to ${resolvedPath}`;
           break;
         }
-        const verifiedContent = await renderer.invoke('fs:readFile', resolvedPath);
-        if (typeof verifiedContent !== 'string' || verifiedContent !== updatedContent) {
-          result = `Error: Post-replace verification failed for ${resolvedPath}`;
-          break;
-        }
         notifyFileChanged(resolvedPath);
         const prefix = guessed ? `[Resolved from ${args.path} to ${resolvedPath}] ` : '';
         const modeSuffix = replacementMode === 'line-trimmed' ? ', trimmed line match' : '';
@@ -923,10 +918,17 @@ export async function executeToolCall(
           options?.signal?.removeEventListener('abort', abortHandler);
         }
         if (execResult && typeof execResult === 'object') {
+          const MAX_CMD_OUTPUT = 8000;
+          const truncate = (text: string, limit: number) => {
+            if (!text || text.length <= limit) return text;
+            const half = Math.floor(limit / 2) - 30;
+            const skipped = text.length - limit + 60;
+            return `${text.slice(0, half)}\n\n... (${skipped} characters truncated) ...\n\n${text.slice(-half)}`;
+          };
           const parts: string[] = [];
           parts.push(`[command] ${normalizedCommand}`);
-          if (execResult.stdout) parts.push(execResult.stdout);
-          if (execResult.stderr) parts.push(`[stderr] ${execResult.stderr}`);
+          if (execResult.stdout) parts.push(truncate(execResult.stdout, MAX_CMD_OUTPUT));
+          if (execResult.stderr) parts.push(`[stderr] ${truncate(execResult.stderr, MAX_CMD_OUTPUT / 2)}`);
           if (execResult.error) parts.push(`[error] ${execResult.error}`);
           result = parts.length > 0 ? parts.join('\n') : '(no output)';
           if (execResult.code !== 0 && execResult.code !== undefined) {

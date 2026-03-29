@@ -144,6 +144,77 @@ const COMPLETION_MAX_RETRIES = 4;
 const DIAGNOSTIC_SETTLE_MS = 1200;
 const MAX_AUTO_FIX_ROUNDS = 3;
 
+// File extensions that Monaco can validate natively (TS/JS)
+const MONACO_VALIDATED_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts']);
+
+/**
+ * Build a syntax-check command for languages Monaco cannot validate.
+ * Returns null if no checker is known for the extension.
+ */
+const buildSyntaxCheckCommand = (filePath: string): string | null => {
+  const ext = (filePath.match(/\.[^.\\/:]+$/) || [''])[0].toLowerCase();
+  const escaped = filePath.replace(/'/g, "\\'");
+  switch (ext) {
+    case '.py':
+      return `python -c "import py_compile; py_compile.compile(r'${escaped}', doraise=True)"`;
+    case '.json':
+      return `python -c "import json; json.load(open(r'${escaped}', encoding='utf-8'))"`;
+    case '.yaml':
+    case '.yml':
+      return `python -c "import yaml; yaml.safe_load(open(r'${escaped}', encoding='utf-8'))"`;
+    case '.c':
+    case '.h':
+      return `gcc -fsyntax-only "${escaped}"`;
+    case '.cpp':
+    case '.cc':
+    case '.cxx':
+    case '.hpp':
+      return `g++ -fsyntax-only "${escaped}"`;
+    case '.java':
+      return `javac -d /dev/null "${escaped}" 2>&1 || javac -d NUL "${escaped}"`;
+    case '.rs':
+      return `rustc --edition 2021 --crate-type lib "${escaped}" --error-format short 2>&1 | head -20`;
+    case '.go':
+      return `go vet "${escaped}"`;
+    case '.rb':
+      return `ruby -c "${escaped}"`;
+    case '.php':
+      return `php -l "${escaped}"`;
+    case '.sh':
+    case '.bash':
+      return `bash -n "${escaped}"`;
+    case '.ps1':
+      return `powershell -NoProfile -Command "try { [System.Management.Automation.Language.Parser]::ParseFile('${escaped}', [ref]$null, [ref]$null) | Out-Null; 'OK' } catch { $_.Exception.Message }"`;
+    default:
+      return null;
+  }
+};
+
+/**
+ * Run a syntax check command and return errors (if any), or null if clean/unavailable.
+ */
+const runSyntaxCheck = async (
+  filePath: string,
+  signal?: AbortSignal
+): Promise<string | null> => {
+  const cmd = buildSyntaxCheckCommand(filePath);
+  if (!cmd) return null;
+  const renderer = (window as any).electron?.ipcRenderer;
+  if (!renderer) return null;
+  try {
+    const result = await renderer.invoke('exec', cmd, {
+      cwd: filePath.replace(/[\\/][^\\/]+$/, ''),
+      requestId: `syntax-check-${Date.now()}`
+    });
+    if (!result || typeof result !== 'object') return null;
+    if (result.code === 0 || result.code === undefined) return null;
+    const output = [result.stderr, result.stdout, result.error].filter(Boolean).join('\n').trim();
+    return output ? output.slice(0, 2000) : null;
+  } catch {
+    return null;
+  }
+};
+
 const DEFAULT_BASE_PROMPT = `Du bist LS AI, der integrierte Assistent des LS Editors.
 Du hast Tools zum Lesen, Schreiben, Suchen und Ausfuehren von Dateien und Befehlen im Workspace.
 
@@ -333,7 +404,7 @@ const statesIntentWithoutActing = (content: string): boolean => {
   return /(I'll now|I will now|Let me now|I'm going to|Ich werde|Ich füge|Lass mich|Als nächstes|Now I'll|Next I'll|Let me |I'll |I need to |I should ).*(\.|:|\.\.\.)\s*$/im.test(content);
 };
 
-const READ_ONLY_TOOL_NAMES = new Set(['findFile', 'readFile', 'listFiles', 'searchFiles', 'getDiagnostics']);
+const READ_ONLY_TOOL_NAMES = new Set(['findFile', 'readFile', 'listFiles', 'searchFiles', 'searchWorkspace', 'getDiagnostics']);
 const MUTATING_TOOL_NAMES = new Set(['writeFile', 'appendToFile', 'replaceInFile', 'createDirectory', 'deleteFile', 'renameFile']);
 const EXECUTION_TOOL_NAMES = new Set(['runCommand']);
 
@@ -738,6 +809,26 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
           action: originalContent ? 'update' : 'create',
           originalContent,
           newContent: typeof args.content === 'string' ? args.content : ''
+        };
+      }
+
+      if (toolCall.function.name === 'appendToFile') {
+        const absolutePath = resolveToolTargetPath(targetPath, projectPathRef.current);
+        let originalContent = '';
+        try {
+          const diskContent = await renderer.invoke('fs:readFile', absolutePath);
+          if (typeof diskContent === 'string') originalContent = diskContent;
+        } catch {
+          return undefined;
+        }
+        const appendContent = typeof args.content === 'string' ? args.content : '';
+        if (!appendContent) return undefined;
+        return {
+          kind: 'file',
+          path: targetPath,
+          action: 'update',
+          originalContent,
+          newContent: originalContent + appendContent
         };
       }
 
@@ -1594,58 +1685,111 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
 
             const toolResults: ToolResult[] = [];
             let roundPerformedMutation = false;
-            for (let index = 0; index < toolCalls.length; index += 1) {
-              const tc = toolCalls[index];
-              setToolStatus(summarizeToolCall(tc));
 
+            // Run all-read-only batches in parallel for speed
+            const allReadOnly = toolCalls.every(tc => READ_ONLY_TOOL_NAMES.has(tc.function.name));
+
+            if (allReadOnly && toolCalls.length > 1) {
+              setToolStatus(`Running ${toolCalls.length} read-only tools...`);
               updateToolMessage(currentState.conversationId, toolMessage.id, current =>
-                current.map((entry, entryIndex) =>
-                  entryIndex === index ? { ...entry, status: 'running' } : entry
+                current.map(entry => ({ ...entry, status: 'running' }))
+              );
+              const parallelResults = await Promise.all(
+                toolCalls.map(tc =>
+                  executeToolCall(tc, projectPathRef.current, {
+                    signal: currentState.controller.signal,
+                    requestId: `${currentState.requestId}:${tc.id}`
+                  })
                 )
               );
-
-              const toolResult = await executeToolCall(tc, projectPathRef.current, {
-                signal: currentState.controller.signal,
-                requestId: `${currentState.requestId}:${tc.id}`
-              });
-              toolResults.push(toolResult);
-              if (
-                MUTATING_TOOL_NAMES.has(tc.function.name) &&
-                !toolResult.content.startsWith('Error')
-              ) {
-                currentState.performedMutationTool = true;
-                roundPerformedMutation = true;
-              }
-              currentState.executedTools = [
-                ...currentState.executedTools,
-                {
-                  name: tc.function.name,
-                  summary: summarizeToolCall(tc),
-                  result: toolResult.content,
-                  status: toolResult.content.startsWith('Error') ? 'error' : 'done'
-                }
-              ];
-              if (tc.function.name === 'readFile' && !toolResult.content.startsWith('Error')) {
-                const args = safeJsonParse(tc.function.arguments || '{}');
-                if (args.startLine != null || args.endLine != null) {
-                  const readPath = normalizeTrackedPath(String(args.path || ''));
-                  currentState.replaceReReadRequiredPaths = currentState.replaceReReadRequiredPaths.filter(
-                    tracked => tracked !== readPath
-                  );
+              for (let index = 0; index < toolCalls.length; index += 1) {
+                const tc = toolCalls[index];
+                const toolResult = parallelResults[index];
+                toolResults.push(toolResult);
+                currentState.executedTools = [
+                  ...currentState.executedTools,
+                  {
+                    name: tc.function.name,
+                    summary: summarizeToolCall(tc),
+                    result: toolResult.content,
+                    status: toolResult.content.startsWith('Error') ? 'error' : 'done'
+                  }
+                ];
+                if (tc.function.name === 'readFile' && !toolResult.content.startsWith('Error')) {
+                  const args = safeJsonParse(tc.function.arguments || '{}');
+                  if (args.startLine != null || args.endLine != null) {
+                    const readPath = normalizeTrackedPath(String(args.path || ''));
+                    currentState.replaceReReadRequiredPaths = currentState.replaceReReadRequiredPaths.filter(
+                      tracked => tracked !== readPath
+                    );
+                  }
                 }
               }
-
               updateToolMessage(currentState.conversationId, toolMessage.id, current =>
-                current.map((entry, entryIndex) =>
-                  entryIndex === index
-                    ? {
-                        ...entry,
-                        status: toolResult.content.startsWith('Error') ? 'error' : 'done',
-                        result: toolResult.content.substring(0, 500)
-                      }
-                    : entry
-                )
+                current.map((entry, entryIndex) => {
+                  const toolResult = parallelResults[entryIndex];
+                  if (!toolResult) return entry;
+                  return {
+                    ...entry,
+                    status: toolResult.content.startsWith('Error') ? 'error' : 'done',
+                    result: toolResult.content.substring(0, 500)
+                  };
+                })
               );
+            } else {
+              for (let index = 0; index < toolCalls.length; index += 1) {
+                const tc = toolCalls[index];
+                setToolStatus(summarizeToolCall(tc));
+
+                updateToolMessage(currentState.conversationId, toolMessage.id, current =>
+                  current.map((entry, entryIndex) =>
+                    entryIndex === index ? { ...entry, status: 'running' } : entry
+                  )
+                );
+
+                const toolResult = await executeToolCall(tc, projectPathRef.current, {
+                  signal: currentState.controller.signal,
+                  requestId: `${currentState.requestId}:${tc.id}`
+                });
+                toolResults.push(toolResult);
+                if (
+                  MUTATING_TOOL_NAMES.has(tc.function.name) &&
+                  !toolResult.content.startsWith('Error')
+                ) {
+                  currentState.performedMutationTool = true;
+                  roundPerformedMutation = true;
+                }
+                currentState.executedTools = [
+                  ...currentState.executedTools,
+                  {
+                    name: tc.function.name,
+                    summary: summarizeToolCall(tc),
+                    result: toolResult.content,
+                    status: toolResult.content.startsWith('Error') ? 'error' : 'done'
+                  }
+                ];
+                if (tc.function.name === 'readFile' && !toolResult.content.startsWith('Error')) {
+                  const args = safeJsonParse(tc.function.arguments || '{}');
+                  if (args.startLine != null || args.endLine != null) {
+                    const readPath = normalizeTrackedPath(String(args.path || ''));
+                    currentState.replaceReReadRequiredPaths = currentState.replaceReReadRequiredPaths.filter(
+                      tracked => tracked !== readPath
+                    );
+                  }
+                }
+
+                updateToolMessage(currentState.conversationId, toolMessage.id, current =>
+                  current.map((entry, entryIndex) =>
+                    entryIndex === index
+                      ? {
+                          ...entry,
+                          status: toolResult.content.startsWith('Error') ? 'error' : 'done',
+                          result: toolResult.content.substring(0, 500)
+                        }
+                      : entry
+                  )
+                );
+              }
             }
 
             currentState.apiMessages = [
@@ -1726,24 +1870,60 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
               currentState.nonMutatingToolRounds = 0;
             }
 
-            // Auto-error-detection: after mutations, wait for Monaco diagnostics and inject errors
+            // Auto-error-detection: after mutations, check Monaco diagnostics + run syntax checks
             if (
               roundPerformedMutation &&
               (currentState.autoFixRounds ?? 0) < MAX_AUTO_FIX_ROUNDS
             ) {
               await delay(DIAGNOSTIC_SETTLE_MS);
-              const errors = getErrorDiagnostics();
-              if (errors.length > 0) {
-                const errorLines = errors
-                  .slice(0, 15)
-                  .map(d => `[ERROR] ${d.file}:${d.startLine}:${d.startColumn} - ${d.message}${d.code ? ` (${d.code})` : ''}`)
-                  .join('\n');
+              const allErrorLines: string[] = [];
+
+              // 1) Monaco diagnostics (TS/JS)
+              const monacoErrors = getErrorDiagnostics();
+              for (const d of monacoErrors.slice(0, 10)) {
+                allErrorLines.push(`[ERROR] ${d.file}:${d.startLine}:${d.startColumn} - ${d.message}${d.code ? ` (${d.code})` : ''}`);
+              }
+
+              // 2) Active syntax check for non-TS/JS files that were mutated this round
+              const mutatedPaths = new Set<string>();
+              for (let ti = 0; ti < toolCalls.length; ti++) {
+                const tc = toolCalls[ti];
+                if (!MUTATING_TOOL_NAMES.has(tc.function.name)) continue;
+                if (toolResults[ti]?.content?.startsWith('Error')) continue;
+                const tcArgs = safeJsonParse(tc.function.arguments || '{}');
+                const tcPath = String(tcArgs.path || '');
+                if (!tcPath) continue;
+                const ext = (tcPath.match(/\.[^.\\/:]+$/) || [''])[0].toLowerCase();
+                if (MONACO_VALIDATED_EXTENSIONS.has(ext)) continue;
+                const fullPath = resolveToolTargetPath(tcPath, projectPathRef.current);
+                if (!mutatedPaths.has(fullPath)) {
+                  mutatedPaths.add(fullPath);
+                }
+              }
+              if (mutatedPaths.size > 0) {
+                setToolStatus('Running syntax checks...');
+                const syntaxResults = await Promise.all(
+                  Array.from(mutatedPaths).map(async fp => {
+                    const err = await runSyntaxCheck(fp, currentState.controller.signal);
+                    return err ? { file: fp, error: err } : null;
+                  })
+                );
+                for (const sr of syntaxResults) {
+                  if (sr) {
+                    // Take first few lines of the syntax error
+                    const lines = sr.error.split('\n').slice(0, 5).join('\n');
+                    allErrorLines.push(`[SYNTAX ERROR] ${sr.file}:\n${lines}`);
+                  }
+                }
+              }
+
+              if (allErrorLines.length > 0) {
                 currentState.autoFixRounds = (currentState.autoFixRounds ?? 0) + 1;
                 currentState.apiMessages = [
                   ...currentState.apiMessages,
                   {
                     role: 'user',
-                    content: `The editor detected ${errors.length} error(s) after your changes. Fix them now:\n${errorLines}\n\nRead the affected file(s) if needed and apply corrections with replaceInFile. Do not ignore these errors.`
+                    content: `${allErrorLines.length} error(s) detected after your changes. Fix them now:\n${allErrorLines.join('\n')}\n\nRead the affected file(s) if needed and apply corrections with replaceInFile. Do not ignore these errors.`
                   }
                 ];
                 setToolStatus('Fixing detected errors...');

@@ -1707,6 +1707,21 @@
   color: #6b7280;
 }
 
+.ai-diff-line.separator {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  color: #4b5563;
+  font-style: italic;
+  font-size: 11px;
+  border-top: 1px dashed #2d3039;
+  border-bottom: 1px dashed #2d3039;
+  margin: 2px 0;
+  padding: 2px 14px;
+  min-height: 20px;
+  background: rgba(255, 255, 255, 0.015);
+}
+
 .ai-diff-gutter {
   width: 18px;
   color: #4b5563;

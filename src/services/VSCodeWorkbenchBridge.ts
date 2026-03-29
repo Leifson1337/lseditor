@@ -122,11 +122,36 @@ class ElectronFileSystemProvider implements IFileSystemProviderWithFileReadWrite
   readonly onDidChangeCapabilities = VSCodeEvent.None;
 
   private readonly fileChanges = new Emitter<readonly IFileChange[]>();
+  private watchIdCounter = 0;
 
   readonly onDidChangeFile = this.fileChanges.event;
 
-  watch(): IDisposable {
-    return { dispose() {} };
+  watch(resource: URI): IDisposable {
+    const ipcRenderer = getIpcRenderer();
+    if (!ipcRenderer) {
+      return { dispose() {} };
+    }
+
+    const watchId = `fsp-watch-${++this.watchIdCounter}-${Date.now()}`;
+
+    const handleWatchEvent = (_event: unknown, payload: { watchId: string; path: string; type: number }) => {
+      if (payload?.watchId !== watchId) return;
+      this.fireChanges([{ type: payload.type as FileChangeType, resource: URI.file(payload.path) }]);
+    };
+
+    const electron = (window as any).electron?.ipcRenderer;
+    electron?.on('fs:watchEvent', handleWatchEvent);
+
+    ipcRenderer.invoke('fs:watch', watchId, resource.fsPath).catch((err: unknown) => {
+      console.warn('[VSCodeBridge] fs:watch failed:', err);
+    });
+
+    return {
+      dispose: () => {
+        electron?.removeListener('fs:watchEvent', handleWatchEvent);
+        ipcRenderer.invoke('fs:unwatch', watchId).catch(() => {});
+      }
+    };
   }
 
   async stat(resource: URI): Promise<IStat> {
@@ -260,6 +285,27 @@ class ElectronFileSystemProvider implements IFileSystemProviderWithFileReadWrite
       { type: FileChangeType.DELETED, resource: from },
       { type: FileChangeType.ADDED, resource: to }
     ]);
+  }
+
+  async copy(from: URI, to: URI, opts: IFileOverwriteOptions): Promise<void> {
+    const ipcRenderer = getIpcRenderer();
+    if (!ipcRenderer) {
+      throw toProviderError(new Error('ipcRenderer unavailable'), FileSystemProviderErrorCode.Unavailable, from);
+    }
+
+    if (!opts.overwrite) {
+      const exists = await ipcRenderer.invoke('fs:exists', to.fsPath) as boolean;
+      if (exists) {
+        throw toProviderError(new Error('Target exists'), FileSystemProviderErrorCode.FileExists, to);
+      }
+    }
+
+    const success = await ipcRenderer.invoke('fs:copy', from.fsPath, to.fsPath, opts.overwrite ?? false) as boolean;
+    if (!success) {
+      throw toProviderError(new Error('Copy failed'), FileSystemProviderErrorCode.Unknown, from);
+    }
+
+    this.fireChanges([{ type: FileChangeType.ADDED, resource: to }]);
   }
 
   private fireChanges(changes: IFileChange[]): void {

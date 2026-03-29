@@ -3,3 +3,5 @@ dist/
 *.log
 .DS_Store
 *.exe
+.claude/settings.local.json
+/.claude

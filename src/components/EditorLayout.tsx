@@ -24,6 +24,11 @@ import {
 } from '../utils/pathUtils';
 import { ExtensionHostKind, registerExtension } from '@codingame/monaco-vscode-api/extensions';
 import { pathToFileURL } from 'url';
+import { Extensions as ViewExtensions, ViewContainerLocation } from '@codingame/monaco-vscode-api/vscode/vs/workbench/common/views';
+import { Registry as VSCodeRegistry } from '@codingame/monaco-vscode-api/vscode/vs/platform/registry/common/platform';
+import { SyncDescriptor } from '@codingame/monaco-vscode-api/vscode/vs/platform/instantiation/common/descriptors';
+import { ViewPaneContainer } from '@codingame/monaco-vscode-views-service-override';
+import { TreeViewPane } from '@codingame/monaco-vscode-api/vscode/vs/workbench/browser/parts/views/treeView';
 
 // Props for the EditorLayout component
 interface EditorLayoutProps {
@@ -123,6 +128,64 @@ const configureDiagnostics = (monaco: Monaco) => {
   }
 };
 
+/**
+ * Manually registers VS Code view containers and their views with the global
+ * IViewContainersRegistry / IViewsRegistry so that IViewDescriptorService can
+ * find them via getViewContainerById(). This is necessary because
+ * registerExtension() alone does not push contributes.viewsContainers entries
+ * into those registries in time.
+ */
+function registerManifestContributions(manifest: any): void {
+  if (!manifest?.contributes) return;
+  try {
+    const vcReg = VSCodeRegistry.as<any>((ViewExtensions as any).ViewContainersRegistry);
+    const viewsReg = VSCodeRegistry.as<any>((ViewExtensions as any).ViewsRegistry);
+    if (!vcReg || !viewsReg) return;
+
+    const locationMap: Array<[string, any]> = [
+      ['activitybar', ViewContainerLocation.Sidebar],
+      ['panel', ViewContainerLocation.Panel],
+    ];
+
+    for (const [loc, vscLoc] of locationMap) {
+      const containers: any[] = manifest.contributes?.viewsContainers?.[loc] ?? [];
+      for (const c of containers) {
+        if (!c.id) continue;
+        // registerViewContainer returns the existing container if already registered — safe to call
+        const container = vcReg.registerViewContainer(
+          {
+            id: c.id,
+            title: c.title ?? c.id,
+            ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [c.id, { mergeViewWithContainerWhenSingleView: true }]),
+            hideIfEmpty: false,
+          },
+          vscLoc,
+          { doNotRegisterOpenCommand: true }
+        );
+
+        // Register views for this container — skip any that are already registered
+        const viewDefs: any[] = manifest.contributes?.views?.[c.id] ?? [];
+        const newViews = viewDefs
+          .filter((v: any) => v.id && viewsReg.getView(v.id) === null)
+          .map((v: any) => ({
+            id: v.id,
+            name: v.name ?? v.id,
+            ctorDescriptor: new SyncDescriptor(TreeViewPane, [{ id: v.id, title: v.name ?? v.id }]),
+            canMoveView: true,
+            canToggleVisibility: true,
+            collapsed: false,
+            order: v.order ?? 0,
+          }));
+        if (newViews.length > 0) {
+          viewsReg.registerViews(newViews, container);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[ViewContainers] Manifest registration failed:', e);
+  }
+}
+
 export const EditorLayout: React.FC<EditorLayoutProps> = ({
   initialContent = '',
   initialLanguage = 'typescript',
@@ -219,6 +282,10 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
           const extensionId = `${manifest.publisher}.${manifest.name}`;
           if (seenExtensions.has(extensionId)) continue;
           seenExtensions.add(extensionId);
+
+          // Pre-register view containers/views in VS Code registries so
+          // IViewDescriptorService.getViewContainerById() can find them.
+          registerManifestContributions(manifest);
 
           if (!registeredExtensionsRef.current.has(extensionId)) {
             const hostKind = manifest.browser && !manifest.main
@@ -322,7 +389,10 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
     const monaco = monacoInstanceRef.current;
     if (monaco) {
       markerListenerRef.current?.dispose();
-      markerListenerRef.current = monaco.editor.onDidChangeMarkers((uris) => {
+      markerListenerRef.current = monaco.editor.onDidChangeMarkers(() => {
+        // Collect markers from ALL models, not just the changed URIs,
+        // so diagnostics from other open files are not lost.
+        const allMarkers = monaco.editor.getModelMarkers({});
         const allDiagnostics: Array<{
           file: string;
           severity: string;
@@ -334,23 +404,20 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
           code?: string;
         }> = [];
 
-        for (const uri of uris) {
-          const markers = monaco.editor.getModelMarkers({ resource: uri });
-          const filePath = uri.path || uri.toString();
-          for (const marker of markers) {
-            // Only report errors and warnings (severity 8 = Error, 4 = Warning)
-            if (marker.severity < 4) continue;
-            allDiagnostics.push({
-              file: filePath,
-              severity: marker.severity === 8 ? 'error' : 'warning',
-              message: marker.message,
-              startLine: marker.startLineNumber,
-              startColumn: marker.startColumn,
-              endLine: marker.endLineNumber,
-              endColumn: marker.endColumn,
-              code: marker.code ? String(typeof marker.code === 'object' ? marker.code.value : marker.code) : undefined
-            });
-          }
+        for (const marker of allMarkers) {
+          // Only report errors and warnings (severity 8 = Error, 4 = Warning)
+          if (marker.severity < 4) continue;
+          const filePath = marker.resource?.path || marker.resource?.toString() || '';
+          allDiagnostics.push({
+            file: filePath,
+            severity: marker.severity === 8 ? 'error' : 'warning',
+            message: marker.message,
+            startLine: marker.startLineNumber,
+            startColumn: marker.startColumn,
+            endLine: marker.endLineNumber,
+            endColumn: marker.endColumn,
+            code: marker.code ? String(typeof marker.code === 'object' ? (marker.code as any).value : marker.code) : undefined
+          });
         }
 
         window.dispatchEvent(new CustomEvent('editor:diagnosticsChanged', {

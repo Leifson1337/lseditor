@@ -15,7 +15,7 @@ export interface ExtensionContribution {
 export class ExtensionService {
   private static instance: ExtensionService;
   private userDataPath: string | null = null;
-  private extensionsPath: string | null = null;
+  private extensionRoots: string[] = [];
   private contributions: Map<string, ExtensionContribution> = new Map();
   private listeners: ((contributions: ExtensionContribution[]) => void)[] = [];
   // Cache for icon base64 data to avoid repeated reads
@@ -35,56 +35,69 @@ export class ExtensionService {
   private async init() {
     if (typeof window !== 'undefined' && window.electron) {
       this.userDataPath = await window.electron.ipcRenderer.invoke('app:getUserDataPath');
-      // Also try to get project path if possible, but this is a global service.
       if (this.userDataPath) {
-        this.extensionsPath = `${this.userDataPath}\\extensions`;
+        const userExtDir = this.userDataPath + '/extensions';
+        if (!this.extensionRoots.includes(userExtDir)) {
+          this.extensionRoots.push(userExtDir);
+        }
         this.loadExtensions();
       }
     }
   }
 
+  /**
+   * Register an additional directory to scan for extensions (e.g. project-local extensions).
+   * Triggers a reload if the root hasn't been added before.
+   */
+  public addExtensionRoot(dir: string): void {
+    if (!dir || this.extensionRoots.includes(dir)) return;
+    this.extensionRoots.push(dir);
+    this.loadExtensions();
+  }
+
   public async loadExtensions() {
-    if (!this.extensionsPath || !window.electron) return;
+    if (!window.electron) return;
 
-    try {
-      const exists = await window.electron.ipcRenderer.invoke('fs:checkPathExistsAndIsDirectory', this.extensionsPath);
-      if (!exists) return;
+    const newContributions = new Map<string, ExtensionContribution>();
 
-      const entries = await window.electron.ipcRenderer.invoke('fs:readDir', this.extensionsPath);
-      if (!Array.isArray(entries)) return;
+    for (const rootDir of this.extensionRoots) {
+      try {
+        const exists = await window.electron.ipcRenderer.invoke('fs:checkPathExistsAndIsDirectory', rootDir);
+        if (!exists) continue;
 
-      const newContributions = new Map<string, ExtensionContribution>();
+        const entries = await window.electron.ipcRenderer.invoke('fs:readDir', rootDir);
+        if (!Array.isArray(entries)) continue;
 
-      for (const entry of entries) {
-        if (!entry.isDirectory) continue;
-        const extPath = `${this.extensionsPath}\\${entry.name}`;
-        const packageJsonPath = `${extPath}\\package.json`;
+        for (const entry of entries) {
+          if (!entry.isDirectory) continue;
+          const extPath = rootDir + '/' + entry.name;
+          const packageJsonPath = extPath + '/package.json';
 
-        try {
-          if (await window.electron.ipcRenderer.invoke('fs:exists', packageJsonPath)) {
-            const content = await window.electron.ipcRenderer.invoke('fs:readFile', packageJsonPath);
-            const packageJson = JSON.parse(content);
+          try {
+            if (await window.electron.ipcRenderer.invoke('fs:exists', packageJsonPath)) {
+              const content = await window.electron.ipcRenderer.invoke('fs:readFile', packageJsonPath);
+              const packageJson = JSON.parse(content);
 
-            newContributions.set(entry.name, {
-              id: entry.name,
-              extensionPath: extPath,
-              manifest: packageJson,
-              viewsContainers: packageJson.contributes?.viewsContainers,
-              views: packageJson.contributes?.views,
-              commands: packageJson.contributes?.commands,
-            });
+              newContributions.set(entry.name, {
+                id: entry.name,
+                extensionPath: extPath,
+                manifest: packageJson,
+                viewsContainers: packageJson.contributes?.viewsContainers,
+                views: packageJson.contributes?.views,
+                commands: packageJson.contributes?.commands,
+              });
+            }
+          } catch (e) {
+            console.warn('Failed to parse extension manifest', entry.name, e);
           }
-        } catch (e) {
-          console.warn('Failed to parse extension manifest', entry.name, e);
         }
+      } catch (e) {
+        console.error('Error loading extensions from root', rootDir, e);
       }
-
-      this.contributions = newContributions;
-      this.notifyListeners();
-
-    } catch (e) {
-      console.error('Error loading extensions in service:', e);
     }
+
+    this.contributions = newContributions;
+    this.notifyListeners();
   }
 
   public getAllContributions(): ExtensionContribution[] {
@@ -99,7 +112,7 @@ export class ExtensionService {
     const contrib = this.contributions.get(extensionId);
     if (!contrib || !relativePath) return undefined;
 
-    const fullPath = `${contrib.extensionPath}\\${relativePath}`; // Simple windows join
+    const fullPath = contrib.extensionPath + '/' + relativePath.replace(/^\//, '');
     // Check cache
     if (this.iconCache.has(fullPath)) {
       return this.iconCache.get(fullPath);
@@ -126,18 +139,22 @@ export class ExtensionService {
     return undefined;
   }
 
-  public getSidebarItems(): { id: string, title: string, icon?: string, extensionId: string }[] {
-    const items: { id: string, title: string, icon?: string, extensionId: string }[] = [];
+  public getSidebarItems(): { id: string, title: string, icon?: string, extensionId: string, location: string }[] {
+    const items: { id: string, title: string, icon?: string, extensionId: string, location: string }[] = [];
     this.contributions.forEach(contrib => {
-      if (contrib.viewsContainers?.activitybar) {
-        contrib.viewsContainers.activitybar.forEach((container: any) => {
-          items.push({
-            id: container.id,
-            title: container.title,
-            icon: container.icon,
-            extensionId: contrib.id
+      for (const location of ['activitybar', 'panel'] as const) {
+        const containers = contrib.viewsContainers?.[location];
+        if (Array.isArray(containers)) {
+          containers.forEach((container: any) => {
+            items.push({
+              id: container.id,
+              title: container.title,
+              icon: container.icon,
+              extensionId: contrib.id,
+              location
+            });
           });
-        });
+        }
       }
     });
     return items;

@@ -36,6 +36,7 @@ interface TerminalSession {
 
 const terminalSessions = new Map<string, TerminalSession>();
 const aiCommandProcesses = new Map<string, ChildProcessWithoutNullStreams>();
+const fsWatchers = new Map<string, fs.FSWatcher>();
 
 interface RemoteVersionResponse {
   program?: {
@@ -1706,6 +1707,79 @@ ipcMain.handle('editor:findInFiles', async (event, searchText, searchPath, optio
   }
 });
 
+// File system: watch a path for changes (used by VS Code file service)
+// Note: fs.watch with { recursive: true } is only fully supported on Windows and macOS.
+ipcMain.handle('fs:watch', async (event, watchId: string, watchPath: string) => {
+  assertTrustedSender(event);
+  try {
+    const normalized = validatePath(watchPath);
+    // Close any previous watcher with the same id
+    const existing = fsWatchers.get(watchId);
+    if (existing) {
+      try { existing.close(); } catch {}
+      fsWatchers.delete(watchId);
+    }
+    // Skip non-existent paths silently — VS Code probes for config files
+    // that may not exist yet; the caller will re-watch when files appear.
+    if (!fs.existsSync(normalized)) {
+      return true;
+    }
+    const watcher = fs.watch(normalized, { recursive: true, persistent: false }, (eventType, filename) => {
+      if (!event.sender.isDestroyed()) {
+        const changedPath = filename ? path.join(normalized, filename) : normalized;
+        // Map to VS Code FileChangeType integers: UPDATED=0, ADDED=1, DELETED=2
+        let type = 0; // UPDATED
+        if (eventType === 'rename') {
+          try {
+            fs.accessSync(changedPath);
+            type = 1; // ADDED
+          } catch {
+            type = 2; // DELETED
+          }
+        }
+        event.sender.send('fs:watchEvent', { watchId, path: changedPath, type });
+      }
+    });
+    watcher.on('error', () => {
+      fsWatchers.delete(watchId);
+    });
+    fsWatchers.set(watchId, watcher);
+    return true;
+  } catch (error) {
+    console.warn('fs:watch failed:', error);
+    return false;
+  }
+});
+
+// File system: stop watching a path
+ipcMain.handle('fs:unwatch', async (event, watchId: string) => {
+  assertTrustedSender(event);
+  const watcher = fsWatchers.get(watchId);
+  if (watcher) {
+    try { watcher.close(); } catch {}
+    fsWatchers.delete(watchId);
+  }
+  return true;
+});
+
+// File system: copy a file or directory
+ipcMain.handle('fs:copy', async (event, sourcePath: string, targetPath: string, overwrite: boolean) => {
+  assertTrustedSender(event);
+  try {
+    const normalizedSrc = validatePath(sourcePath);
+    const normalizedDst = validatePath(targetPath);
+    if (!overwrite) {
+      const exists = fs.existsSync(normalizedDst);
+      if (exists) throw new Error(`Target already exists: ${normalizedDst}`);
+    }
+    await fs.promises.cp(normalizedSrc, normalizedDst, { recursive: true, force: overwrite });
+    return true;
+  } catch (error) {
+    console.error('fs:copy failed:', error);
+    return false;
+  }
+});
+
 // File system: list files recursively (used for extension registration)
 ipcMain.handle('fs:listFilesRecursive', async (event, dirPath, options?: { ignore?: string[] }) => {
   assertTrustedSender(event);
@@ -1913,6 +1987,10 @@ app.on('before-quit', () => {
     }
   });
   terminalSessions.clear();
+  fsWatchers.forEach(watcher => {
+    try { watcher.close(); } catch {}
+  });
+  fsWatchers.clear();
 });
 
 /**

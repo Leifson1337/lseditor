@@ -16,7 +16,7 @@ import { ExtensionService } from '../services/ExtensionService';
 const Sidebar: React.FC<SidebarProps> = ({ onTabChange, activeTab, aiActive = false, terminalActive = false }) => {
   const [showGithubDropdown, setShowGithubDropdown] = useState(false);
   const githubDropdownRef = useRef<HTMLDivElement>(null);
-  const [extensionTabs, setExtensionTabs] = useState<{ id: string; label: string; iconUrl?: string }[]>([]);
+  const [extensionTabs, setExtensionTabs] = useState<{ id: string; label: string; iconUrl?: string; location: string }[]>([]);
   useEffect(() => {
     // Subscribe to extension changes
     const unsubscribe = ExtensionService.getInstance().subscribe(async () => {
@@ -35,7 +35,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onTabChange, activeTab, aiActive = fa
       setExtensionTabs(itemsWithIcons.map(item => ({
         id: item.id,
         label: item.title,
-        iconUrl: item.iconUrl
+        iconUrl: item.iconUrl,
+        location: item.location
       })));
     });
     return unsubscribe;
@@ -90,8 +91,6 @@ const Sidebar: React.FC<SidebarProps> = ({ onTabChange, activeTab, aiActive = fa
     });
     document.dispatchEvent(event);
   };
-
-  console.log('Sidebar rendering');
 
   return (
     <div className="sidebar">
