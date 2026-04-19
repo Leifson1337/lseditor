@@ -1,47 +1,63 @@
 .sidebar {
   display: flex;
   flex-direction: column;
-  background: var(--sidebar-bg, #23272e);
+  background: var(--bg-secondary, #1a1d25);
   height: 100%;
   justify-content: flex-start;
+  width: 48px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border-color, #2a2e3a);
 }
 
 .sidebar-tabs {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 48px 0 8px 0;
+  gap: 2px;
+  padding: 52px 0 8px 0;
   margin-bottom: auto;
 }
 
 .sidebar-tab {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
   background-color: transparent;
   border: none;
-  color: var(--text-secondary);
+  color: var(--text-secondary, #858fa0);
   cursor: pointer;
-  border-radius: 4px;
-  transition: all 0.2s ease;
+  border-radius: 8px;
+  transition: color 0.15s ease, background 0.15s ease;
+  position: relative;
 }
 
 .sidebar-tab:hover {
-  background-color: var(--hover-bg);
-  color: var(--text-primary);
+  background-color: rgba(255, 255, 255, 0.07);
+  color: var(--text-primary, #e2e4ec);
 }
 
 .sidebar-tab.active {
-  color: var(--accent-blue);
-  background-color: var(--hover-bg);
+  color: var(--accent-blue, #5b8fff);
+  background-color: rgba(91, 143, 255, 0.12);
+}
+
+.sidebar-tab.active::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 18px;
+  background: var(--accent-blue, #5b8fff);
+  border-radius: 0 2px 2px 0;
 }
 
 .sidebar-tab svg {
-  width: 16px;
-  height: 16px;
+  width: 17px;
+  height: 17px;
 }
 
 .sidebar-container {
@@ -70,13 +86,13 @@
 
 .github-dropdown {
   position: absolute;
-  left: 60px;
-  top: 120px; /* Position aligned with GitHub icon */
+  left: 54px;
+  top: 120px;
   width: 220px;
-  background-color: #1e1e1e;
-  border: 1px solid #333;
-  border-radius: 4px;
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+  background: #1e2130;
+  border: 1px solid #2a2e3a;
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
   z-index: 1000;
   overflow: hidden;
 }
@@ -85,40 +101,41 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px;
-  background-color: #24292e;
-  color: white;
+  padding: 10px 14px;
+  background: #23262f;
+  color: #e2e4ec;
   font-weight: 600;
-  border-bottom: 1px solid #333;
-}
-
-.github-dropdown-header svg {
-  font-size: 16px;
+  font-size: 13px;
+  border-bottom: 1px solid #2a2e3a;
 }
 
 .github-dropdown-content {
   display: flex;
   flex-direction: column;
+  padding: 4px;
 }
 
 .github-dropdown-content button {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
+  padding: 9px 12px;
   background: none;
   border: none;
+  border-radius: 6px;
   text-align: left;
-  color: #ddd;
+  color: #a8b0bd;
   cursor: pointer;
-  transition: background-color 0.2s;
+  font-size: 13px;
+  transition: background 0.12s, color 0.12s;
+  width: 100%;
 }
 
 .github-dropdown-content button:hover {
-  background-color: #2d2d2d;
+  background: rgba(255,255,255,0.06);
+  color: #e2e4ec;
 }
 
 .github-dropdown-content button svg {
-  font-size: 14px;
-  color: #aaa;
+  color: #858fa0;
 }

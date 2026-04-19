@@ -15,10 +15,12 @@
   max-height: min(90vh, 900px);
   display: flex;
   flex-direction: column;
-  background: #1e2128;
-  border: 1px solid #333;
-  border-radius: 10px;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+  background: #1a1d25;
+  border: 1px solid #2a2e3a;
+  border-radius: 14px;
+  box-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset;
   overflow: hidden;
 }
 
@@ -101,11 +103,19 @@
 .ai-settings-page-field textarea {
   font-family: inherit;
   font-size: 13px;
-  padding: 8px 10px;
-  border-radius: 6px;
-  border: 1px solid #3d424d;
-  background: #181a1f;
+  padding: 9px 11px;
+  border-radius: 8px;
+  border: 1px solid #2a2e3a;
+  background: #12141b;
   color: #e6e8ec;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ai-settings-page-field input[type='number']:focus,
+.ai-settings-page-field textarea:focus {
+  border-color: #7c3aed;
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.12);
 }
 
 .ai-settings-page-field textarea {
@@ -153,11 +163,18 @@
 }
 
 .ai-settings-page-footer button.primary {
-  background: #7c3aed;
+  background: linear-gradient(135deg, #7c3aed, #6d28d9);
   border-color: #7c3aed;
   color: #fff;
+  box-shadow: 0 2px 8px rgba(124, 58, 237, 0.4);
 }
 
 .ai-settings-page-footer button:hover {
-  filter: brightness(1.08);
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+.ai-settings-page-footer button:active {
+  transform: translateY(0);
+  filter: brightness(0.95);
 }

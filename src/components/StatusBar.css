@@ -1,22 +1,29 @@
 .status-bar {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 0 8px;
-  height: 22px;
-  background-color: var(--bg-secondary);
-  border-top: 1px solid var(--border-color);
-  font-size: 12px;
-  color: var(--text-secondary);
+  gap: 0;
+  padding: 0 6px;
+  height: 24px;
+  background: #0f1118;
+  border-top: 1px solid #22263a;
+  font-size: 11.5px;
+  color: var(--text-secondary, #858fa0);
 }
 
 .status-item {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 4px;
+  gap: 5px;
+  padding: 0 8px;
   height: 100%;
-  border-right: 1px solid var(--border-color);
+  border-right: 1px solid #22263a;
+  white-space: nowrap;
+  transition: background 0.12s;
+  cursor: default;
+}
+
+.status-item:hover {
+  background: rgba(255,255,255,0.05);
 }
 
 .status-item:last-child {
@@ -24,7 +31,7 @@
 }
 
 .status-icon {
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1;
   display: flex;
   align-items: center;
@@ -32,29 +39,30 @@
 
 .status-text {
   font-weight: 500;
+  letter-spacing: 0.01em;
 }
 
 /* Status colors */
 .status-item[data-status="connected"] {
-  color: var(--accent-green);
+  color: var(--accent-green, #73c991);
 }
 
 .status-item[data-status="waiting"] {
-  color: var(--accent-blue);
+  color: var(--accent-blue, #5b8fff);
 }
 
 .status-item[data-status="disconnected"] {
-  color: var(--accent-purple);
+  color: #f87171;
 }
 
 .status-item[data-status="ok"] {
-  color: var(--accent-green);
+  color: var(--accent-green, #73c991);
 }
 
 .status-item[data-status="warning"] {
-  color: #ffa500;
+  color: #fbbf24;
 }
 
 .status-item[data-status="error"] {
-  color: #ff4444;
-} 
+  color: #f87171;
+}

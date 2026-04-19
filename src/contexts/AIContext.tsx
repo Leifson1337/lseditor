@@ -382,10 +382,23 @@ function deserializeConversationsFromStore(
 
 const sanitizeBaseUrl = (url: string) => {
   if (!url) return DEFAULT_PROVIDER_BASE_URL.lmstudio;
-  // Strip trailing slash, then strip trailing /v1 to avoid double /v1/v1/... when
-  // users paste full API base URLs like https://api.groq.com/openai/v1
-  return url.trim().replace(/\/$/, '').replace(/\/v1$/, '');
+  // Only strip trailing slash — preserve the URL exactly as the user typed it.
+  return url.trim().replace(/\/$/, '');
 };
+
+/**
+ * Build an API endpoint URL, stripping a trailing /v1 from the base before
+ * appending the path — so both "https://api.example.com" and
+ * "https://api.example.com/v1" result in the correct final URL.
+ */
+const buildApiUrl = (baseUrl: string, path: string) => {
+  const base = baseUrl.replace(/\/v1$/, '');
+  return `${base}${path}`;
+};
+
+/** Combines rate-limit and connection-error mapping into a single call. */
+const mapAnyAiError = (error: unknown): string | null =>
+  mapRateLimitError(error) ?? mapAiConnectionError(error);
 
 const resolveToolTargetPath = (targetPath: string, projectPath?: string) => {
   if (!targetPath) return '';
@@ -956,6 +969,9 @@ const safeJsonParse = (value: string) => {
 const normalizeTrackedPath = (value: string) =>
   String(value || '').replace(/\\/g, '/').trim().toLowerCase();
 
+/** Module-level cache for base-prompt.md — never changes during a session. */
+let basePromptCache: string | null = null;
+
 interface CompletionResult {
   content: string;
   reasoning?: string;
@@ -1033,7 +1049,10 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
           ...defaultSettings,
           ...parsed,
           provider,
-          baseUrl: sanitizeBaseUrl(parsed.baseUrl ?? DEFAULT_PROVIDER_BASE_URL[provider]),
+          baseUrl: sanitizeBaseUrl(
+            parsed.baseUrl ||
+              (provider !== 'custom' ? DEFAULT_PROVIDER_BASE_URL[provider] : defaultSettings.baseUrl)
+          ),
           streamChat: parsed.streamChat !== false
         };
       }
@@ -1213,17 +1232,23 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
   }, []);
 
   const loadBasePrompt = useCallback(async (): Promise<string> => {
+    if (basePromptCache !== null) {
+      basePromptRef.current = basePromptCache;
+      return basePromptCache;
+    }
     try {
       if (window.electron?.ipcRenderer) {
         const content = await window.electron.ipcRenderer.invoke('ai:getBasePrompt');
         if (typeof content === 'string' && content.trim().length > 0) {
-          basePromptRef.current = content.trim();
+          basePromptCache = content.trim();
+          basePromptRef.current = basePromptCache;
           return basePromptRef.current;
         }
       }
     } catch (error) {
       console.warn('Failed to load base prompt, falling back to default.', error);
     }
+    basePromptCache = DEFAULT_BASE_PROMPT;
     basePromptRef.current = DEFAULT_BASE_PROMPT;
     return basePromptRef.current;
   }, []);
@@ -1250,8 +1275,11 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
           ...prev,
           ...parsed,
           ...(provider ? { provider } : {}),
+          // For custom provider: keep whatever baseUrl was saved; never fall back to a
+          // local default. For local providers: use detected default if nothing was saved.
           baseUrl: sanitizeBaseUrl(
-            parsed.baseUrl ?? (provider ? DEFAULT_PROVIDER_BASE_URL[provider] : prev.baseUrl)
+            parsed.baseUrl ||
+              (provider && provider !== 'custom' ? DEFAULT_PROVIDER_BASE_URL[provider] : prev.baseUrl)
           )
         }));
       } catch (e) {
@@ -1415,9 +1443,9 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
         }
       }
 
-      const endpoints = [`${baseUrl}/v1/models`, `${baseUrl}/models`];
+      const endpoints = [buildApiUrl(baseUrl, '/v1/models'), buildApiUrl(baseUrl, '/models')];
       if (settings.provider === 'ollama') {
-        endpoints.push(`${baseUrl}/api/tags`);
+        endpoints.push(buildApiUrl(baseUrl, '/api/tags'));
       }
       let fetched: string[] = [];
       let fetchedMetadata = new Map<string, any>();
@@ -1471,23 +1499,22 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       setToolCallSupported(prev => (settings.model ? prev : 'unknown'));
 
       setSettings(prev => {
-        if (prev.model && fetched.includes(prev.model)) {
-          return prev;
-        }
-        return { ...prev, model: fetched[0] };
+        // For custom provider the user types the model name manually — never auto-override it.
+        if (prev.provider === 'custom') return prev;
+        if (prev.model && fetched.includes(prev.model)) return prev;
+        return { ...prev, model: fetched[0] ?? '' };
       });
     } catch (error) {
-      const rateLimitMsg = mapRateLimitError(error);
-      const friendly = rateLimitMsg ?? mapAiConnectionError(error);
+      const friendly = mapAnyAiError(error);
       const message = friendly ?? (error instanceof Error ? error.message : String(error));
       setModels([]);
-      setConnectionStatus(rateLimitMsg ? 'ready' : 'error');
+      setConnectionStatus(mapRateLimitError(error) ? 'ready' : 'error');
       setLastError(message);
       setToolCallSupported('unknown');
     } finally {
       setIsFetchingModels(false);
     }
-  }, [settings.baseUrl, settings.model, settings.provider, settings.apiKey]);
+  }, [settings.baseUrl, settings.provider, settings.apiKey]);
 
   useEffect(() => {
     refreshModels();
@@ -1520,7 +1547,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       const testController = new AbortController();
       const timeoutId = setTimeout(() => testController.abort(), 8000);
 
-      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      const response = await fetch(buildApiUrl(baseUrl, '/v1/chat/completions'), {
         method: 'POST',
         signal: testController.signal,
         headers,
@@ -1814,7 +1841,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
         signal.addEventListener('abort', abortRelay, { once: true });
 
         try {
-          const response = await fetch(`${sanitizeBaseUrl(settings.baseUrl)}/v1/chat/completions`, {
+          const response = await fetch(buildApiUrl(sanitizeBaseUrl(settings.baseUrl), '/v1/chat/completions'), {
             method: 'POST',
             signal: attemptController.signal,
             headers: {
@@ -1887,8 +1914,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
           lastAttemptError = null;
           break;
         } catch (error) {
-          const rateLimitMsg = mapRateLimitError(error);
-          const friendly = rateLimitMsg ?? mapAiConnectionError(error);
+          const friendly = mapAnyAiError(error);
           const message = friendly ?? (error instanceof Error ? error.message : String(error));
           const attemptTimedOut = attemptController.signal.aborted && !signal.aborted;
 
@@ -2726,8 +2752,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
         return currentState.combinedContent;
       } catch (error) {
         const aborted = state.controller.signal.aborted;
-        const rateLimitMsg = mapRateLimitError(error);
-        const friendly = rateLimitMsg ?? mapAiConnectionError(error);
+        const friendly = mapAnyAiError(error);
         const message = friendly ?? (error instanceof Error ? error.message : String(error));
         setLastError(aborted ? 'Request cancelled.' : message);
         addMessageToConversation(state.conversationId, {

@@ -549,14 +549,24 @@ const App: React.FC = () => {
         <div className="app">
           {/* SettingsIcon is now placed in the MenuBar, no separate popup */}
           {showProjectDialog ? (
-            <>
+            <div className="welcome-screen">
               <Titlebar minimal />
+              {/* Logo */}
+              <div className="welcome-logo">
+                <div className="welcome-logo-icon">ls</div>
+                <span className="welcome-app-name">lseditor</span>
+                <span className="welcome-app-version">Code editor with built-in AI</span>
+              </div>
+
+              {/* Card */}
               <div className="project-dialog">
                 <h2>Open Project</h2>
+
+                {/* Path input row */}
                 <div className="project-input">
                   <input
                     type="text"
-                    placeholder="Enter project path..."
+                    placeholder="Paste or type a folder path…"
                     value={projectPath}
                     onChange={(e) => setProjectPath(e.target.value)}
                     onKeyDown={(event) => {
@@ -564,63 +574,74 @@ const App: React.FC = () => {
                         openProject(projectPath);
                       }
                     }}
+                    autoFocus
                   />
                   <button
+                    className="btn-primary"
                     onClick={() => openProject(projectPath)}
                     disabled={!projectPath.trim() || isOpeningProject}
-                    title={!projectPath.trim() ? "Please enter a path" : isOpeningProject ? "Opening project..." : "Open project"}
+                    title={!projectPath.trim() ? 'Enter a path first' : isOpeningProject ? 'Opening…' : 'Open project'}
                   >
-                    {isOpeningProject ? 'Opening...' : 'Open'}
+                    {isOpeningProject ? 'Opening…' : 'Open'}
                   </button>
                   <button
                     onClick={openProjectDialog}
                     disabled={isBrowseDialogOpen || isOpeningProject}
-                    title={isBrowseDialogOpen ? "Dialog is already open" : isOpeningProject ? "Opening project..." : "Browse directory"}
+                    title="Browse for a folder"
                   >
-                    Browse...
+                    Browse…
                   </button>
                   <button
                     onClick={createNewProject}
                     disabled={isBrowseDialogOpen || isOpeningProject}
-                    title={isBrowseDialogOpen ? "Dialog is already open" : isOpeningProject ? "Opening project..." : "Create new project"}
+                    title="Create a new project"
                   >
-                    New Project
+                    New
                   </button>
                 </div>
+
+                {/* Path feedback */}
                 {pathFeedback && (
                   <div className={`path-feedback ${pathFeedback.tone}`}>
+                    {pathFeedback.tone === 'success' && '✓ '}
+                    {pathFeedback.tone === 'error' && '✗ '}
                     {pathFeedback.text}
                   </div>
                 )}
+
+                {/* Recent projects */}
                 <div className="recent-projects">
-                  <h3>Recently opened projects</h3>
+                  <div className="recent-projects-label">Recently opened</div>
                   {recentProjects.length > 0 ? (
                     <ul>
-                      {recentProjects.map((project) => (
-                        <li key={project} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{project}</span>
-                          <button
-                            onClick={() => openProject(project)}
-                            title="Open project"
-                          >
-                            Open
-                          </button>
-                          <button
-                            title="Remove from list"
-                            onClick={() => removeRecentProject(project)}
-                            style={{ color: 'red' }}
-                          >
-                            ×
-                          </button>
-                        </li>
-                      ))}
+                      {recentProjects.map((project) => {
+                        const parts = project.replace(/\\/g, '/').split('/');
+                        const name = parts[parts.length - 1] || project;
+                        const parent = parts.slice(0, -1).join('/') || '';
+                        return (
+                          <li key={project} className="recent-project-item">
+                            <div style={{ flex: 1, overflow: 'hidden' }}>
+                              <div className="recent-project-name">{name}</div>
+                              <div className="recent-project-path">{parent}</div>
+                            </div>
+                            <div className="recent-project-actions">
+                              <button onClick={() => openProject(project)} title="Open">Open</button>
+                              <button
+                                className="btn-remove"
+                                title="Remove from list"
+                                onClick={() => removeRecentProject(project)}
+                              >×</button>
+                            </div>
+                          </li>
+                        );
+                      })}
                     </ul>
                   ) : (
-                    <p>No recently opened projects.</p>
+                    <p className="recent-empty">No recently opened projects</p>
                   )}
                 </div>
               </div>
-            </>
+            </div>
           ) : (
             <Layout
               fileStructure={fileStructure}

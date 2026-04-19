@@ -905,6 +905,10 @@ ipcMain.handle('ai:save-settings', async (event, payload: unknown) => {
     if (parsed.provider === 'ollama' || parsed.provider === 'lmstudio') {
       appStore.set('preferredLocalBackend', parsed.provider);
       appStore.set('backendChoice', parsed.provider);
+    } else if (parsed.provider === 'custom') {
+      // Custom provider — disable local backend autostart so Ollama/LM Studio
+      // are not launched on the next app startup.
+      appStore.set('backendChoice', 'none');
     }
   } catch {
     // ignore malformed JSON

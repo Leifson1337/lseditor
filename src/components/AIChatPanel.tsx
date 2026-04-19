@@ -412,6 +412,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
 
   // ── Sub-agent trigger state ──
   const [showSubAgentPanel, setShowSubAgentPanel] = useState(false);
+  const [dismissedError, setDismissedError] = useState<string | undefined>();
 
   const ensureAbsolutePath = useMemo(() => {
     const resolveBaseDirectory = () => {
@@ -1600,7 +1601,19 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       </div>
 
       {/* Error bar */}
-      {lastError && <div className="ai-chat-alert">{lastError}</div>}
+      {lastError && lastError !== dismissedError && (
+        <div className="ai-chat-alert" role="alert">
+          <span className="ai-chat-alert-text">{lastError}</span>
+          <button
+            className="ai-chat-alert-dismiss"
+            type="button"
+            title="Dismiss"
+            onClick={() => setDismissedError(lastError)}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* ─── Input ─── */}
       {activeApproval && (

@@ -1,15 +1,16 @@
 :root {
-  /* Theme Colors */
-  --bg-primary: #1e1e1e;
-  --bg-secondary: #252526;
-  --bg-tertiary: #2d2d2d;
-  --accent-blue: #007acc;
-  --accent-green: #4ec9b0;
-  --accent-purple: #c586c0;
-  --text-primary: #d4d4d4;
-  --text-secondary: #858585;
-  --border-color: #3c3c3c;
-  --hover-bg: #2a2d2e;
+  /* Theme Colors — modern dark indigo palette */
+  --bg-primary: #13141b;
+  --bg-secondary: #1a1d25;
+  --bg-tertiary: #23262f;
+  --accent-blue: #5b8fff;
+  --accent-green: #73c991;
+  --accent-purple: #c4abff;
+  --accent-violet: #7c3aed;
+  --text-primary: #e2e4ec;
+  --text-secondary: #858fa0;
+  --border-color: #2a2e3a;
+  --hover-bg: #2d3140;
 }
 
 body {
@@ -18,6 +19,7 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
   background-color: var(--bg-primary);
   color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
 }
 
 .app-container {
@@ -49,13 +51,13 @@ body {
   z-index: 20;
   flex-shrink: 0;
   height: 24px;
-  background-color: var(--bg-secondary, #252526);
-  border-top: 1px solid var(--border-color, #3c3c3c);
+  background-color: #0f1118;
+  border-top: 1px solid #22263a;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0 10px;
-  font-size: 12px;
+  padding: 0 4px;
+  font-size: 11.5px;
   color: var(--text-secondary);
 }
 
@@ -65,32 +67,32 @@ body {
   min-width: 250px;
   max-width: 350px;
   width: 20vw;
-  border-right: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color, #2a2e3a);
 }
 
 .sidebar {
   grid-column: 1;
-  background-color: var(--bg-secondary);
+  background-color: var(--bg-secondary, #1a1d25);
   display: flex;
   flex-direction: column;
   align-items: center;
   padding-top: 48px;
+  border-right: 1px solid var(--border-color, #2a2e3a);
 }
 
 .sidebar-tabs {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
   padding: 10px 0 0 0;
   z-index: 3;
 }
 
 .sidebar-content-panel {
   grid-column: 2;
-  background-color: var(--bg-secondary);
+  background-color: var(--bg-secondary, #1a1d25);
   overflow: hidden;
-  border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
 }
@@ -261,11 +263,11 @@ body {
   position: absolute;
   left: 56px;
   top: 10px;
-  min-width: 340px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.25);
+  min-width: 360px;
+  background: var(--bg-secondary, #1a1d25);
+  border: 1px solid var(--border-color, #2a2e3a);
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.5);
   z-index: 1000;
   padding: 24px 20px 20px 20px;
 }
@@ -282,21 +284,21 @@ body {
 
 /* Scrollbar Styling */
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--bg-primary);
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--bg-tertiary);
-  border-radius: 5px;
+  background: #2a2e3a;
+  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--hover-bg);
+  background: #353a4a;
 }
 
 .empty-sidebar-content {
@@ -346,9 +348,10 @@ body {
 }
 
 .dialog {
-  background-color: #1e1e1e;
-  border-radius: 4px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  background-color: var(--bg-secondary, #1a1d25);
+  border: 1px solid var(--border-color, #2a2e3a);
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
   width: 500px;
   max-width: 90%;
   max-height: 80vh;
@@ -361,35 +364,37 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  background-color: #252526;
-  border-bottom: 1px solid #333;
+  padding: 14px 18px;
+  background-color: var(--bg-tertiary, #23262f);
+  border-bottom: 1px solid var(--border-color, #2a2e3a);
 }
 
 .dialog-header h3 {
   margin: 0;
-  font-size: 16px;
-  font-weight: 500;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary, #e2e4ec);
 }
 
 .dialog-header button {
   background: none;
   border: none;
-  color: #999;
+  color: var(--text-secondary, #858fa0);
   font-size: 18px;
   cursor: pointer;
   padding: 0;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 3px;
+  border-radius: 6px;
+  transition: background 0.12s, color 0.12s;
 }
 
 .dialog-header button:hover {
-  background-color: #333;
-  color: #fff;
+  background-color: rgba(255,255,255,0.08);
+  color: var(--text-primary, #e2e4ec);
 }
 
 .dialog-content {

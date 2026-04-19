@@ -13,6 +13,7 @@ import ExtensionsPanel from './ExtensionsPanel';
 import { ThemeProvider } from '../contexts/ThemeContext';
 import { EditorProvider } from '../contexts/EditorContext';
 import { ExtensionViewPanel } from './ExtensionViewPanel';
+import GitPanel from './GitPanel';
 import '../styles/EditorLayout.css';
 import { FaRegFile } from 'react-icons/fa';
 import { Resizable } from 're-resizable';
@@ -959,6 +960,8 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                   activeFile={tabs.find(t => t.id === activeTab)?.path || ''}
                   projectPath={projectPath}
                 />
+              ) : sidebarTab === 'git' ? (
+                <GitPanel projectPath={projectPath} />
               ) : (
                 <ExtensionViewPanel viewContainerId={sidebarTab} />
               )}
@@ -972,7 +975,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                 onTabsReorder={handleTabsReorder}
               />
               <div className="editor-path-display" title={activeTabData?.path || 'No file open'}>
-                <span className="editor-path-label">Pfad:</span>
+                <span className="editor-path-label">Path:</span>
                 <span className="editor-path-value">
                   {activeTabData?.path || 'No file open'}
                 </span>

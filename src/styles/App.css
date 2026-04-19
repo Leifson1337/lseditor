@@ -151,85 +151,274 @@ body {
   background: var(--scrollbar-thumb-hover);
 }
 
-/* Project Dialog Styles */
-.project-dialog {
+/* ─── Welcome / Open Project screen ─── */
+
+.welcome-screen {
   position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #0e0f16;
+  overflow: hidden;
+  padding: 24px;
+}
+
+/* subtle radial glow behind the card */
+.welcome-screen::before {
+  content: '';
+  position: absolute;
+  width: 700px;
+  height: 700px;
+  background: radial-gradient(circle, rgba(124, 58, 237, 0.08) 0%, transparent 70%);
+  pointer-events: none;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: 500px;
-  background-color: var(--dialog-bg);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 24px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.welcome-logo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 32px;
+  gap: 10px;
+  position: relative;
+}
+
+.welcome-logo-icon {
+  width: 52px;
+  height: 52px;
+  background: linear-gradient(135deg, #7c3aed, #5b8fff);
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 32px rgba(124, 58, 237, 0.4);
+  font-size: 26px;
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: -1px;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+}
+
+.welcome-app-name {
+  font-size: 22px;
+  font-weight: 700;
+  color: #e2e4ec;
+  letter-spacing: -0.3px;
+}
+
+.welcome-app-version {
+  font-size: 12px;
+  color: #474d63;
+  font-weight: 400;
+}
+
+/* The card */
+.project-dialog {
+  position: relative;
+  width: min(520px, 100%);
+  background: #1a1d25;
+  border: 1px solid #2a2e3a;
+  border-radius: 16px;
+  padding: 28px;
+  box-shadow:
+    0 32px 72px rgba(0, 0, 0, 0.65),
+    0 0 0 1px rgba(255,255,255,0.03) inset;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }
 
 .project-dialog h2 {
-  margin: 0 0 16px 0;
-  color: var(--text-primary);
-}
-
-.project-dialog p {
-  margin: 0 0 24px 0;
-  color: var(--text-secondary);
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #e2e4ec;
+  letter-spacing: -0.2px;
 }
 
 .project-input {
   display: flex;
   gap: 8px;
-  margin-bottom: 12px;
+  align-items: center;
 }
 
 .project-input input {
   flex: 1;
-  padding: 8px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  background-color: var(--input-bg);
-  color: var(--text-primary);
+  padding: 9px 13px;
+  border: 1px solid #2a2e3a;
+  border-radius: 8px;
+  background: #12141b;
+  color: #e2e4ec;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  min-width: 0;
+}
+
+.project-input input:focus {
+  border-color: #7c3aed;
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.12);
+}
+
+.project-input input::placeholder {
+  color: #474d63;
 }
 
 .project-input button {
-  padding: 8px 16px;
-  background-color: var(--button-primary);
-  color: var(--button-text);
-  border: none;
-  border-radius: 4px;
+  padding: 9px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-family: inherit;
   cursor: pointer;
+  border: 1px solid #2a2e3a;
+  background: #23262f;
+  color: #c4c9d4;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s, transform 0.1s;
+  flex-shrink: 0;
 }
 
-.project-input button:hover {
-  background-color: var(--button-primary-hover);
+.project-input button:hover:not(:disabled) {
+  background: #2d3140;
+  border-color: #3a3e4f;
+  transform: translateY(-1px);
+}
+
+.project-input button:active:not(:disabled) {
+  transform: translateY(0);
 }
 
 .project-input button:disabled {
-  opacity: 0.45;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
+.project-input button.btn-primary {
+  background: linear-gradient(135deg, #7c3aed, #6d28d9);
+  border-color: #7c3aed;
+  color: #fff;
+  box-shadow: 0 2px 10px rgba(124, 58, 237, 0.35);
+}
+
+.project-input button.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
 .path-feedback {
-  font-size: 13px;
-  margin-bottom: 18px;
+  font-size: 12px;
+  margin: -8px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.path-feedback.info {
-  color: var(--text-muted);
-}
+.path-feedback.info  { color: #5b8fff; }
+.path-feedback.success { color: #73c991; }
+.path-feedback.error   { color: #f87171; }
 
-.path-feedback.success {
-  color: #58d68d;
-}
-
-.path-feedback.error {
-  color: #ff7676;
-}
-
+/* Recent projects */
 .recent-projects {
-  margin-top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.recent-projects h3 {
-  margin: 0 0 16px 0;
-  color: var(--text-primary);
-} 
+.recent-projects-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #474d63;
+  margin-bottom: 2px;
+}
+
+.recent-projects ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.recent-project-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  transition: background 0.12s, border-color 0.12s;
+  cursor: default;
+}
+
+.recent-project-item:hover {
+  background: rgba(255,255,255,0.04);
+  border-color: #2a2e3a;
+}
+
+.recent-project-path {
+  flex: 1;
+  font-size: 12.5px;
+  color: #858fa0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-project-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #c4c9d4;
+  white-space: nowrap;
+}
+
+.recent-project-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.recent-project-actions button {
+  padding: 4px 10px;
+  border-radius: 5px;
+  font-size: 11.5px;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid #2a2e3a;
+  background: #23262f;
+  color: #c4c9d4;
+  transition: background 0.1s;
+}
+
+.recent-project-actions button:hover {
+  background: #2d3140;
+}
+
+.recent-project-actions button.btn-remove {
+  color: #858fa0;
+  background: transparent;
+  border-color: transparent;
+  padding: 4px 6px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.recent-project-actions button.btn-remove:hover {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.1);
+  border-color: transparent;
+}
+
+.recent-empty {
+  font-size: 12px;
+  color: #474d63;
+  text-align: center;
+  padding: 8px 0 2px;
+}
+
