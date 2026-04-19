@@ -246,6 +246,10 @@ export interface AIConfig {
      * Maximum number of tokens for OpenAI.
      */
     maxTokens: number;
+    /**
+     * Base URL for the OpenAI-compatible API (ex. Ollama: http://127.0.0.1:PORT/v1).
+     */
+    baseURL?: string;
   };
   /**
    * Optional local model configuration.

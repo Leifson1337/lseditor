@@ -74,6 +74,8 @@ interface SearchWorkspaceArgs {
   filePattern?: string;
   caseSensitive?: boolean;
   maxResults?: number;
+  /** When true, `query` is treated as a JavaScript RegExp pattern (content/filename). When false (default), it is literal text. */
+  isRegex?: boolean;
 }
 
 export const AI_TOOLS: ToolDefinition[] = [
@@ -172,6 +174,35 @@ export const AI_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'getFileTree',
+      description:
+        'Return a compact tree of files under a directory: each line is `relativeFolder/ [file1, file2, ...]`. Uses fewer tokens than recursive flat listings. Use for workspace overview before opening files.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Root directory to scan (prefer project root when unsure).' },
+          maxFiles: {
+            type: 'number',
+            description: 'Cap on number of file paths included (default 500, max 2000).'
+          },
+          maxDepth: {
+            type: 'number',
+            description: 'Maximum folder depth relative to the root (default 12). Deeper paths are skipped.'
+          },
+          outputFormat: {
+            type: 'string',
+            enum: ['text', 'json'],
+            description:
+              'Return a line-oriented compact listing (text, default) or a nested JSON tree (json) for programmatic use.'
+          }
+        },
+        required: ['path']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'searchFiles',
       description: 'Search for files by filename or by text content within a directory. If the pattern looks like a filename such as test.py, this tool should find matching file paths. Prefer the project root when you do not know the exact folder.',
       parameters: {
@@ -202,7 +233,12 @@ export const AI_TOOLS: ToolDefinition[] = [
           },
           filePattern: { type: 'string', description: 'Optional glob-style file filter such as "*.ts" or "*.md".' },
           caseSensitive: { type: 'boolean', description: 'Whether matching should be case-sensitive. Defaults to false.' },
-          maxResults: { type: 'number', description: 'Maximum number of matches to return. Defaults to 50 and is capped at 200.' }
+          maxResults: { type: 'number', description: 'Maximum number of matches to return. Defaults to 50 and is capped at 200.' },
+          isRegex: {
+            type: 'boolean',
+            description:
+              'When true, `query` is interpreted as a regular expression for file and content matching. When false (default), `query` is matched as plain text.'
+          }
         },
         required: ['path', 'query']
       }
@@ -269,6 +305,38 @@ export const AI_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'moveFile',
+      description:
+        'Move or rename a file within the workspace. Equivalent to renameFile (oldPath → newPath).',
+      parameters: {
+        type: 'object',
+        properties: {
+          oldPath: { type: 'string', description: 'Current file path' },
+          newPath: { type: 'string', description: 'New file path' }
+        },
+        required: ['oldPath', 'newPath']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'copyFile',
+      description: 'Copy a file or directory to a new path within the workspace.',
+      parameters: {
+        type: 'object',
+        properties: {
+          sourcePath: { type: 'string', description: 'Source file or directory path' },
+          destinationPath: { type: 'string', description: 'Destination path' },
+          overwrite: { type: 'boolean', description: 'Overwrite destination if it exists (default false).' }
+        },
+        required: ['sourcePath', 'destinationPath']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'getDiagnostics',
       description: 'Get current editor diagnostics (errors and warnings) for all open files or a specific file. Use this after making changes to verify correctness.',
       parameters: {
@@ -297,7 +365,7 @@ export const AI_TOOLS: ToolDefinition[] = [
   }
 ];
 
-function resolvePath(filePath: string, projectPath?: string): string {
+export function resolvePath(filePath: string, projectPath?: string): string {
   if (!filePath) return '';
   // If it's already absolute, use as-is
   if (/^[a-zA-Z]:[\\/]/.test(filePath) || filePath.startsWith('/')) {
@@ -310,11 +378,22 @@ function resolvePath(filePath: string, projectPath?: string): string {
   return filePath;
 }
 
-function normalizePath(value: string): string {
+export function normalizePath(value: string): string {
   return String(value || '').replace(/\\/g, '/');
 }
 
-function isInsideProjectPath(targetPath: string, projectPath?: string): boolean {
+/**
+ * Verifică dacă projectPath este setat și returnează un mesaj de eroare clar dacă nu.
+ * Folosit înaintea oricărei operații de scriere/ștergere pentru a da feedback instant.
+ */
+export function requireProjectPath(projectPath?: string): string | null {
+  if (!projectPath || !projectPath.trim()) {
+    return 'Error: No project folder is open. Open a folder first (File → Open Folder) so the AI knows where to create files.';
+  }
+  return null;
+}
+
+export function isInsideProjectPath(targetPath: string, projectPath?: string): boolean {
   if (!projectPath) return true;
   const normalizedProject = normalizePath(projectPath).replace(/\/+$/, '').toLowerCase();
   const normalizedTarget = normalizePath(targetPath).toLowerCase();
@@ -324,9 +403,15 @@ function isInsideProjectPath(targetPath: string, projectPath?: string): boolean 
   );
 }
 
-function ensureToolPathWithinProject(targetPath: string, projectPath?: string): string | null {
+export function ensureToolPathWithinProject(targetPath: string, projectPath?: string): string | null {
   if (!targetPath) return 'Error: Missing path.';
   if (!projectPath) return null;
+  // Allow absolute paths that point anywhere on the filesystem — the user explicitly
+  // supplied a full path, so we honour it. Only block relative paths that escape the
+  // workspace via "../" traversal.
+  const normalized = normalizePath(targetPath);
+  const isAbsolute = /^([a-zA-Z]:\/|\/|\\\\)/.test(normalized) || normalized.startsWith('/');
+  if (isAbsolute) return null;
   return isInsideProjectPath(targetPath, projectPath)
     ? null
     : `Error: Path is outside the current workspace: ${targetPath}`;
@@ -338,7 +423,7 @@ function notifyFileChanged(filePath: string) {
   window.dispatchEvent(new Event('explorer:refresh'));
 }
 
-function quoteWindowsCommandPath(command: string): string {
+export function quoteWindowsCommandPath(command: string): string {
   const trimmed = String(command || '').trim();
   const match = trimmed.match(/^(python(?:\d+(?:\.\d+)?)?|py(?:\s+-\d+(?:\.\d+)?)?|node)\s+([A-Za-z]:\\[^"\r\n]+?\.[A-Za-z0-9]+)(.*)$/i);
   if (!match) return trimmed;
@@ -384,7 +469,7 @@ function looksLikeFilenameQuery(target: string): boolean {
   return false;
 }
 
-function matchesFileGlob(filePath: string, fileGlob?: string): boolean {
+export function matchesFileGlob(filePath: string, fileGlob?: string): boolean {
   if (!fileGlob) return true;
   const trimmedGlob = String(fileGlob).trim();
   if (!trimmedGlob) return true;
@@ -451,7 +536,7 @@ function replaceSingleLineByTrimmedMatch(content: string, search: string, replac
   };
 }
 
-function scorePathCandidate(requested: string, candidate: string): number {
+export function scorePathCandidate(requested: string, candidate: string): number {
   const requestedParts = normalizeForMatch(requested).split('/').filter(Boolean);
   const candidateParts = normalizeForMatch(candidate).split('/').filter(Boolean);
 
@@ -471,24 +556,24 @@ function scorePathCandidate(requested: string, candidate: string): number {
   return suffixMatches * 5 + sameBasename + exactSuffix;
 }
 
-async function resolveExistingPath(
+export async function resolveExistingPath(
   renderer: { invoke: (channel: string, ...args: any[]) => Promise<any> },
   filePath: string,
   projectPath?: string
-): Promise<{ resolvedPath: string; guessed: boolean }> {
+): Promise<{ resolvedPath: string; guessed: boolean; exists: boolean }> {
   const resolvedPath = resolvePath(filePath, projectPath);
-  const exists = await renderer.invoke('fs:exists', resolvedPath);
+  let exists = await renderer.invoke('fs:exists', resolvedPath);
   if (exists) {
-    return { resolvedPath, guessed: false };
+    return { resolvedPath, guessed: false, exists: true };
   }
 
   if (!projectPath) {
-    return { resolvedPath, guessed: false };
+    return { resolvedPath, guessed: false, exists: false };
   }
 
   const files = await renderer.invoke('fs:listFilesRecursive', projectPath, { ignore: AI_TOOL_IGNORES });
   if (!Array.isArray(files) || files.length === 0) {
-    return { resolvedPath, guessed: false };
+    return { resolvedPath, guessed: false, exists: false };
   }
 
   const requestedNormalized = normalizeForMatch(filePath);
@@ -509,20 +594,136 @@ async function resolveExistingPath(
     .sort((a, b) => b.score - a.score || a.candidate.length - b.candidate.length);
 
   if (candidates.length === 0 || candidates[0].score <= 0) {
-    return { resolvedPath, guessed: false };
+    return { resolvedPath, guessed: false, exists: false };
   }
 
-  return { resolvedPath: candidates[0].candidate, guessed: true };
+  const best = candidates[0].candidate;
+  exists = await renderer.invoke('fs:exists', best);
+  return { resolvedPath: best, guessed: true, exists: !!exists };
 }
 
-function buildWorkspaceSearchRegex(query: string, caseSensitive: boolean): RegExp {
+function buildWorkspaceSearchRegex(query: string, caseSensitive: boolean, isRegexPattern: boolean): RegExp {
   const flags = caseSensitive ? 'g' : 'gi';
-  try {
-    return new RegExp(query, flags);
-  } catch {
-    const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(escaped, flags);
+  if (isRegexPattern) {
+    try {
+      return new RegExp(query, flags);
+    } catch {
+      const escaped = String(query).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(escaped, flags);
+    }
   }
+  const escaped = String(query).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(escaped, flags);
+}
+
+function relativePathFromRoot(absoluteFile: string, rootDir: string): string {
+  const f = normalizePath(absoluteFile);
+  const r = normalizePath(rootDir).replace(/\/+$/, '');
+  const fl = f.toLowerCase();
+  const rl = r.toLowerCase().replace(/\/+$/, '');
+  if (fl === rl) return '';
+  const prefix = rl + '/';
+  if (fl.startsWith(prefix) || f.toLowerCase().startsWith(rl + '\\')) {
+    return f.slice(r.length).replace(/^[/\\]+/, '');
+  }
+  return basenameOf(f);
+}
+
+function formatCompactFileTree(
+  absoluteFiles: string[],
+  rootDir: string,
+  maxFiles: number,
+  maxDepth: number
+): string {
+  if (!Array.isArray(absoluteFiles) || absoluteFiles.length === 0) {
+    return '(no files)';
+  }
+  const capped = absoluteFiles.slice(0, maxFiles);
+  const byDir = new Map<string, Set<string>>();
+  for (const abs of capped) {
+    const rel = relativePathFromRoot(abs, rootDir);
+    const parts = rel.split('/').filter(Boolean);
+    if (parts.length === 0) continue;
+    if (parts.length > maxDepth) continue;
+    const fileName = parts.pop()!;
+    const dirKey = parts.length ? parts.join('/') : '.';
+    if (!byDir.has(dirKey)) byDir.set(dirKey, new Set());
+    byDir.get(dirKey)!.add(fileName);
+  }
+  const lines: string[] = [];
+  for (const dirKey of Array.from(byDir.keys()).sort()) {
+    const files = Array.from(byDir.get(dirKey)!).sort();
+    const label = dirKey === '.' ? '.' : `${dirKey}/`;
+    lines.push(`${label} -> [${files.join(', ')}]`);
+  }
+  if (absoluteFiles.length > maxFiles) {
+    lines.push(
+      `... (${absoluteFiles.length - maxFiles} more paths not shown; increase maxFiles if needed)`
+    );
+  }
+  return lines.length ? lines.join('\n') : '(no files after depth filter)';
+}
+
+export interface CompactFileTreeJsonResult {
+  root: string;
+  tree: Record<string, unknown>;
+  truncated: boolean;
+  listedFileCount: number;
+  totalFileCount: number;
+}
+
+/** Nested JSON: `null` leaf = file, `{}` = folder (may gain children). */
+export function buildCompactFileTreeJson(
+  absoluteFiles: string[],
+  rootDir: string,
+  maxFiles: number,
+  maxDepth: number
+): CompactFileTreeJsonResult {
+  if (!Array.isArray(absoluteFiles) || absoluteFiles.length === 0) {
+    return {
+      root: normalizePath(rootDir),
+      tree: {},
+      truncated: false,
+      listedFileCount: 0,
+      totalFileCount: 0
+    };
+  }
+  const capped = absoluteFiles.slice(0, maxFiles);
+  const tree: Record<string, unknown> = {};
+
+  for (const abs of capped) {
+    const rel = relativePathFromRoot(abs, rootDir);
+    const parts = rel.split('/').filter(Boolean);
+    if (parts.length === 0) continue;
+    if (parts.length > maxDepth) continue;
+    let node: Record<string, unknown> = tree;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const p = parts[i];
+      const next = node[p];
+      if (next === null) {
+        break;
+      }
+      if (next === undefined) {
+        node[p] = {};
+      }
+      node = node[p] as Record<string, unknown>;
+    }
+    const fileName = parts[parts.length - 1];
+    if (node && typeof node === 'object' && fileName in node && node[fileName] !== undefined) {
+      continue;
+    }
+    if (node && typeof node === 'object') {
+      node[fileName] = null;
+    }
+  }
+
+  return {
+    root: normalizePath(rootDir),
+    tree,
+    truncated: absoluteFiles.length > maxFiles,
+    listedFileCount: capped.length,
+    totalFileCount: absoluteFiles.length
+  };
 }
 
 async function executeWorkspaceSearch(
@@ -537,6 +738,7 @@ async function executeWorkspaceSearch(
     filePattern,
     caseSensitive = false
   } = args;
+  const isRegex = Boolean(args.isRegex);
   const maxResults = Math.max(1, Math.min(200, Math.floor(Number(args.maxResults) || 50)));
   const { directoryPath, adjustedFrom } = await resolveDirectoryPath(renderer, inputPath, projectPath);
   const workspaceError = ensureToolPathWithinProject(directoryPath, projectPath);
@@ -549,7 +751,7 @@ async function executeWorkspaceSearch(
     return 'No files found';
   }
 
-  const regex = buildWorkspaceSearchRegex(String(query ?? ''), caseSensitive);
+  const contentRegex = buildWorkspaceSearchRegex(String(query ?? ''), caseSensitive, isRegex);
   const normalizedQuery = caseSensitive
     ? String(query ?? '').trim()
     : String(query ?? '').trim().toLowerCase();
@@ -563,11 +765,18 @@ async function executeWorkspaceSearch(
     const comparableRelative = caseSensitive ? relative : relative.toLowerCase();
 
     if (searchMode === 'filename' || searchMode === 'both') {
-      regex.lastIndex = 0;
-      if (
-        (normalizedQuery && comparableRelative.includes(normalizedQuery)) ||
-        regex.test(relative)
-      ) {
+      let nameMatch = false;
+      if (isRegex) {
+        try {
+          const nameRe = new RegExp(String(query ?? ''), caseSensitive ? '' : 'i');
+          nameMatch = nameRe.test(relative);
+        } catch {
+          nameMatch = Boolean(normalizedQuery && comparableRelative.includes(normalizedQuery));
+        }
+      } else {
+        nameMatch = Boolean(normalizedQuery && comparableRelative.includes(normalizedQuery));
+      }
+      if (nameMatch) {
         results.push(`${relative}: filename match`);
         if (searchMode === 'filename') continue;
       }
@@ -580,8 +789,8 @@ async function executeWorkspaceSearch(
         const lines = content.split('\n');
         for (let index = 0; index < lines.length; index += 1) {
           const line = lines[index];
-          regex.lastIndex = 0;
-          if (regex.test(line)) {
+          contentRegex.lastIndex = 0;
+          if (contentRegex.test(line)) {
             results.push(`${relative}:${index + 1}: ${line.trim().slice(0, 240)}`);
             if (results.length >= maxResults) break;
           }
@@ -709,10 +918,14 @@ export async function executeToolCall(
       }
 
       case 'readFile': {
-        const { resolvedPath, guessed } = await resolveExistingPath(renderer, args.path, projectPath);
+        const { resolvedPath, guessed, exists } = await resolveExistingPath(renderer, args.path, projectPath);
         const workspaceError = ensureToolPathWithinProject(resolvedPath, projectPath);
         if (workspaceError) {
           result = workspaceError;
+          break;
+        }
+        if (!exists) {
+          result = `Error: File not found: ${resolvedPath}`;
           break;
         }
         const content = await renderer.invoke('fs:readFile', resolvedPath);
@@ -752,6 +965,11 @@ export async function executeToolCall(
       }
 
       case 'writeFile': {
+        const projectPathError = requireProjectPath(projectPath);
+        if (projectPathError) {
+          result = projectPathError;
+          break;
+        }
         const fullPath = resolvePath(args.path, projectPath);
         const workspaceError = ensureToolPathWithinProject(fullPath, projectPath);
         if (workspaceError) {
@@ -759,9 +977,9 @@ export async function executeToolCall(
           break;
         }
         const contentToWrite = typeof args.content === 'string' ? args.content : String(args.content ?? '');
-        const writeSucceeded = await renderer.invoke('fs:writeFile', fullPath, contentToWrite);
-        if (!writeSucceeded) {
-          result = `Error: Failed to write file: ${fullPath}`;
+        const writeResult = await renderer.invoke('fs:writeFile', fullPath, contentToWrite);
+        if (!writeResult?.ok) {
+          result = `Error: Failed to write file: ${fullPath}. Reason: ${writeResult?.error ?? 'unknown'}`;
           break;
         }
         notifyFileChanged(fullPath);
@@ -771,6 +989,11 @@ export async function executeToolCall(
       }
 
       case 'appendToFile': {
+        const projectPathError = requireProjectPath(projectPath);
+        if (projectPathError) {
+          result = projectPathError;
+          break;
+        }
         const fullPath = resolvePath(args.path, projectPath);
         const workspaceError = ensureToolPathWithinProject(fullPath, projectPath);
         if (workspaceError) {
@@ -783,9 +1006,9 @@ export async function executeToolCall(
           break;
         }
         const appendContent = typeof args.content === 'string' ? args.content : String(args.content ?? '');
-        const appendSucceeded = await renderer.invoke('fs:appendFile', fullPath, appendContent);
-        if (!appendSucceeded) {
-          result = `Error: Failed to append to file: ${fullPath}`;
+        const appendResult = await renderer.invoke('fs:appendFile', fullPath, appendContent);
+        if (!appendResult?.ok) {
+          result = `Error: Failed to append to file: ${fullPath}. Reason: ${appendResult?.error ?? 'unknown'}`;
           break;
         }
         notifyFileChanged(fullPath);
@@ -795,10 +1018,19 @@ export async function executeToolCall(
       }
 
       case 'replaceInFile': {
-        const { resolvedPath, guessed } = await resolveExistingPath(renderer, args.path, projectPath);
+        const projectPathError = requireProjectPath(projectPath);
+        if (projectPathError) {
+          result = projectPathError;
+          break;
+        }
+        const { resolvedPath, guessed, exists } = await resolveExistingPath(renderer, args.path, projectPath);
         const workspaceError = ensureToolPathWithinProject(resolvedPath, projectPath);
         if (workspaceError) {
           result = workspaceError;
+          break;
+        }
+        if (!exists) {
+          result = `Error: File not found: ${resolvedPath}`;
           break;
         }
         const content = await renderer.invoke('fs:readFile', resolvedPath);
@@ -807,8 +1039,8 @@ export async function executeToolCall(
           break;
         }
 
-        const search = String(args.search ?? '');
-        const replace = String(args.replace ?? '');
+        const search = String(args.search ?? args.old_str ?? args.old_text ?? args.find ?? args.searchText ?? '');
+        const replace = String(args.replace ?? args.new_str ?? args.new_text ?? args.replace_with ?? args.replaceText ?? '');
         if (!search) {
           result = 'Error: replaceInFile requires a non-empty search string';
           break;
@@ -823,16 +1055,24 @@ export async function executeToolCall(
         let replacements = 0;
         let replacementMode: 'exact' | 'line-trimmed' = 'exact';
 
-        if (content.includes(search)) {
+        // Normalize CRLF so comparisons work on Windows files regardless of what the model provides
+        const hasCrlf = content.includes('\r\n');
+        const normalizedContent = hasCrlf ? content.replace(/\r\n/g, '\n') : content;
+        const normalizedSearch = search.replace(/\r\n/g, '\n');
+        const normalizedReplace = replace.replace(/\r\n/g, '\n');
+
+        if (normalizedContent.includes(normalizedSearch)) {
+          let normalizedResult: string;
           if (replaceAll) {
-            updatedContent = content.split(search).join(replace);
-            replacements = content.split(search).length - 1;
+            normalizedResult = normalizedContent.split(normalizedSearch).join(normalizedReplace);
+            replacements = normalizedContent.split(normalizedSearch).length - 1;
           } else {
-            updatedContent = content.replace(search, () => {
+            normalizedResult = normalizedContent.replace(normalizedSearch, () => {
               replacements += 1;
-              return replace;
+              return normalizedReplace;
             });
           }
+          updatedContent = hasCrlf ? normalizedResult.replace(/\n/g, '\r\n') : normalizedResult;
         } else {
           const fallback = !replaceAll
             ? replaceSingleLineByTrimmedMatch(content, search, replace)
@@ -855,9 +1095,9 @@ export async function executeToolCall(
           break;
         }
 
-        const writeSucceeded = await renderer.invoke('fs:writeFile', resolvedPath, updatedContent);
-        if (!writeSucceeded) {
-          result = `Error: Failed to write updated content to ${resolvedPath}`;
+        const writeResult = await renderer.invoke('fs:writeFile', resolvedPath, updatedContent);
+        if (!writeResult?.ok) {
+          result = `Error: Failed to write updated content to ${resolvedPath}. Reason: ${writeResult?.error ?? 'unknown'}`;
           break;
         }
         notifyFileChanged(resolvedPath);
@@ -875,7 +1115,9 @@ export async function executeToolCall(
           break;
         }
         const entries = await renderer.invoke('fs:readDir', directoryPath);
-        if (!entries || !Array.isArray(entries)) {
+        if (!entries || (entries as { __error?: boolean }).__error) {
+          result = `Error: Cannot list directory: ${directoryPath}. Reason: ${(entries as { message?: string })?.message ?? 'unknown'}`;
+        } else if (!Array.isArray(entries)) {
           result = `Error: Cannot list directory: ${directoryPath}`;
         } else {
           const formatted = entries.map((e: { name: string; isDirectory: boolean }) =>
@@ -883,6 +1125,32 @@ export async function executeToolCall(
           );
           const prefix = adjustedFrom ? `[Adjusted search path from ${adjustedFrom} to ${directoryPath}]\n` : '';
           result = `${prefix}${formatted.join('\n') || '(empty directory)'}`;
+        }
+        break;
+      }
+
+      case 'getFileTree': {
+        const maxFiles = Math.min(2000, Math.max(50, Math.floor(Number(args.maxFiles) || 500)));
+        const maxDepth = Math.min(64, Math.max(1, Math.floor(Number(args.maxDepth) || 12)));
+        const asJson = String(args.outputFormat ?? 'text').toLowerCase() === 'json';
+        const { directoryPath, adjustedFrom } = await resolveDirectoryPath(renderer, args.path, projectPath);
+        const workspaceError = ensureToolPathWithinProject(directoryPath, projectPath);
+        if (workspaceError) {
+          result = workspaceError;
+          break;
+        }
+        const files = await renderer.invoke('fs:listFilesRecursive', directoryPath, { ignore: AI_TOOL_IGNORES });
+        if (!Array.isArray(files) || files.length === 0) {
+          result = 'No files under this path.';
+          break;
+        }
+        const prefix = adjustedFrom ? `[Adjusted path from ${adjustedFrom} to ${directoryPath}]\n` : '';
+        if (asJson) {
+          const jsonTree = buildCompactFileTreeJson(files, directoryPath, maxFiles, maxDepth);
+          result = `${prefix}${JSON.stringify(jsonTree)}`;
+        } else {
+          const tree = formatCompactFileTree(files, directoryPath, maxFiles, maxDepth);
+          result = `${prefix}[Compact file tree]\n${tree}`;
         }
         break;
       }
@@ -956,19 +1224,33 @@ export async function executeToolCall(
       }
 
       case 'createDirectory': {
+        const projectPathError = requireProjectPath(projectPath);
+        if (projectPathError) {
+          result = projectPathError;
+          break;
+        }
         const fullPath = resolvePath(args.path, projectPath);
         const workspaceError = ensureToolPathWithinProject(fullPath, projectPath);
         if (workspaceError) {
           result = workspaceError;
           break;
         }
-        await renderer.invoke('fs:createDirectory', fullPath);
+        const mkdirResult = await renderer.invoke('fs:createDirectory', fullPath);
+        if (!mkdirResult?.ok) {
+          result = `Error: Failed to create directory: ${fullPath}. Reason: ${mkdirResult?.error ?? 'unknown'}`;
+          break;
+        }
         window.dispatchEvent(new Event('explorer:refresh'));
         result = `Directory created: ${fullPath}`;
         break;
       }
 
       case 'deleteFile': {
+        const projectPathError = requireProjectPath(projectPath);
+        if (projectPathError) {
+          result = projectPathError;
+          break;
+        }
         const fullPath = resolvePath(args.path, projectPath);
         const workspaceError = ensureToolPathWithinProject(fullPath, projectPath);
         if (workspaceError) {
@@ -976,10 +1258,15 @@ export async function executeToolCall(
           break;
         }
         const stat = await renderer.invoke('fs:stat', fullPath);
+        let deleteResult: { ok: boolean; error?: string };
         if (stat?.type === 'directory') {
-          await renderer.invoke('fs:deleteDirectory', fullPath, false);
+          deleteResult = await renderer.invoke('fs:deleteDirectory', fullPath);
         } else {
-          await renderer.invoke('fs:deleteFile', fullPath);
+          deleteResult = await renderer.invoke('fs:deleteFile', fullPath);
+        }
+        if (!deleteResult?.ok) {
+          result = `Error: Failed to delete: ${fullPath}. Reason: ${deleteResult?.error ?? 'unknown'}`;
+          break;
         }
         window.dispatchEvent(new CustomEvent('editor:fileChanged', { detail: fullPath }));
         window.dispatchEvent(new Event('explorer:refresh'));
@@ -987,7 +1274,13 @@ export async function executeToolCall(
         break;
       }
 
-      case 'renameFile': {
+      case 'renameFile':
+      case 'moveFile': {
+        const projectPathError = requireProjectPath(projectPath);
+        if (projectPathError) {
+          result = projectPathError;
+          break;
+        }
         const oldFull = resolvePath(args.oldPath, projectPath);
         const newFull = resolvePath(args.newPath, projectPath);
         const oldError = ensureToolPathWithinProject(oldFull, projectPath);
@@ -1000,9 +1293,42 @@ export async function executeToolCall(
           result = newError;
           break;
         }
-        await renderer.invoke('fs:renameFile', oldFull, newFull);
+        const renameResult = await renderer.invoke('fs:renameFile', oldFull, newFull);
+        if (!renameResult?.ok) {
+          result = `Error: Failed to rename ${oldFull} -> ${newFull}. Reason: ${renameResult?.error ?? 'unknown'}`;
+          break;
+        }
         window.dispatchEvent(new Event('explorer:refresh'));
         result = `Renamed ${oldFull} -> ${newFull}`;
+        break;
+      }
+
+      case 'copyFile': {
+        const projectPathError = requireProjectPath(projectPath);
+        if (projectPathError) {
+          result = projectPathError;
+          break;
+        }
+        const src = resolvePath(String(args.sourcePath ?? ''), projectPath);
+        const dst = resolvePath(String(args.destinationPath ?? ''), projectPath);
+        const srcErr = ensureToolPathWithinProject(src, projectPath);
+        if (srcErr) {
+          result = srcErr;
+          break;
+        }
+        const dstErr = ensureToolPathWithinProject(dst, projectPath);
+        if (dstErr) {
+          result = dstErr;
+          break;
+        }
+        const copyResult = await renderer.invoke('fs:copy', src, dst, Boolean(args.overwrite));
+        if (!copyResult?.ok) {
+          result = `Error: Copy failed (${src} -> ${dst}). Reason: ${copyResult?.error ?? 'Target may exist; set overwrite true to replace.'}`;
+          break;
+        }
+        window.dispatchEvent(new Event('explorer:refresh'));
+        notifyFileChanged(dst);
+        result = `Copied: ${src} -> ${dst}`;
         break;
       }
 

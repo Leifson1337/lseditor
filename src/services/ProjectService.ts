@@ -1,9 +1,9 @@
 import { EventEmitter } from '../utils/EventEmitter';
 
-// Sichere ipcRenderer-Initialisierung
-// ipcRenderer wird verwendet, um IPC-Aufrufe an den Hauptprozess zu senden
+// Safe ipcRenderer initialization
+// ipcRenderer is used to send IPC calls to the main process
 let ipcRenderer: any = null;
-// Prüfe, ob wir im Renderer-Prozess sind (window existiert)
+// Check if we're in the renderer process (window exists)
 const isRenderer = typeof window !== 'undefined';
 try {
   if (isRenderer && window && window.electron) {
@@ -13,8 +13,8 @@ try {
   console.error('Failed to initialize ipcRenderer in ProjectService', e);
 }
 
-// Hilfsfunktion für sichere IPC-Aufrufe
-// Diese Funktion prüft, ob ipcRenderer verfügbar ist, bevor ein IPC-Aufruf durchgeführt wird
+// Helper for safe IPC calls
+// Checks that ipcRenderer is available before invoking IPC
 async function safeIpcInvoke(channel: string, ...args: any[]): Promise<any> {
   if (!ipcRenderer) {
     console.error(`IPC channel ${channel} called but ipcRenderer is not available`);
@@ -23,16 +23,22 @@ async function safeIpcInvoke(channel: string, ...args: any[]): Promise<any> {
   return ipcRenderer.invoke(channel, ...args);
 }
 
-// Interface für Verzeichniseinträge
-// Ein Verzeichniseintrag kann ein Datei- oder Verzeichnisobjekt sein
+function assertFsOk(result: unknown, fallbackMessage: string): void {
+  if (result && typeof result === 'object' && 'ok' in result && !(result as { ok: boolean }).ok) {
+    throw new Error((result as { error?: string }).error || fallbackMessage);
+  }
+}
+
+// Interface for directory entries
+// A directory entry can represent a file or directory
 export interface DirectoryEntry {
-  name: string;            // Name des Eintrags
-  path: string;            // Pfad des Eintrags
-  isDirectory: boolean;    // Gibt an, ob der Eintrag ein Verzeichnis ist
-  isSymbolicLink?: boolean; // Gibt an, ob der Eintrag ein Symlink/Junction ist
-  children?: DirectoryEntry[]; // Unterordnete Einträge (nur für Verzeichnisse)
-  size?: number;           // Größe des Eintrags (nur für Dateien)
-  modified?: Date;         // Letztes Änderungsdatum des Eintrags
+  name: string;            // Entry name
+  path: string;            // Entry path
+  isDirectory: boolean;    // Whether the entry is a directory
+  isSymbolicLink?: boolean; // Whether the entry is a symlink/junction
+  children?: DirectoryEntry[]; // Child entries (directories only)
+  size?: number;           // Size (files only)
+  modified?: Date;         // Last modified time
 }
 
 const IGNORED_DIRECTORY_NAMES = new Set([
@@ -59,15 +65,15 @@ const IGNORED_DIRECTORY_NAMES = new Set([
   'target'
 ]);
 
-// ProjectService-Klasse
-// Diese Klasse verwaltet den Zugriff auf Projekte und Dateien im Workspace
+// ProjectService class
+// Manages access to projects and files in the workspace
 export class ProjectService extends EventEmitter {
-  private workspacePath: string; // Pfad zum Workspace
-  private currentProject: string | null = null; // Aktuelles Projekt
+  private workspacePath: string; // Workspace path
+  private currentProject: string | null = null; // Current project
   
   /**
-   * Konstruktor für die ProjectService-Klasse
-   * @param workspacePath Pfad zum Workspace
+   * ProjectService constructor
+   * @param workspacePath Workspace path
    */
   constructor(workspacePath: string) {
     super();
@@ -77,16 +83,16 @@ export class ProjectService extends EventEmitter {
     });
   }
   
-  // Initialisiert den ProjectService
+  // Initializes ProjectService
   private async initialize() {
-    // Lade Projekteinstellungen
+    // Load project settings
     await this.loadSettings();
   }
   
-  // Lädt die Projekteinstellungen
+  // Loads project settings
   private async loadSettings() {
     try {
-      // Lade Verzeichnisstruktur
+      // Load directory structure
       const entries = await this.safeGetDirectoryEntries(this.workspacePath);
       this.emit('directoryLoaded', entries);
     } catch (error) {
@@ -95,9 +101,9 @@ export class ProjectService extends EventEmitter {
   }
   
   /**
-   * Gibt die Verzeichniseinträge für den angegebenen Pfad zurück
-   * @param dirPath Pfad zum Verzeichnis
-   * @returns Array von Verzeichniseinträgen
+   * Returns directory entries for the given path
+   * @param dirPath Directory path
+   * @returns Array of directory entries
    */
   public async getDirectoryEntries(dirPath: string): Promise<DirectoryEntry[]> {
     if (!ipcRenderer) {
@@ -112,13 +118,13 @@ export class ProjectService extends EventEmitter {
     }
   }
   
-  // Gibt die Verzeichniseinträge für den angegebenen Pfad zurück, mit Fehlertoleranz
+  // Returns directory entries for the path with error tolerance
   private async safeGetDirectoryEntries(dirPath: string): Promise<DirectoryEntry[]> {
     try {
       return await this.getDirectoryEntries(dirPath);
     } catch (error: any) {
       if (error && (error.code === 'EBUSY' || error.code === 'EPERM' || error.code === 'EACCES')) {
-        // Systemdatei oder Zugriff verweigert: einfach ignorieren
+        // System file or access denied: ignore
         return [];
       }
       console.error('Error getting directory entries:', error);
@@ -127,13 +133,14 @@ export class ProjectService extends EventEmitter {
   }
 
   /**
-   * Liest den Inhalt einer Datei
-   * @param filePath Pfad zur Datei
-   * @returns Inhalt der Datei als String
+   * Reads file contents
+   * @param filePath File path
+   * @returns File contents as string
    */
   public async getFileContent(filePath: string): Promise<string> {
     try {
-      return await safeIpcInvoke('fs:readFile', filePath);
+      const content = await safeIpcInvoke('fs:readFile', filePath);
+      return typeof content === 'string' ? content : '';
     } catch (error) {
       console.error('Error reading file:', error);
       return '';
@@ -141,13 +148,14 @@ export class ProjectService extends EventEmitter {
   }
   
   /**
-   * Speichert den Inhalt einer Datei
-   * @param filePath Pfad zur Datei
-   * @param content Inhalt der Datei als String
+   * Saves file contents
+   * @param filePath File path
+   * @param content File contents as string
    */
   public async saveFile(filePath: string, content: string): Promise<void> {
     try {
-      await safeIpcInvoke('fs:writeFile', filePath, content);
+      const res = await safeIpcInvoke('fs:writeFile', filePath, content);
+      assertFsOk(res, 'Failed to save file');
       this.emit('fileSaved', filePath);
     } catch (error) {
       console.error('Error saving file:', error);
@@ -155,13 +163,14 @@ export class ProjectService extends EventEmitter {
   }
   
   /**
-   * Erstellt eine neue Datei
-   * @param filePath Pfad zur Datei
-   * @param content Inhalt der Datei als String (optional)
+   * Creates a new file
+   * @param filePath File path
+   * @param content File contents (optional)
    */
   public async createFile(filePath: string, content: string = ''): Promise<void> {
     try {
-      await safeIpcInvoke('fs:writeFile', filePath, content);
+      const res = await safeIpcInvoke('fs:writeFile', filePath, content);
+      assertFsOk(res, 'Failed to create file');
       this.emit('fileCreated', filePath);
     } catch (error) {
       console.error('Error creating file:', error);
@@ -169,12 +178,13 @@ export class ProjectService extends EventEmitter {
   }
   
   /**
-   * Erstellt ein neues Verzeichnis
-   * @param dirPath Pfad zum Verzeichnis
+   * Creates a new directory
+   * @param dirPath Directory path
    */
   public async createDirectory(dirPath: string): Promise<void> {
     try {
-      await safeIpcInvoke('fs:createDirectory', dirPath);
+      const res = await safeIpcInvoke('fs:createDirectory', dirPath);
+      assertFsOk(res, 'Failed to create directory');
       this.emit('directoryCreated', dirPath);
     } catch (error) {
       console.error('Error creating directory:', error);
@@ -182,12 +192,13 @@ export class ProjectService extends EventEmitter {
   }
   
   /**
-   * Löscht eine Datei
-   * @param filePath Pfad zur Datei
+   * Deletes a file
+   * @param filePath File path
    */
   public async deleteFile(filePath: string): Promise<void> {
     try {
-      await safeIpcInvoke('fs:deleteFile', filePath);
+      const res = await safeIpcInvoke('fs:deleteFile', filePath);
+      assertFsOk(res, 'Failed to delete file');
       this.emit('fileDeleted', filePath);
     } catch (error) {
       console.error('Error deleting file:', error);
@@ -195,12 +206,13 @@ export class ProjectService extends EventEmitter {
   }
   
   /**
-   * Löscht ein Verzeichnis
-   * @param dirPath Pfad zum Verzeichnis
+   * Deletes a directory
+   * @param dirPath Directory path
    */
   public async deleteDirectory(dirPath: string): Promise<void> {
     try {
-      await safeIpcInvoke('fs:deleteDirectory', dirPath);
+      const res = await safeIpcInvoke('fs:deleteDirectory', dirPath);
+      assertFsOk(res, 'Failed to delete directory');
       this.emit('directoryDeleted', dirPath);
     } catch (error) {
       console.error('Error deleting directory:', error);
@@ -208,25 +220,26 @@ export class ProjectService extends EventEmitter {
   }
   
   /**
-   * Umbenennung einer Datei
-   * @param oldPath Alter Pfad zur Datei
-   * @param newPath Neuer Pfad zur Datei
+   * Renames a file
+   * @param oldPath Old file path
+   * @param newPath New file path
    */
   public async renameFile(oldPath: string, newPath: string): Promise<void> {
     try {
-      await safeIpcInvoke('fs:renameFile', oldPath, newPath);
+      const res = await safeIpcInvoke('fs:renameFile', oldPath, newPath);
+      assertFsOk(res, 'Failed to rename file');
       this.emit('fileRenamed', { oldPath, newPath });
     } catch (error) {
       console.error('Error renaming file:', error);
     }
   }
   
-  // Gibt den Workspace-Pfad zurück
+  // Returns the workspace path
   public getWorkspacePath(): string {
     return this.workspacePath;
   }
   
-  // Setzt den Workspace-Pfad
+  // Sets the workspace path
   public setWorkspacePath(path: string): void {
     this.workspacePath = path;
     this.emit('workspaceChanged', path);
@@ -235,10 +248,10 @@ export class ProjectService extends EventEmitter {
     });
   }
 
-  // Fehlende Methoden hinzufügen, die in app.ts und App.tsx verwendet werden
+  // Methods used by app.ts and App.tsx
   /**
-   * Setzt das aktuelle Projekt
-   * @param projectPath Pfad zum Projekt
+   * Sets the current project
+   * @param projectPath Project path
    */
   public setProject(projectPath: string): void {
     this.currentProject = projectPath;
@@ -246,7 +259,7 @@ export class ProjectService extends EventEmitter {
   }
 
   /**
-   * Schließt das aktuelle Projekt
+   * Closes the current project
    */
   public closeProject(): void {
     this.currentProject = null;
@@ -254,9 +267,9 @@ export class ProjectService extends EventEmitter {
   }
 
   /**
-   * Gibt die Dateistruktur für den angegebenen Pfad zurück
-   * @param dirPath Pfad zum Verzeichnis
-   * @returns Array von Dateieinträgen
+   * Returns the file tree for the given path
+   * @param dirPath Directory path
+   * @returns Array of file entries
    */
   public async getFileStructure(dirPath: string): Promise<any[]> {
     try {
@@ -290,7 +303,7 @@ export class ProjectService extends EventEmitter {
       return result;
     } catch (error: any) {
       if (error && (error.code === 'EBUSY' || error.code === 'EPERM' || error.code === 'EACCES')) {
-        // Systemdatei oder Zugriff verweigert: einfach ignorieren
+        // System file or access denied: ignore
         return [];
       }
       console.error('Error getting file structure:', error);

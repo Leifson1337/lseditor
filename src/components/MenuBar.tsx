@@ -23,7 +23,8 @@ import {
   FiCommand,
   FiCheck,
   FiChevronRight,
-  FiClock
+  FiClock,
+  FiCpu
 } from 'react-icons/fi';
 import './MenuBar.css';
 import SettingsIcon from './SettingsIcon';
@@ -87,7 +88,8 @@ const ACTION_ICONS: Record<string, React.ReactNode> = {
   newTerminal: <FiTerminal />,
   runTask: <FiPlay />,
   checkUpdates: <FiRefreshCw />,
-  openRecent: <FiClock />
+  openRecent: <FiClock />,
+  aiSettings: <FiCpu />
 };
 
 const fileMenuItems: MenuItemConfig[] = [
@@ -160,6 +162,7 @@ const viewMenuItems: MenuItemConfig[] = [
   { id: 'extensions', label: 'Extensions' },
   { id: 'run', label: 'Run' },
   { id: 'terminal', label: 'Terminal' },
+  { id: 'aiSettings', label: 'AI Settings...' },
   { id: 'wordWrap', label: 'Toggle Word Wrap', isToggle: true, isChecked: true },
   { id: 'divider1', isDivider: true },
   { id: 'toggleFullScreen', label: 'Toggle Full Screen', shortcut: 'F11' },
@@ -434,7 +437,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
         <div className="menu-item-right">
           {shortcut && <span className="menu-shortcut">{shortcut}</span>}
           {isCheckUpdatesItem && updateAvailable && !isCheckingUpdates && (
-            <span className="menu-item-chip">Neu</span>
+            <span className="menu-item-chip">New</span>
           )}
         </div>
       </button>
@@ -461,7 +464,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
               <span className="menu-tab-label">
                 <span className="menu-tab-icon">{menu.icon}</span>
                 {menu.label}
-                {showUpdateIndicator && <span className="menu-item-indicator" title="Update verfügbar">●</span>}
+                {showUpdateIndicator && <span className="menu-item-indicator" title="Update available">●</span>}
               </span>
               {isActive && (
                 <div className="menu-dropdown">

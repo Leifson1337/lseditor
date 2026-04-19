@@ -82,13 +82,13 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({ projectPath, onClose
                 event.stopPropagation();
                 closeTab(tab.id);
               }}
-              title="Tab schließen"
+              title="Close tab"
             >
               x
             </button>
           </div>
         ))}
-        <button type="button" className="add-tab" onClick={addTab} title="Neuen Tab öffnen">
+        <button type="button" className="add-tab" onClick={addTab} title="Open new tab">
           +
         </button>
       </div>

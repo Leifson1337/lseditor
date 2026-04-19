@@ -687,7 +687,7 @@ export class GitService extends EventEmitter {
 
       if (!githubRemote) return null;
 
-      // URL-Format: https://github.com/username/repo.git oder git@github.com:username/repo.git
+      // URL format: https://github.com/username/repo.git or git@github.com:username/repo.git
       let match;
       if (githubRemote.url.startsWith('https')) {
         match = githubRemote.url.match(/github\.com\/([^\/]+)\/([^\.]+)(?:\.git)?/);

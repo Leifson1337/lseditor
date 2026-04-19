@@ -505,7 +505,7 @@ body {
   background-color: #1177bb;
 }
 
-/* Suchen- und Ersetzen-Dialoge */
+/* Find and replace dialogs */
 .find-dialog,
 .replace-dialog,
 .find-in-files-dialog,
@@ -556,7 +556,7 @@ body {
   background-color: #1177bb;
 }
 
-/* Ergebnisliste für Suchen in Dateien */
+/* Search-in-files result list */
 .search-results {
   margin-top: 10px;
   max-height: 300px;

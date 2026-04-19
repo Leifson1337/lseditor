@@ -12,7 +12,9 @@
     "test": "jest",
     "lint": "eslint . --ext .ts,.tsx",
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",
-    "rebuild": "electron-rebuild -f -w node-pty"
+    "rebuild": "electron-rebuild -f -w node-pty",
+    "dist": "npm run build && electron-builder --win nsis",
+    "dist:dir": "npm run build && electron-builder --win --dir"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.4.2",
@@ -68,6 +70,7 @@
     "react-syntax-highlighter": "^15.6.1",
     "react-toastify": "^11.0.5",
     "simple-git": "^3.15.1",
+    "systeminformation": "^5.31.5",
     "typescript": "^5.0.4",
     "vscode": "npm:@codingame/monaco-vscode-extension-api@^24.2.0",
     "ws": "^8.18.1",
@@ -91,6 +94,7 @@
     "@types/react-dnd": "^2.0.36",
     "@types/react-dnd-html5-backend": "^3.0.2",
     "@types/react-dom": "^18.0.11",
+    "@types/systeminformation": "^3.23.1",
     "@types/uuid": "^10.0.0",
     "@types/vscode": "^1.99.1",
     "@types/ws": "^8.18.1",
@@ -102,6 +106,7 @@
     "bufferutil": "^4.0.9",
     "css-loader": "^6.7.3",
     "electron": "^22.3.27",
+    "electron-builder": "^24.13.3",
     "electron-process-manager": "^1.2.0",
     "eslint": "^8.38.0",
     "eslint-config-prettier": "^8.8.0",
@@ -132,11 +137,43 @@
   },
   "build": {
     "appId": "com.lseditor.app",
+    "productName": "LS Editor",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/ollama",
+        "to": "ollama",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "asar": true,
     "mac": {
       "category": "public.app-category.developer-tools"
     },
     "win": {
-      "target": "nsis"
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
     },
     "linux": {
       "target": "AppImage"

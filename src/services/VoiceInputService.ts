@@ -278,7 +278,7 @@ export class VoiceInputService {
   ): () => void {
     const SRClass = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
     if (!SRClass) {
-      onError('SpeechRecognition API nicht verfügbar. Bitte Whisper in den Einstellungen aktivieren.');
+      onError('SpeechRecognition API not available. Enable Whisper in settings.');
       return () => {};
     }
 
@@ -318,7 +318,7 @@ export class VoiceInputService {
 
     this.recognition.onerror = (event: any) => {
       this.setState('error');
-      onError(`Spracherkennung Fehler: ${event.error}`);
+      onError(`Speech recognition error: ${event.error}`);
       this.setState('idle');
     };
 
@@ -358,7 +358,7 @@ export class VoiceInputService {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       this.setState('error');
-      onError(`Mikrofon-Zugriff verweigert: ${msg}`);
+      onError(`Microphone access denied: ${msg}`);
       this.setState('idle');
       return () => {};
     }
@@ -443,7 +443,7 @@ export class VoiceInputService {
           onResult(fallback);
         } else {
           this.setState('error');
-          onError(`Transkription fehlgeschlagen: ${msg}`);
+          onError(`Transcription failed: ${msg}`);
           this.setState('idle');
         }
       }
@@ -452,7 +452,7 @@ export class VoiceInputService {
     this.recorder.onerror = () => {
       this.log('MediaRecorder error event fired.');
       this.setState('error');
-      onError('Aufnahme-Fehler.');
+      onError('Recording error.');
       this.setState('idle');
     };
 

@@ -8,6 +8,7 @@ import axios, { AxiosError } from 'axios';
 import { AIConfig, AIResponse, AIConversation, AIMessage, CodeContext, CodeBlock, CodeSuggestion, AIPrompt, AITokenizer } from '../types/AITypes';
 import { promisify } from 'util';
 import { marked } from 'marked';
+import { mapAiConnectionError } from '../utils/aiConnectionErrors';
 
 // Safe ipcRenderer initialization for Electron renderer process
 // ipcRenderer is used for inter-process communication in Electron
@@ -118,6 +119,9 @@ export class AIService extends EventEmitter {
       else if (this.config.openAIConfig?.apiKey) {
         this.openai = new OpenAI({
           apiKey: this.config.openAIConfig.apiKey,
+          ...(this.config.openAIConfig.baseURL
+            ? { baseURL: this.config.openAIConfig.baseURL }
+            : {}),
           dangerouslyAllowBrowser: true
         });
       }
@@ -134,6 +138,10 @@ export class AIService extends EventEmitter {
 
       this.isInitialized = true;
     } catch (error) {
+      const conn = mapAiConnectionError(error);
+      if (conn) {
+        throw new AIServiceError(conn, 'CONNECTION_REFUSED', error);
+      }
       throw new AIServiceError(
         'Failed to initialize AI service',
         'INIT_ERROR',
@@ -157,6 +165,10 @@ export class AIService extends EventEmitter {
         throw new Error('Local model endpoint not configured');
       }
     } catch (error) {
+      const conn = mapAiConnectionError(error);
+      if (conn) {
+        throw new AIServiceError(conn, 'CONNECTION_REFUSED', error);
+      }
       throw new AIServiceError(
         'Failed to load local model',
         'LOCAL_MODEL_ERROR',
@@ -168,29 +180,16 @@ export class AIService extends EventEmitter {
   // Initialize tokenizer for prompt length optimization
   private async initializeTokenizer(): Promise<void> {
     try {
-      // Simple tokenizer implementation
-      // In a real implementation, you would use a proper tokenizer like tiktoken
+      // ~4 characters per token is a common heuristic for GPT-style models (closer than word count).
       this.tokenizer = {
         encode: (text: string) => {
-          // Simple implementation - split by spaces and convert to numbers
-          return text.split(/\s+/).map(word => {
-            let hash = 0;
-            for (let i = 0; i < word.length; i++) {
-              hash = ((hash << 5) - hash) + word.charCodeAt(i);
-              hash = hash & hash; // Convert to 32bit integer
-            }
-            return Math.abs(hash);
-          });
+          const n = Math.max(1, Math.ceil(text.length / 4));
+          return Array.from({ length: Math.min(n, 500_000) }, (_, i) => i);
         },
         decode: (tokens: number[]) => {
-          // This is a simplified implementation
-          // In a real implementation, you would have a vocabulary mapping
           return tokens.map(token => `token_${token}`).join(' ');
         },
-        countTokens: (text: string) => {
-          // Simple implementation - count words
-          return text.split(/\s+/).length;
-        }
+        countTokens: (text: string) => Math.max(0, Math.ceil(text.length / 4))
       };
     } catch (error) {
       console.warn('Failed to initialize tokenizer:', error);
@@ -262,8 +261,9 @@ export class AIService extends EventEmitter {
       }
 
       // Read the file content
-      const fileContent = await safeIpcInvoke('fs:readFile', filePath);
-      
+      const raw = await safeIpcInvoke('fs:readFile', filePath);
+      const fileContent = typeof raw === 'string' ? raw : '';
+
       // Extract imports
       const imports = this.extractImports(fileContent);
       
@@ -773,6 +773,13 @@ export class AIService extends EventEmitter {
         throw new Error('No AI endpoint configured');
       }
     } catch (error) {
+      if (error instanceof AIServiceError && error.code === 'CONNECTION_REFUSED') {
+        throw error;
+      }
+      const conn = mapAiConnectionError(error);
+      if (conn) {
+        throw new AIServiceError(conn, 'CONNECTION_REFUSED', error);
+      }
       throw new AIServiceError(
         'Failed to query AI',
         'QUERY_ERROR',
@@ -783,19 +790,11 @@ export class AIService extends EventEmitter {
 
   // Truncate the prompt to the given length
   private truncatePrompt(prompt: string, maxTokens: number): string {
-    if (!this.tokenizer) {
-      // Simple truncation if no tokenizer is available
-      return prompt.substring(0, maxTokens * 4); // Rough estimate: 4 chars per token
-    }
-    
-    const tokens = this.tokenizer.encode(prompt);
-    if (tokens.length <= maxTokens) {
+    const maxChars = Math.max(0, maxTokens * 4);
+    if (prompt.length <= maxChars) {
       return prompt;
     }
-    
-    // Truncate to maxTokens
-    const truncatedTokens = tokens.slice(0, maxTokens);
-    return this.tokenizer.decode(truncatedTokens);
+    return prompt.slice(0, maxChars);
   }
 
   // Query the local model with the given prompt and context
@@ -814,6 +813,10 @@ export class AIService extends EventEmitter {
       
       return this.parseAIResponse(response.data);
     } catch (error) {
+      const conn = mapAiConnectionError(error);
+      if (conn) {
+        throw new AIServiceError(conn, 'CONNECTION_REFUSED', error);
+      }
       throw new AIServiceError(
         'Failed to query local model',
         'LOCAL_MODEL_ERROR',
@@ -843,6 +846,10 @@ export class AIService extends EventEmitter {
       
       return this.parseOpenAIResponse(response);
     } catch (error) {
+      const conn = mapAiConnectionError(error);
+      if (conn) {
+        throw new AIServiceError(conn, 'CONNECTION_REFUSED', error);
+      }
       throw new AIServiceError(
         'Failed to query OpenAI',
         'OPENAI_ERROR',
@@ -879,6 +886,10 @@ export class AIService extends EventEmitter {
       
       return this.parseAIResponse(response.data);
     } catch (error) {
+      const conn = mapAiConnectionError(error);
+      if (conn) {
+        throw new AIServiceError(conn, 'CONNECTION_REFUSED', error);
+      }
       throw new AIServiceError(
         'Failed to query custom endpoint',
         'CUSTOM_ENDPOINT_ERROR',

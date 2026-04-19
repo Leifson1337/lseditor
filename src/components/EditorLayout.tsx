@@ -7,6 +7,7 @@ import { TabBar } from './TabBar';
 import type { Tab } from './TabBar';
 import Sidebar from './Sidebar';
 import AIChatPanel from './AIChatPanel';
+import AISettingsPage from './AISettingsPage';
 import { IntegratedTerminal } from './IntegratedTerminal';
 import ExtensionsPanel from './ExtensionsPanel';
 import { ThemeProvider } from '../contexts/ThemeContext';
@@ -201,6 +202,24 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
 }) => {
   // State for AI panel visibility
   const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
+  const [showAISettingsPage, setShowAISettingsPage] = useState(false);
+
+  useEffect(() => {
+    const ipc = window.electron?.ipcRenderer;
+    if (!ipc) return;
+    let cancelled = false;
+    void ipc
+      .invoke('app:consume-open-ai-settings-flag')
+      .then((shouldOpen: unknown) => {
+        if (!cancelled && Boolean(shouldOpen)) {
+          setShowAISettingsPage(true);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   // State for currently active tab
   const [activeTab, setActiveTab] = useState<string | null>(null);
   // State for all open tabs
@@ -210,7 +229,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   const [wordWrapEnabled, setWordWrapEnabled] = useState(true);
   const [aiPanelWidth, setAiPanelWidth] = useState(420);
   // State for terminal panel visibility
-  const [isTerminalPanelOpen, setIsTerminalPanelOpen] = useState(false); // State für Terminal-Panel
+  const [isTerminalPanelOpen, setIsTerminalPanelOpen] = useState(false); // Terminal panel visibility
   const emitTerminalAction = useCallback((type: string, payload?: any) => {
     window.dispatchEvent(new CustomEvent('terminal:action', { detail: { type, payload } }));
   }, []);
@@ -265,6 +284,9 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
       if (!exists) return;
 
       const entries = await ipc.invoke('fs:readDir', dirPath);
+      if (!Array.isArray(entries)) {
+        return;
+      }
       for (const entry of entries) {
         if (!entry.isDirectory) continue;
         const extDir = path.join(dirPath, entry.name);
@@ -587,7 +609,10 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   const saveActiveTab = async () => {
     const tab = tabs.find(t => t.id === activeTab);
     if (!tab || !window.electron?.ipcRenderer) return;
-    await window.electron.ipcRenderer.invoke('fs:writeFile', tab.path, tab.content);
+    const wr = await window.electron.ipcRenderer.invoke('fs:writeFile', tab.path, tab.content);
+    if (wr && typeof wr === 'object' && 'ok' in wr && !wr.ok) {
+      throw new Error((wr as { error?: string }).error || 'Save failed');
+    }
     setTabs(prev => prev.map(t => (t.id === tab.id ? { ...t, dirty: false } : t)));
     if (onSave) {
       onSave(tab.content);
@@ -611,7 +636,10 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   const saveAllTabs = async () => {
     if (!window.electron?.ipcRenderer) return;
     for (const tab of tabs) {
-      await window.electron.ipcRenderer.invoke('fs:writeFile', tab.path, tab.content);
+      const wr = await window.electron.ipcRenderer.invoke('fs:writeFile', tab.path, tab.content);
+      if (wr && typeof wr === 'object' && 'ok' in wr && !wr.ok) {
+        throw new Error((wr as { error?: string }).error || 'Save failed');
+      }
     }
     setTabs(prev => prev.map(tab => ({ ...tab, dirty: false })));
   };
@@ -716,6 +744,10 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   }, []);
 
   const handleViewMenuCommand = useCallback((actionId: string) => {
+    if (actionId === 'aiSettings') {
+      setShowAISettingsPage(true);
+      return;
+    }
     if (actionId === 'wordWrap') {
       setWordWrapEnabled(value => !value);
       return;
@@ -740,7 +772,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
           emitTerminalAction('runActiveFile', { path: activeTabData?.path });
           break;
         default:
-          emitTerminalAction('showInfo', { message: 'Diese Terminalaktion ist noch nicht hinterlegt.' });
+          emitTerminalAction('showInfo', { message: 'This terminal action is not implemented yet.' });
           break;
       }
     },
@@ -755,7 +787,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
         return;
       }
       emitTerminalAction('showInfo', {
-        message: `Die Aktion "${actionId}" ist noch nicht implementiert.`
+        message: `The action "${actionId}" is not implemented yet.`
       });
     },
     [activeTabData?.path, emitTerminalAction]
@@ -766,13 +798,57 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        saveActiveTab();
+        void saveActiveTab().catch(err => console.error('Save failed:', err));
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
     // eslint-disable-next-line
   }, [activeTab, tabs]);
+
+  // Ctrl+L: focus AI chat; Ctrl+K: quick edit from current selection (Monaco)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      const key = e.key.toLowerCase();
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName ?? '';
+      const inChatPanel = Boolean(target?.closest?.('.ai-chat-panel'));
+      const chatTextarea = tag === 'TEXTAREA' && inChatPanel;
+
+      if (key === 'l') {
+        if (chatTextarea) return;
+        e.preventDefault();
+        setIsAIPanelOpen(true);
+        setTimeout(() => window.dispatchEvent(new CustomEvent('ai:focusChatInput')), 0);
+        return;
+      }
+
+      if (key === 'k') {
+        if (chatTextarea || !target?.closest?.('.monaco-editor')) return;
+        const editor = editorRef.current;
+        if (!editor) return;
+        const model = editor.getModel?.();
+        if (!model) return;
+        const sel = editor.getSelection?.();
+        let text = '';
+        if (sel && !sel.isEmpty()) {
+          text = model.getValueInRange(sel);
+        } else if (sel) {
+          text = model.getLineContent(sel.startLineNumber) ?? '';
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        setIsAIPanelOpen(true);
+        setTimeout(
+          () => window.dispatchEvent(new CustomEvent('ai:quickEdit', { detail: { text } })),
+          0
+        );
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, []);
 
   // Helper function to check if a file is a media file
   const isMediaFile = (filename: string) => {
@@ -895,10 +971,10 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                 onTabSelect={setActiveTab}
                 onTabsReorder={handleTabsReorder}
               />
-              <div className="editor-path-display" title={activeTabData?.path || 'Keine Datei geöffnet'}>
+              <div className="editor-path-display" title={activeTabData?.path || 'No file open'}>
                 <span className="editor-path-label">Pfad:</span>
                 <span className="editor-path-value">
-                  {activeTabData?.path || 'Keine Datei geöffnet'}
+                  {activeTabData?.path || 'No file open'}
                 </span>
               </div>
               <div className="editor-area">
@@ -986,6 +1062,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
             )}
           </div>
         </div>
+        {showAISettingsPage && <AISettingsPage onClose={() => setShowAISettingsPage(false)} />}
       </EditorProvider>
     </ThemeProvider>
   );

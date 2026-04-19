@@ -72,7 +72,7 @@ const App: React.FC = () => {
   // State for the active (focused) file
   const [activeFile, setActiveFile] = useState<string>('');
   // State for the current project path
-  const [projectPath, setProjectPath] = useState<string>('');
+  const [projectPath, setProjectPath] = useState<string>(() => store.get('lastProjectPath') ?? '');
   // State to show/hide the project selection dialog
   const [showProjectDialog, setShowProjectDialog] = useState<boolean>(true);
   // State for the file structure tree
@@ -116,7 +116,6 @@ const App: React.FC = () => {
     const theme = store.get('theme') || 'dark';
     const fontSize = store.get('fontSize') || 14;
     const fontFamily = store.get('fontFamily') || 'Consolas, monospace';
-    const savedProjectPath = store.get('lastProjectPath');
     const editor = store.get('editor') || { wordWrap: true, minimap: true, lineNumbers: true };
 
     // Apply theme to root element
@@ -128,11 +127,6 @@ const App: React.FC = () => {
     // Load initial editor content from editor store
     if (editor?.content) {
       setEditorContent(editor.content);
-    }
-
-    // If a project path was saved, pre-fill it in the input field
-    if (savedProjectPath) {
-      setProjectPath(savedProjectPath);
     }
 
     // Set isInitialized to true when initialization is complete
@@ -149,6 +143,22 @@ const App: React.FC = () => {
   }, [refreshFileStructure]);
 
   useEffect(() => {
+    const last = store.get('lastProjectPath') as string | undefined;
+    if (last && last.trim() && window.electron?.ipcRenderer) {
+      window.electron.ipcRenderer
+        .invoke('workspace:setRoot', last.trim())
+        .then((result: { ok: boolean; error?: string }) => {
+          if (result?.ok) {
+            console.log('[App startup] Restored workspace root:', last);
+          } else {
+            console.warn('[App startup] Could not restore workspace root:', result?.error);
+          }
+        })
+        .catch(err => console.error('[App startup] workspace:setRoot error:', err));
+    }
+  }, []);
+
+  useEffect(() => {
     const normalizedPath = projectPath?.trim();
     if (!normalizedPath || !window.electron?.ipcRenderer) {
       return;
@@ -156,8 +166,15 @@ const App: React.FC = () => {
 
     window.electron.ipcRenderer
       .invoke('workspace:setRoot', normalizedPath)
+      .then((result: { ok: boolean; error?: string }) => {
+        if (!result?.ok) {
+          console.error('[App] workspace:setRoot failed:', result?.error);
+        } else {
+          console.log('[App] workspace:setRoot confirmed for:', normalizedPath);
+        }
+      })
       .catch(error => {
-        console.error('Failed to register workspace root:', error);
+        console.error('[App] Failed to register workspace root:', error);
       });
   }, [projectPath]);
 
@@ -184,7 +201,10 @@ const App: React.FC = () => {
     if (!name) return;
     const target = isAbsoluteFilePath(name) ? path.normalize(name) : path.join(projectPath, name);
     try {
-      await window.electron?.ipcRenderer?.invoke('fs:writeFile', target, '');
+      const wr = await window.electron?.ipcRenderer?.invoke('fs:writeFile', target, '');
+      if (wr && typeof wr === 'object' && 'ok' in wr && !wr.ok) {
+        throw new Error((wr as { error?: string }).error || 'Write failed');
+      }
       window.dispatchEvent(new Event('explorer:refresh'));
       window.dispatchEvent(new CustomEvent('editor:openFile', { detail: target }));
     } catch (error) {
@@ -201,7 +221,10 @@ const App: React.FC = () => {
     if (!name) return;
     const target = isAbsoluteFilePath(name) ? path.normalize(name) : path.join(projectPath, name);
     try {
-      await window.electron?.ipcRenderer?.invoke('fs:createDirectory', target);
+      const mr = await window.electron?.ipcRenderer?.invoke('fs:createDirectory', target);
+      if (mr && typeof mr === 'object' && 'ok' in mr && !mr.ok) {
+        throw new Error((mr as { error?: string }).error || 'mkdir failed');
+      }
       window.dispatchEvent(new Event('explorer:refresh'));
     } catch (error) {
       alert(`Failed to create folder: ${error instanceof Error ? error.message : String(error)}`);
@@ -282,9 +305,16 @@ const App: React.FC = () => {
     }
 
     console.log('Opening project:', normalizedPath);
-    window.electron?.ipcRenderer
-      ?.invoke('workspace:setRoot', normalizedPath)
-      .catch(error => console.error('Failed to register workspace root during openProject:', error));
+    try {
+      const rootResult = await window.electron?.ipcRenderer?.invoke('workspace:setRoot', normalizedPath);
+      if (!rootResult?.ok) {
+        console.error('[openProject] workspace:setRoot failed:', rootResult?.error);
+      } else {
+        console.log('[openProject] workspace:setRoot confirmed for:', normalizedPath);
+      }
+    } catch (error) {
+      console.error('[openProject] Failed to register workspace root:', error);
+    }
     setProjectPath(normalizedPath);
     setShowProjectDialog(false);
     store.set('lastProjectPath', normalizedPath);
@@ -375,10 +405,22 @@ const App: React.FC = () => {
           if (!overwrite || overwrite.response !== 1) return;
         }
         // Create directory and basic structure
-        await window.electron?.ipcRenderer.invoke('fs:createDirectory', newProjectPath);
-        await window.electron?.ipcRenderer.invoke('fs:createDirectory', `${newProjectPath}/src`);
-        await window.electron?.ipcRenderer.invoke('fs:createDirectory', `${newProjectPath}/assets`);
-        await window.electron?.ipcRenderer.invoke('fs:writeFile', `${newProjectPath}/README.md`, `# ${projectName}\n\nA new project created with LSEditor.`);
+        const mkdir = async (p: string) => {
+          const r = await window.electron?.ipcRenderer.invoke('fs:createDirectory', p);
+          if (r && typeof r === 'object' && 'ok' in r && !r.ok) {
+            throw new Error((r as { error?: string }).error || 'mkdir failed');
+          }
+        };
+        const write = async (p: string, c: string) => {
+          const r = await window.electron?.ipcRenderer.invoke('fs:writeFile', p, c);
+          if (r && typeof r === 'object' && 'ok' in r && !r.ok) {
+            throw new Error((r as { error?: string }).error || 'write failed');
+          }
+        };
+        await mkdir(newProjectPath);
+        await mkdir(`${newProjectPath}/src`);
+        await mkdir(`${newProjectPath}/assets`);
+        await write(`${newProjectPath}/README.md`, `# ${projectName}\n\nA new project created with LSEditor.`);
         // Open the new project
         setProjectPath(newProjectPath);
         setIsValidPath(true);
@@ -447,7 +489,10 @@ const App: React.FC = () => {
     if (!filePath) return;
     try {
       if (window.electron?.ipcRenderer) {
-        await window.electron.ipcRenderer.invoke('fs:writeFile', filePath, content);
+        const sr = await window.electron.ipcRenderer.invoke('fs:writeFile', filePath, content);
+        if (sr && typeof sr === 'object' && 'ok' in sr && !sr.ok) {
+          throw new Error((sr as { error?: string }).error || 'Save failed');
+        }
       }
     } catch (error) {
       console.error('Error saving file:', error);

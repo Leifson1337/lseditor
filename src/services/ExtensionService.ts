@@ -103,6 +103,9 @@ export class ExtensionService {
           try {
             if (await window.electron.ipcRenderer.invoke('fs:exists', packageJsonPath)) {
               const content = await window.electron.ipcRenderer.invoke('fs:readFile', packageJsonPath);
+              if (typeof content !== 'string' || !content) {
+                continue;
+              }
               const packageJson = JSON.parse(content);
 
               newContributions.set(entry.name, {

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import './SettingsIcon.css';
 import { useTheme } from '../contexts/ThemeContext';
-import { useAI } from '../contexts/AIContext';
+import { useAI, type AIProviderId } from '../contexts/AIContext';
 
 // Props for the SettingsIcon component
 interface SettingsIconProps {
@@ -15,11 +15,19 @@ const SettingsIcon: React.FC<SettingsIconProps> = ({ onClick }) => {
   const {
     settings: aiSettings,
     updateSettings: updateAISettings,
+    localBackendInstalls,
+    refreshLocalBackendInstalls,
     models,
     refreshModels,
     isFetchingModels,
     connectionStatus
   } = useAI();
+
+  useEffect(() => {
+    if (isOpen) {
+      void refreshLocalBackendInstalls();
+    }
+  }, [isOpen, refreshLocalBackendInstalls]);
   const [baseUrlInput, setBaseUrlInput] = useState(aiSettings.baseUrl);
 
   useEffect(() => {
@@ -104,9 +112,46 @@ const SettingsIcon: React.FC<SettingsIconProps> = ({ onClick }) => {
               </div>
             </div>
             <div className="settings-section">
-              <h4>AI (LM Studio)</h4>
+              <h4>AI</h4>
+              {localBackendInstalls?.ollama && localBackendInstalls?.lm && (
+                <div className="setting-item">
+                  <label>Local backend</label>
+                  <div className="settings-local-backend-btns">
+                    <button
+                      type="button"
+                      className={aiSettings.provider === 'ollama' ? 'active' : ''}
+                      onClick={() => updateAISettings({ provider: 'ollama' })}
+                    >
+                      Ollama
+                    </button>
+                    <button
+                      type="button"
+                      className={aiSettings.provider === 'lmstudio' ? 'active' : ''}
+                      onClick={() => updateAISettings({ provider: 'lmstudio' })}
+                    >
+                      LM Studio
+                    </button>
+                  </div>
+                  <small className="settings-hint">Switch between installed runtimes (same as AI panel → Model).</small>
+                </div>
+              )}
               <div className="setting-item">
-                <label>API URL</label>
+                <label>Provider</label>
+                <select
+                  value={aiSettings.provider}
+                  onChange={event =>
+                    updateAISettings({
+                      provider: event.target.value as AIProviderId
+                    })
+                  }
+                >
+                  <option value="ollama">Ollama (localhost:11434)</option>
+                  <option value="lmstudio">LM Studio (localhost:1234)</option>
+                  <option value="custom">Custom URL</option>
+                </select>
+              </div>
+              <div className="setting-item">
+                <label>API base URL</label>
                 <input
                   type="text"
                   value={baseUrlInput}

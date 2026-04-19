@@ -115,10 +115,14 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
           continue;
         }
 
-        const entries = (await safeInvoke<Array<{ name: string; isDirectory: boolean }>>(
+        const raw = await safeInvoke<Array<{ name: string; isDirectory: boolean }> | { __error?: boolean }>(
           'fs:readDir',
           root.path
-        )) ?? [];
+        );
+        if (!raw || (raw as { __error?: boolean }).__error || !Array.isArray(raw)) {
+          continue;
+        }
+        const entries = raw;
 
         for (const entry of entries) {
           if (!entry.isDirectory) continue;
@@ -180,7 +184,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
       setExtensions(collected);
     } catch (loadError) {
       console.error('Failed to load extensions:', loadError);
-      setError('Extensions konnten nicht geladen werden.');
+      setError('Could not load extensions.');
     } finally {
       setIsLoading(false);
     }
@@ -245,7 +249,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
       }
     } catch (err) {
       console.error('Marketplace search error:', err);
-      setError('Fehler bei der Marketplace-Suche.');
+      setError('Marketplace search failed.');
       if (offset === 0) setMarketplaceResultsCount(0);
     } finally {
       setIsSearching(false);
@@ -261,24 +265,24 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
   const handleUninstall = async (info: ExtensionInfo) => {
     if (!baseExtensionsPath) return;
 
-    const confirm = window.confirm(`Möchtest du die Extension "${info.name}" wirklich deinstallieren?`);
+    const confirm = window.confirm(`Uninstall extension "${info.name}"?`);
     if (!confirm) return;
 
     setIsUninstalling(info.id);
     try {
-      const result = await safeInvoke<boolean>('fs:deleteDirectory', info.location);
-      if (result) {
+      const result = await safeInvoke<{ ok?: boolean; error?: string }>('fs:deleteDirectory', info.location);
+      if (result?.ok) {
         if (selectedExtension && 'id' in selectedExtension && selectedExtension.id === info.id) {
           setSelectedExtension(null);
         }
         await loadExtensions();
         window.dispatchEvent(new CustomEvent('extensions:changed'));
       } else {
-        setError('Fehler beim Deinstallieren.');
+        setError('Uninstall failed.');
       }
     } catch (err) {
       console.error('Uninstall error:', err);
-      setError('Deinstallation fehlgeschlagen.');
+      setError('Uninstall failed.');
     } finally {
       setIsUninstalling(null);
     }
@@ -286,7 +290,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
 
   const handleInstall = async (ext: OpenVSXExtension) => {
     if (!baseExtensionsPath) {
-      setError('Kein Extensions-Verzeichnis verfügbar.');
+      setError('No extensions directory available.');
       return;
     }
 
@@ -305,11 +309,11 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
         await loadExtensions();
         window.dispatchEvent(new CustomEvent('extensions:changed'));
       } else {
-        setError(`Fehler beim Installieren: ${result?.error || 'Unbekannter Fehler'}`);
+        setError(`Install failed: ${result?.error || 'Unknown error'}`);
       }
     } catch (err) {
       console.error('Installation error:', err);
-      setError('Installation fehlgeschlagen.');
+      setError('Installation failed.');
     } finally {
       setInstallingIds(prev => {
         const next = new Set(prev);
@@ -334,9 +338,15 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
 
     setIsCreating(true);
     try {
-      await safeInvoke('fs:createDirectory', baseExtensionsPath);
+      const r1 = await safeInvoke<{ ok?: boolean; error?: string }>('fs:createDirectory', baseExtensionsPath);
+      if (r1 && typeof r1 === 'object' && 'ok' in r1 && !r1.ok) {
+        throw new Error(r1.error || 'mkdir failed');
+      }
       const extensionDir = path.join(baseExtensionsPath, normalizedName);
-      await safeInvoke('fs:createDirectory', extensionDir);
+      const r2 = await safeInvoke<{ ok?: boolean; error?: string }>('fs:createDirectory', extensionDir);
+      if (r2 && typeof r2 === 'object' && 'ok' in r2 && !r2.ok) {
+        throw new Error(r2.error || 'mkdir failed');
+      }
 
       const manifest = {
         name: normalizedName,
@@ -351,7 +361,14 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
         main: './index.js'
       };
 
-      await safeInvoke('fs:writeFile', path.join(extensionDir, 'package.json'), JSON.stringify(manifest, null, 2));
+      const w1 = await safeInvoke<{ ok?: boolean; error?: string }>(
+        'fs:writeFile',
+        path.join(extensionDir, 'package.json'),
+        JSON.stringify(manifest, null, 2)
+      );
+      if (w1 && typeof w1 === 'object' && 'ok' in w1 && !w1.ok) {
+        throw new Error(w1.error || 'write failed');
+      }
       const entrypoint = [
         "exports.activate = () => {",
         "  // Extension entrypoint",
@@ -360,7 +377,10 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
         "exports.deactivate = () => {};",
         ""
       ].join('\n');
-      await safeInvoke('fs:writeFile', path.join(extensionDir, 'index.js'), entrypoint);
+      const w2 = await safeInvoke<{ ok?: boolean; error?: string }>('fs:writeFile', path.join(extensionDir, 'index.js'), entrypoint);
+      if (w2 && typeof w2 === 'object' && 'ok' in w2 && !w2.ok) {
+        throw new Error(w2.error || 'write failed');
+      }
       setShowCreateForm(false);
       setCreateName('');
       setCreateDescription('');
@@ -387,7 +407,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
             className="extensions-panel__back-button"
             onClick={() => setSelectedExtension(null)}
           >
-            ← Zurück
+            ← Back
           </button>
         </div>
         <div className="extensions-panel__detail-content">
@@ -400,7 +420,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
               <p className="extensions-panel__detail-publisher">
                 {isMarketplace
                   ? `@${(selectedExtension as OpenVSXExtension).namespace}`
-                  : `by ${(selectedExtension as ExtensionInfo).publisher || 'unbekannt'}`}
+                  : `by ${(selectedExtension as ExtensionInfo).publisher || 'unknown'}`}
               </p>
             </div>
           </div>
@@ -408,7 +428,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
           <div className="extensions-panel__detail-actions">
             {isMarketplace ? (
               isInstalled ? (
-                <span className="extensions-panel__installed-badge">Installiert</span>
+                <span className="extensions-panel__installed-badge">Installed</span>
               ) : (
                 <button
                   type="button"
@@ -429,25 +449,25 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
                 onClick={() => handleUninstall(selectedExtension as ExtensionInfo)}
                 disabled={isUninstalling === (selectedExtension as ExtensionInfo).id}
               >
-                Deinstallieren
+                Uninstall
               </button>
             )}
 
             {!isMarketplace && (
               <button type="button" onClick={() => handleOpenExtension(selectedExtension as ExtensionInfo)} className="extensions-panel__secondary-button">
-                Manifest öffnen
+                Open manifest
               </button>
             )}
           </div>
 
           <div className="extensions-panel__detail-body">
             <p className="extensions-panel__detail-description">
-              {selectedExtension.description || 'Keine Beschreibung verfügbar.'}
+              {selectedExtension.description || 'No description available.'}
             </p>
 
             <div className="extensions-panel__detail-meta">
-              <span>Version: {selectedExtension.version || 'unbekannt'}</span>
-              {!isMarketplace && <span>Quelle: {(selectedExtension as ExtensionInfo).source}</span>}
+              <span>Version: {selectedExtension.version || 'unknown'}</span>
+              {!isMarketplace && <span>Source: {(selectedExtension as ExtensionInfo).source}</span>}
             </div>
           </div>
         </div>
@@ -464,7 +484,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
             className={`extensions-panel__tab ${activeView === 'installed' ? 'active' : ''}`}
             onClick={() => setActiveView('installed')}
           >
-            <FaCube /> Eingebaut
+            <FaCube /> Built-in
           </button>
           <button
             type="button"
@@ -479,7 +499,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
             type="button"
             className="extensions-panel__icon-button"
             onClick={() => loadExtensions()}
-            title="Neu laden"
+            title="Reload"
             disabled={isLoading}
           >
             <FaSyncAlt className={isLoading ? 'spin' : ''} />
@@ -488,7 +508,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
             type="button"
             className="extensions-panel__icon-button"
             onClick={() => setShowCreateForm(true)}
-            title="Neue Extension erstellen"
+            title="Create new extension"
           >
             <FaPlusCircle />
           </button>
@@ -499,7 +519,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
         {activeView === 'installed' ? (
           <>
             {error && <div className="extensions-panel__error">{error}</div>}
-            {isLoading && !extensions.length && <div className="extensions-panel__loading">Lade Extensions...</div>}
+            {isLoading && !extensions.length && <div className="extensions-panel__loading">Loading extensions...</div>}
 
             <ul className="extensions-panel__list">
               {extensions.map(extension => (
@@ -514,7 +534,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
                       {extension.publisher && <span className="extensions-panel__item-publisher">by {extension.publisher}</span>}
                     </div>
                     <div className="extensions-panel__item-meta">
-                      <span>v{extension.version ?? 'unbekannt'}</span>
+                      <span>v{extension.version ?? 'unknown'}</span>
                       <span>{extension.source}</span>
                     </div>
                     {extension.description && (
@@ -531,7 +551,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
               <div className="extensions-panel__search-container">
                 <input
                   type="text"
-                  placeholder="Marketplace durchsuchen..."
+                  placeholder="Search marketplace..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && searchMarketplace(searchQuery)}
@@ -555,11 +575,11 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
               </button>
             </div>
 
-            {isSearching && <div className="extensions-panel__loading">Suche im Marketplace...</div>}
+            {isSearching && <div className="extensions-panel__loading">Searching marketplace...</div>}
 
             {!isSearching && marketplaceExtensions.length > 0 && (
               <div className="extensions-panel__search-info">
-                {marketplaceResultsCount} Ergebnisse gefunden
+                {marketplaceResultsCount} results found
               </div>
             )}
 
@@ -588,7 +608,7 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
                     </div>
                     <div className="extensions-panel__item-actions">
                       {isInstalled ? (
-                        <span className="extensions-panel__installed-badge">Installiert</span>
+                        <span className="extensions-panel__installed-badge">Installed</span>
                       ) : (
                         <button
                           type="button"
@@ -609,12 +629,12 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
               {marketplaceExtensions.length < marketplaceResultsCount && searchQuery.trim().length > 0 && !isSearching && (
                 <div className="extensions-panel__load-more">
                   <button type="button" onClick={loadMoreMarketplace}>
-                    Mehr laden...
+                    Load more...
                   </button>
                 </div>
               )}
               {!isSearching && searchQuery.trim().length > 0 && marketplaceExtensions.length === 0 && (
-                <div className="extensions-panel__empty">Keine Erweiterungen für "{searchQuery}" gefunden.</div>
+                <div className="extensions-panel__empty">No extensions found for "{searchQuery}".</div>
               )}
             </ul>
           </div>
@@ -624,32 +644,32 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
       {showCreateForm && (
         <div className="extensions-panel__create">
           <form onSubmit={handleCreateExtension}>
-            <h3>Neue lokale Extension</h3>
+            <h3>New local extension</h3>
             <label>
-              Anzeigename
+              Display name
               <input
                 type="text"
                 value={createName}
                 onChange={event => setCreateName(event.target.value)}
-                placeholder="Meine tolle Extension"
+                placeholder="My extension"
                 required
               />
             </label>
             <label>
-              Beschreibung
+              Description
               <textarea
                 value={createDescription}
                 onChange={event => setCreateDescription(event.target.value)}
-                placeholder="Was macht diese Erweiterung?"
+                placeholder="What does this extension do?"
                 rows={3}
               />
             </label>
             <div className="extensions-panel__create-actions">
               <button type="button" onClick={() => setShowCreateForm(false)} disabled={isCreating}>
-                Abbrechen
+                Cancel
               </button>
               <button type="submit" disabled={isCreating}>
-                {isCreating ? 'Erstelle...' : 'Erstellen'}
+                {isCreating ? 'Creating...' : 'Create'}
               </button>
             </div>
           </form>

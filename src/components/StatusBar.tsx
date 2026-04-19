@@ -1,5 +1,6 @@
 import React from 'react';
 import '../styles/StatusBar.css';
+import { useOptionalAI } from '../contexts/AIContext';
 
 // Props for the StatusBar component
 export interface StatusBarProps {
@@ -20,6 +21,9 @@ const StatusBar: React.FC<StatusBarProps> = ({
   problemCount = 0,
   portForwardCount = 0
 }) => {
+  const aiContext = useOptionalAI();
+  const contextUsagePercent = aiContext?.contextUsagePercent ?? 0;
+
   // Determine programming language from file extension
   let language = '';
   if (activeFile) {
@@ -56,7 +60,7 @@ const StatusBar: React.FC<StatusBarProps> = ({
   return (
     <div className="status-bar">
       <div className="status-bar-left">
-        {/* Errors, Warnings und Port Forwards GANZ LINKS */}
+        {/* Errors, warnings, and port forwards on the left */}
         <div className="status-item error-count">
           <span className={`status-value ${errorCount > 0 ? 'error' : ''}`}>Errors: {errorCount}</span>
         </div>
@@ -77,7 +81,21 @@ const StatusBar: React.FC<StatusBarProps> = ({
           </div>
         )}
       </div>
-      <div className="status-bar-center"></div>
+      <div className="status-bar-center">
+        <div
+          className="status-context-meter"
+          title={`AI context usage: ${contextUsagePercent}%`}
+        >
+          <div className="status-context-meter-label">Context</div>
+          <div className="status-context-meter-track">
+            <div
+              className={`status-context-meter-fill ${contextUsagePercent >= 85 ? 'high' : contextUsagePercent >= 60 ? 'mid' : ''}`}
+              style={{ width: `${Math.min(100, Math.max(0, contextUsagePercent))}%` }}
+            />
+          </div>
+          <span className="status-context-meter-pct">{contextUsagePercent}%</span>
+        </div>
+      </div>
       <div className="status-bar-right">
         {/* Show terminal port and connection status */}
         {terminalPort && (

@@ -3,9 +3,9 @@
 
 // import ElectronStore from 'electron-store';
 // ElectronStore darf NICHT im Renderer (React) verwendet werden!
-// Wenn du persistente Daten im Renderer brauchst, nutze stattdessen localStorage oder IPC zu main.ts.
+// For persistent data in the renderer, use localStorage or IPC to main.ts instead.
 
-// Dummy-Export, damit der Import nicht mehr crasht
+// Dummy export so the import does not crash
 export default {};
 
 import { ProjectService } from '../services/ProjectService';

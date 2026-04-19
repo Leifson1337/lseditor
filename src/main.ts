@@ -10,6 +10,32 @@ import { app, BrowserWindow, dialog, ipcMain, MessageBoxOptions, nativeImage, sh
 import * as path from 'path';
 import { AIService } from './services/AIService';
 import { UIService } from './services/UIService';
+import { OllamaManager } from './ollama/OllamaManager';
+import { appStore } from './main/appStore';
+import type { AIChatPersistedState } from './main/appStore';
+import { detectGPU, downloadBackend, installOllamaSilent } from './utils/gpuDetector';
+import type { GPUDetectionResult } from './utils/gpuDetector';
+import {
+  detectBackends,
+  getOllamaModels,
+  fetchLmStudioFirstModelId,
+  waitForOllamaServer,
+  waitForLmStudioServer,
+  launchLmStudio,
+  launchOllamaApp,
+  findLmStudioExecutable,
+  OLLAMA_DEFAULT_PORT,
+  LM_STUDIO_DEFAULT_PORT,
+  DEFAULT_PULL_MODEL,
+  findOllamaListeningPort,
+  findLmStudioListeningPort,
+  scanParallelBackends,
+  getLocalBackendInstallFlags,
+  listLocalModelsForProvider
+} from './utils/backendDetector';
+import type { BackendInfo, ParallelBackendSnapshot } from './utils/backendDetector';
+import { LmStudioManager } from './lmstudio/LmStudioManager';
+import { createInferenceLogger } from './utils/inferenceLogger';
 import { AIConfig } from './types/AITypes';
 import 'prismjs';
 import 'prismjs/themes/prism.css';
@@ -26,6 +52,30 @@ let splashShownAt = 0;
 const MIN_SPLASH_MS = 4000;
 let aiService: AIService;
 let uiService: UIService | undefined = undefined;
+let ollamaManager: OllamaManager | null = null;
+let firstTimeSetupWindow: BrowserWindow | null = null;
+let backendPreferenceWindow: BrowserWindow | null = null;
+let cachedGpuForSetup: GPUDetectionResult | null = null;
+let firstSetupFlowResolver: (() => void) | null = null;
+let backendPreferenceFlowResolver: (() => void) | null = null;
+let firstSetupCompletedByIpc = false;
+let firstSetupIpcRegistered = false;
+let backendPreferenceIpcRegistered = false;
+let backendPreferenceSnapshot: ParallelBackendSnapshot | null = null;
+type FirstSetupScenario =
+  | 'ollama-detected'
+  | 'lmstudio-detected'
+  | 'both-installed'
+  | 'ollama-only-installed'
+  | 'lm-only-installed'
+  | 'no-backend'
+  | 'insufficient-hardware';
+let firstSetupScenario: FirstSetupScenario = 'no-backend';
+let firstSetupCanDownloadOllama = false;
+let firstSetupDetectedModels: string[] = [];
+let firstSetupOllamaDetected = false;
+let firstSetupParallelSnapshot: ParallelBackendSnapshot | null = null;
+let skipBackendPreferenceThisLaunch = false;
 const allowedWorkspaceRoots = new Set<string>();
 
 interface TerminalSession {
@@ -70,6 +120,21 @@ if (process.platform === 'win32') {
   }
 }
 
+/**
+ * Mitigate Chromium gpu_init / ANGLE noise on Windows ("Passthrough is not supported, GL is disabled").
+ * Must run before the app is ready. Optional: set LSEDITOR_DISABLE_GPU=1 to force software rendering.
+ */
+if (process.env.LSEDITOR_DISABLE_GPU === '1') {
+  app.disableHardwareAcceleration();
+} else if (process.platform === 'win32') {
+  try {
+    app.commandLine.appendSwitch('disable-gpu-sandbox');
+    app.commandLine.appendSwitch('use-angle', 'd3d11');
+  } catch {
+    // ignore
+  }
+}
+
 // --- SECURITY UTILITIES ---
 
 /**
@@ -94,7 +159,10 @@ const registerAllowedRoot = (candidate?: string | null) => {
   }
 };
 
+let _staticAllowedRootsCache: string[] | null = null;
+
 const getStaticAllowedRoots = () => {
+  if (_staticAllowedRootsCache) return _staticAllowedRootsCache;
   const roots = new Set<string>();
   try { roots.add(normalizeFsPath(process.cwd())); } catch {}
   try { roots.add(normalizeFsPath(app.getPath('home'))); } catch {}
@@ -105,7 +173,8 @@ const getStaticAllowedRoots = () => {
   try { roots.add(normalizeFsPath(app.getPath('temp'))); } catch {}
   try { roots.add(normalizeFsPath(resolveBasePromptPath())); } catch {}
   try { roots.add(normalizeFsPath(resolveAppIconPath())); } catch {}
-  return Array.from(roots);
+  _staticAllowedRootsCache = Array.from(roots);
+  return _staticAllowedRootsCache;
 };
 
 const isWithinRoot = (candidate: string, root: string) => {
@@ -460,8 +529,8 @@ async function openAboutWindow(): Promise<void> {
   });
 
   const latestVersion = programInfo.version || remoteVersion?.program?.version || version;
-  const lastCheckedLabel = lastVersionFetch ? new Date(lastVersionFetch).toLocaleString() : 'Nie';
-  const updateBadge = latestVersion && latestVersion !== version ? 'Update verfuegbar' : 'Aktuell';
+  const lastCheckedLabel = lastVersionFetch ? new Date(lastVersionFetch).toLocaleString() : 'Never';
+  const updateBadge = latestVersion && latestVersion !== version ? 'Update available' : 'Up to date';
 
   const html = `<!doctype html>
 <html lang="en">
@@ -641,26 +710,26 @@ async function openAboutWindow(): Promise<void> {
           <div class="meta-value"><a href="${repoUrl}" target="_blank" rel="noreferrer">${repoLabel}</a></div>
         </div>
         <div class="meta-card">
-          <div class="meta-label">Neueste Version</div>
-          <div class="meta-value">${latestVersion || 'unbekannt'}</div>
+          <div class="meta-label">Latest version</div>
+          <div class="meta-value">${latestVersion || 'unknown'}</div>
         </div>
         <div class="meta-card">
-          <div class="meta-label">Zuletzt geprueft</div>
+          <div class="meta-label">Last checked</div>
           <div class="meta-value">${lastCheckedLabel}</div>
         </div>
       </div>
       <div class="support-card">
         <div>
           <h2>Help &amp; Support</h2>
-          <p>Besuche die Dokumentation oder eroeffne ein Issue, wenn du Unterstuetzung brauchst.</p>
+          <p>Visit the documentation or open an issue if you need help.</p>
         </div>
         <div class="support-actions">
-          <a href="${repoUrl}#readme" target="_blank" rel="noreferrer">Dokumentation</a>
-          <a href="${repoUrl}/issues" target="_blank" rel="noreferrer">Issue erstellen</a>
-          <a href="${licenseUrl}" target="_blank" rel="noreferrer">Lizenz</a>
+          <a href="${repoUrl}#readme" target="_blank" rel="noreferrer">Documentation</a>
+          <a href="${repoUrl}/issues" target="_blank" rel="noreferrer">Report issue</a>
+          <a href="${licenseUrl}" target="_blank" rel="noreferrer">License</a>
         </div>
       </div>
-      <footer>&copy; ${currentYear} LS Editor / MIT-Lizenz.</footer>
+      <footer>&copy; ${currentYear} LS Editor / MIT License</footer>
     </div>
   </body>
 </html>`;
@@ -754,22 +823,132 @@ ipcMain.handle('ai:getBasePrompt', async () => {
   }
 });
 
+ipcMain.handle('ai:load-chat-state', async event => {
+  assertTrustedSender(event);
+  return appStore.get('aiChatState') ?? null;
+});
+
+ipcMain.handle('ai:save-chat-state', async (event, payload: unknown) => {
+  assertTrustedSender(event);
+  if (payload == null) {
+    appStore.delete('aiChatState');
+    return true;
+  }
+  appStore.set('aiChatState', payload as AIChatPersistedState);
+  return true;
+});
+
+ipcMain.handle('ai:load-settings', async event => {
+  assertTrustedSender(event);
+  return appStore.get('aiPanelSettingsJson') ?? null;
+});
+
+ipcMain.handle(
+  'ai:resolve-local-provider-base-url',
+  async (event, provider: 'ollama' | 'lmstudio') => {
+    assertTrustedSender(event);
+    try {
+      if (provider === 'ollama') {
+        const bundled = ollamaManager?.getBaseUrl();
+        if (bundled) {
+          return { baseUrl: bundled };
+        }
+        const port = await findOllamaListeningPort();
+        if (port != null) {
+          return { baseUrl: `http://127.0.0.1:${port}` };
+        }
+        return { baseUrl: null };
+      }
+      const lm = await findLmStudioListeningPort();
+      if (lm != null) {
+        return { baseUrl: `${lm.scheme}://127.0.0.1:${lm.port}` };
+      }
+      return { baseUrl: null };
+    } catch {
+      return { baseUrl: null };
+    }
+  }
+);
+
+ipcMain.handle('ai:get-local-backends-installed', async event => {
+  assertTrustedSender(event);
+  try {
+    return await getLocalBackendInstallFlags();
+  } catch {
+    return { ollamaInstalled: false, lmStudioInstalled: false };
+  }
+});
+
+ipcMain.handle('ai:list-local-models', async (event, provider: unknown) => {
+  assertTrustedSender(event);
+  if (provider !== 'ollama' && provider !== 'lmstudio') {
+    return { models: [] as string[], baseUrl: null as string | null, error: 'Invalid provider' };
+  }
+  try {
+    return await listLocalModelsForProvider(provider);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { models: [], baseUrl: null, error: msg };
+  }
+});
+
+ipcMain.handle('ai:save-settings', async (event, payload: unknown) => {
+  assertTrustedSender(event);
+  if (payload == null || payload === '') {
+    appStore.delete('aiPanelSettingsJson');
+    return true;
+  }
+  const json = typeof payload === 'string' ? payload : JSON.stringify(payload);
+  appStore.set('aiPanelSettingsJson', json);
+  try {
+    const parsed = JSON.parse(json) as { provider?: string };
+    if (parsed.provider === 'ollama' || parsed.provider === 'lmstudio') {
+      appStore.set('preferredLocalBackend', parsed.provider);
+      appStore.set('backendChoice', parsed.provider);
+    }
+  } catch {
+    // ignore malformed JSON
+  }
+  return true;
+});
+
 ipcMain.handle('exec', async (event, command: unknown, options?: { cwd?: string; requestId?: string }) => {
   assertTrustedSender(event);
 
   if (typeof command !== 'string' || command.trim().length === 0) {
-    throw new Error('Ungueltiger Befehl');
+    return { stdout: '', stderr: '', code: 1, error: 'Invalid command: command must be a non-empty string.' };
   }
 
-  const cwd = typeof options?.cwd === 'string' && options.cwd.trim().length
-    ? validatePath(options.cwd)
-    : process.cwd();
+  let cwd: string;
+  try {
+    cwd = typeof options?.cwd === 'string' && options.cwd.trim().length
+      ? validatePath(options.cwd)
+      : process.cwd();
+  } catch (pathError) {
+    const msg = pathError instanceof Error ? pathError.message : String(pathError);
+    console.error('exec: invalid cwd:', msg);
+    return { stdout: '', stderr: '', code: 1, error: `Invalid working directory: ${msg}` };
+  }
 
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     try {
-      runSafeCommand(command, cwd, { requestId: options?.requestId }).then(resolve).catch(reject);
+      runSafeCommand(command as string, cwd, { requestId: options?.requestId })
+        .then(resolve)
+        .catch(error => {
+          resolve({
+            stdout: '',
+            stderr: '',
+            code: 1,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        });
     } catch (error) {
-      reject(error instanceof Error ? error : new Error(String(error)));
+      resolve({
+        stdout: '',
+        stderr: '',
+        code: 1,
+        error: error instanceof Error ? error.message : String(error)
+      });
     }
   });
 });
@@ -794,6 +973,24 @@ ipcMain.handle('exec:kill', async (event, requestId: unknown) => {
     return false;
   }
 });
+
+function updateSplashOllamaProgress(message: string, percent?: number | null): void {
+  if (!splashWindow || splashWindow.isDestroyed()) return;
+  const safeMsg = JSON.stringify(message);
+  const n = typeof percent === 'number' && !Number.isNaN(percent)
+    ? Math.max(0, Math.min(100, Math.round(percent)))
+    : null;
+  const script = `(function(){
+    var s=document.getElementById('ollama-status');
+    var w=document.getElementById('ollama-progress-wrap');
+    var f=document.getElementById('ollama-fill');
+    var num=${n === null ? 'null' : String(n)};
+    if(s) s.textContent=${safeMsg};
+    if(w) w.style.display='block';
+    if(f && num!==null) f.style.width=num+'%';
+  })();`;
+  splashWindow.webContents.executeJavaScript(script).catch(() => {});
+}
 
 function createSplashWindow(): void {
   if (splashWindow) {
@@ -885,6 +1082,33 @@ function createSplashWindow(): void {
         0% { left: -40%; }
         100% { left: 100%; }
       }
+      #ollama-progress-wrap {
+        width: 280px;
+        margin-top: 8px;
+        display: none;
+      }
+      #ollama-track {
+        height: 8px;
+        border-radius: 999px;
+        background: rgba(148, 163, 184, 0.25);
+        overflow: hidden;
+      }
+      #ollama-fill {
+        height: 100%;
+        width: 0%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, #38bdf8, #f59e0b);
+        transition: width 0.2s ease;
+      }
+      #ollama-status {
+        font-size: 11px;
+        color: rgba(226, 232, 240, 0.85);
+        margin-top: 6px;
+        text-align: center;
+        line-height: 1.35;
+        max-width: 320px;
+        word-break: break-word;
+      }
     </style>
   </head>
   <body>
@@ -893,6 +1117,10 @@ function createSplashWindow(): void {
       <div class="title">LS Editor</div>
       <div class="subtitle">Loading workspace</div>
       <div class="loader"></div>
+      <div id="ollama-progress-wrap">
+        <div id="ollama-track"><div id="ollama-fill"></div></div>
+        <div id="ollama-status"></div>
+      </div>
     </div>
   </body>
 </html>`;
@@ -1002,24 +1230,49 @@ async function createWindow() {
 /**
  * Initializes the main application services, including AIService and UIService.
  */
-async function initializeServices() {
+async function initializeServices(ollamaOpenAIBaseURL?: string, ollamaModelName?: string) {
   try {
-    // Initialize AIService with config
+    const storedBase = appStore.get('localOpenAIBaseURL');
+    const storedModel = appStore.get('preferredDefaultModel');
+    const backendChoice = appStore.get('backendChoice');
+
+    const useSystemLocal =
+      typeof storedBase === 'string' &&
+      storedBase.length > 0 &&
+      typeof storedModel === 'string' &&
+      storedModel.length > 0 &&
+      (backendChoice === 'ollama' || backendChoice === 'lmstudio');
+
+    const useBundledOllama = Boolean(
+      !useSystemLocal && ollamaOpenAIBaseURL && ollamaModelName
+    );
+
+    const useLocalOpenAI = useSystemLocal || useBundledOllama;
+    const resolvedBase = useSystemLocal ? storedBase : ollamaOpenAIBaseURL;
+    const resolvedModel = useSystemLocal ? storedModel : ollamaModelName;
+
     const aiConfig: AIConfig = {
       useLocalModel: false,
-      model: 'gpt-3.5-turbo',
+      model: useLocalOpenAI ? resolvedModel! : 'gpt-3.5-turbo',
       temperature: 0.7,
       maxTokens: 2048,
       contextWindow: 4096,
-      // Stop sequences must always be an array!
       stopSequences: ['\n\n', '```'],
       topP: 1,
-      openAIConfig: {
-        apiKey: process.env.OPENAI_API_KEY || '',
-        model: 'gpt-3.5-turbo',
-        temperature: 0.7,
-        maxTokens: 2048
-      }
+      openAIConfig: useLocalOpenAI
+        ? {
+            apiKey: 'ollama',
+            model: resolvedModel!,
+            temperature: 0.7,
+            maxTokens: 2048,
+            baseURL: resolvedBase
+          }
+        : {
+            apiKey: process.env.OPENAI_API_KEY || '',
+            model: 'gpt-3.5-turbo',
+            temperature: 0.7,
+            maxTokens: 2048
+          }
     };
 
     aiService = AIService.getInstance(aiConfig);
@@ -1075,17 +1328,22 @@ function setupFsIpcHandlers() {
         isDirectory: e.isDirectory()
       }));
     } catch (err) {
-      return [];
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('fs:readDir failed:', message);
+      return { __error: true, message };
     }
   });
 
-  // File system: read file
+  // File system: read file (returns null if missing — avoids noisy IPC rejection logs)
   ipcMain.handle('fs:readFile', async (event, filePath) => {
     assertTrustedSender(event);
     try {
       const normalizedPath = validatePath(filePath);
       return await fs.promises.readFile(normalizedPath, 'utf-8');
     } catch (error) {
+      if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
+        return null;
+      }
       console.error('Failed to read file:', error);
       throw error;
     }
@@ -1127,10 +1385,10 @@ function setupFsIpcHandlers() {
       await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
       const buffer = Buffer.from(String(base64Content ?? ''), 'base64');
       await fs.promises.writeFile(targetPath, buffer);
-      return true;
+      return { ok: true };
     } catch (error) {
       console.error('Error writing binary file:', error);
-      return false;
+      return { ok: false, error: (error as Error).message };
     }
   });
 
@@ -1158,10 +1416,10 @@ function setupFsIpcHandlers() {
       await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
       const data = typeof content === 'string' ? content : String(content ?? '');
       await fs.promises.writeFile(targetPath, data, 'utf-8');
-      return true;
+      return { ok: true };
     } catch (error) {
       console.error('Error writing file:', error);
-      return false;
+      return { ok: false, error: (error as Error).message };
     }
   });
 
@@ -1172,10 +1430,10 @@ function setupFsIpcHandlers() {
       await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
       const data = typeof content === 'string' ? content : String(content ?? '');
       await fs.promises.appendFile(targetPath, data, 'utf-8');
-      return true;
+      return { ok: true };
     } catch (error) {
       console.error('Error appending file:', error);
-      return false;
+      return { ok: false, error: (error as Error).message };
     }
   });
 
@@ -1209,10 +1467,10 @@ function setupFsIpcHandlers() {
     try {
       const normalized = validatePath(dirPath);
       await fs.promises.mkdir(normalized, { recursive: true });
-      return true;
+      return { ok: true };
     } catch (error) {
       console.error('Error creating directory:', error);
-      return false;
+      return { ok: false, error: (error as Error).message };
     }
   });
 
@@ -1222,10 +1480,10 @@ function setupFsIpcHandlers() {
     try {
       const normalized = validatePath(filePath);
       await fs.promises.unlink(normalized);
-      return true;
+      return { ok: true };
     } catch (error) {
       console.error('Error deleting file:', error);
-      return false;
+      return { ok: false, error: (error as Error).message };
     }
   });
 
@@ -1235,10 +1493,10 @@ function setupFsIpcHandlers() {
     try {
       const normalized = validatePath(dirPath);
       await fs.promises.rm(normalized, { recursive: true, force: true });
-      return true;
+      return { ok: true };
     } catch (error) {
       console.error('Error deleting directory:', error);
-      return false;
+      return { ok: false, error: (error as Error).message };
     }
   });
 
@@ -1249,17 +1507,17 @@ function setupFsIpcHandlers() {
       const sourcePath = validatePath(String(oldPath ?? ''));
       let targetPath = typeof newPath === 'string' && newPath.trim().length ? newPath.trim() : '';
       if (!targetPath) {
-        throw new Error('Neuer Dateiname fehlt.');
+        throw new Error('New file name is missing.');
       }
       if (!path.isAbsolute(targetPath)) {
         targetPath = path.join(path.dirname(sourcePath), targetPath);
       }
       targetPath = validatePath(targetPath);
       await fs.promises.rename(sourcePath, targetPath);
-      return true;
+      return { ok: true };
     } catch (error) {
       console.error('Error renaming file:', error);
-      return false;
+      return { ok: false, error: (error as Error).message };
     }
   });
 
@@ -1450,7 +1708,7 @@ function setupFsIpcHandlers() {
   });
 }
 
-// --- Fehlende IPC-Handler für Renderer-Kommunikation ---
+// --- IPC handlers for renderer communication ---
 ipcMain.handle('getDirectoryEntries', async (event, dirPath) => {
   assertTrustedSender(event);
   try {
@@ -1490,15 +1748,30 @@ ipcMain.handle('app:getUserDataPath', () => {
 ipcMain.handle('workspace:setRoot', (event, workspacePath: unknown) => {
   assertTrustedSender(event);
   if (typeof workspacePath !== 'string' || !workspacePath.trim()) {
-    return false;
+    console.warn('[workspace:setRoot] Rejected: empty or invalid path');
+    return { ok: false, error: 'Path is empty or invalid' };
   }
   registerAllowedRoot(workspacePath);
-  return true;
+  console.log('[workspace:setRoot] Registered root:', workspacePath);
+  console.log('[workspace:setRoot] All allowed roots:', [
+    ...getStaticAllowedRoots(),
+    ...Array.from(allowedWorkspaceRoots)
+  ]);
+  return { ok: true };
 });
 
 ipcMain.handle('app:getPath', (event, name) => {
   assertTrustedSender(event);
   return app.getPath(name as any);
+});
+
+ipcMain.handle('app:consume-open-ai-settings-flag', event => {
+  assertTrustedSender(event);
+  const shouldOpen = Boolean(appStore.get('openAISettingsOnLaunch'));
+  if (shouldOpen) {
+    appStore.set('openAISettingsOnLaunch', false);
+  }
+  return shouldOpen;
 });
 
 ipcMain.handle('app:openAbout', async () => {
@@ -1641,7 +1914,7 @@ ipcMain.handle('terminal:runActiveFile', () => {
   }
 });
 
-// IPC-Handler für system buttons (Fenstersteuerung)
+// IPC handlers for system buttons (window controls)
 
 ipcMain.handle('file:newTextFile', async () => {
   if (mainWindow) {
@@ -1781,10 +2054,10 @@ ipcMain.handle('fs:copy', async (event, sourcePath: string, targetPath: string, 
       if (exists) throw new Error(`Target already exists: ${normalizedDst}`);
     }
     await fs.promises.cp(normalizedSrc, normalizedDst, { recursive: true, force: overwrite });
-    return true;
+    return { ok: true };
   } catch (error) {
     console.error('fs:copy failed:', error);
-    return false;
+    return { ok: false, error: (error as Error).message };
   }
 });
 
@@ -1840,7 +2113,7 @@ function setupTerminalIpcHandlers() {
 
       child.on('error', error => {
         const message = error instanceof Error ? error.message : String(error);
-        sendTerminalError(session.webContents, sessionId, `Terminalfehler: ${message}`);
+        sendTerminalError(session.webContents, sessionId, `Terminal error: ${message}`);
       });
 
       child.on('close', (code, signal) => {
@@ -1875,7 +2148,7 @@ function setupTerminalIpcHandlers() {
       return { sessionId };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      sendTerminalError(event.sender, null, `Terminal konnte nicht gestartet werden: ${message}`);
+      sendTerminalError(event.sender, null, `Could not start terminal: ${message}`);
       throw error;
     }
   });
@@ -1894,7 +2167,7 @@ function setupTerminalIpcHandlers() {
 
     const session = terminalSessions.get(sessionId);
     if (!session || session.webContents.id !== event.sender.id) {
-      sendTerminalError(event.sender, sessionId ?? null, 'Terminal-Sitzung nicht gefunden.');
+      sendTerminalError(event.sender, sessionId ?? null, 'Terminal session not found.');
       return;
     }
 
@@ -1904,7 +2177,7 @@ function setupTerminalIpcHandlers() {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      sendTerminalError(session.webContents, sessionId, `Schreiben fehlgeschlagen: ${message}`);
+      sendTerminalError(session.webContents, sessionId, `Write failed: ${message}`);
     }
   });
 
@@ -1954,13 +2227,679 @@ export {
   uiService
 };
 
-// Electron Lifecycle: Services und Fenster nach App-Start initialisieren
+function assertFirstSetupSender(event: Electron.IpcMainInvokeEvent) {
+  if (!firstTimeSetupWindow || event.sender !== firstTimeSetupWindow.webContents) {
+    throw new Error('Unauthorized first-setup IPC sender');
+  }
+}
+
+function setupFirstTimeSetupIpcHandlers(): void {
+  if (firstSetupIpcRegistered) {
+    return;
+  }
+  firstSetupIpcRegistered = true;
+
+  ipcMain.handle('first-setup:get-gpu', async event => {
+    assertFirstSetupSender(event);
+    return cachedGpuForSetup;
+  });
+
+  ipcMain.handle('first-setup:get-context', async event => {
+    assertFirstSetupSender(event);
+    return {
+      scenario: firstSetupScenario,
+      canDownloadOllama: firstSetupCanDownloadOllama,
+      ollamaDetected: firstSetupOllamaDetected,
+      detectedModels: firstSetupDetectedModels,
+      parallel: firstSetupParallelSnapshot
+    };
+  });
+
+  ipcMain.handle('first-setup:get-ollama-models', async event => {
+    assertFirstSetupSender(event);
+    const port = await findOllamaListeningPort();
+    if (port == null) {
+      return { reachable: false, models: [] as string[] };
+    }
+    const models = await getOllamaModels(port);
+    return { reachable: true, models };
+  });
+
+  ipcMain.handle('first-setup:download', async (event, type: unknown) => {
+    assertFirstSetupSender(event);
+    if (type !== 'ollama' && type !== 'lmstudio') {
+      throw new Error('Invalid download type');
+    }
+    if (firstSetupScenario === 'insufficient-hardware') {
+      throw new Error('Downloads are disabled because system resources are insufficient.');
+    }
+    if (type === 'ollama' && !firstSetupCanDownloadOllama) {
+      throw new Error('Ollama download is disabled for this setup scenario.');
+    }
+    const destDir = app.getPath('temp');
+    return await downloadBackend(type, destDir, (loaded, total, status) => {
+      if (!event.sender.isDestroyed()) {
+        event.sender.send('first-setup:download-progress', { loaded, total, status });
+      }
+    });
+  });
+
+  ipcMain.handle('first-setup:install-ollama', async (event, installerPath: unknown) => {
+    assertFirstSetupSender(event);
+    if (typeof installerPath !== 'string' || !installerPath.trim()) {
+      throw new Error('Invalid installer path');
+    }
+    await installOllamaSilent(installerPath);
+    return true;
+  });
+
+  ipcMain.handle('first-setup:reveal-in-folder', async (event, filePath: unknown) => {
+    assertFirstSetupSender(event);
+    if (typeof filePath !== 'string' || !filePath.trim()) {
+      return false;
+    }
+    shell.showItemInFolder(filePath);
+    return true;
+  });
+
+  ipcMain.handle('first-setup:open-lmstudio-page', async event => {
+    assertFirstSetupSender(event);
+    await shell.openExternal('https://lmstudio.ai/');
+    return true;
+  });
+
+  ipcMain.handle(
+    'first-setup:complete',
+    async (
+      event,
+      payload: { choice: 'ollama' | 'lmstudio' | 'none'; preferredDefaultModel?: string }
+    ) => {
+      assertFirstSetupSender(event);
+      firstSetupCompletedByIpc = true;
+      appStore.set('firstTimeGpuSetupShown', true);
+      appStore.set('backendChoice', payload.choice);
+      if (payload.choice === 'ollama' || payload.choice === 'lmstudio') {
+        appStore.set('preferredLocalBackend', payload.choice);
+      }
+      if (payload.choice === 'ollama') {
+        appStore.set('localOpenAIBaseURL', 'http://127.0.0.1:11434/v1');
+      } else if (payload.choice === 'lmstudio') {
+        appStore.set('localOpenAIBaseURL', 'http://127.0.0.1:1234/v1');
+      } else {
+        appStore.delete('localOpenAIBaseURL');
+      }
+      if (payload.preferredDefaultModel?.trim()) {
+        appStore.set('preferredDefaultModel', payload.preferredDefaultModel.trim());
+      }
+      if (payload.choice === 'none' && firstSetupScenario === 'insufficient-hardware') {
+        appStore.set('openAISettingsOnLaunch', true);
+      }
+      firstTimeSetupWindow?.close();
+      return true;
+    }
+  );
+}
+
+function assertBackendPreferenceSender(event: Electron.IpcMainInvokeEvent) {
+  if (!backendPreferenceWindow || event.sender !== backendPreferenceWindow.webContents) {
+    throw new Error('Unauthorized backend-preference IPC sender');
+  }
+}
+
+function setupBackendPreferenceIpcHandlers(): void {
+  if (backendPreferenceIpcRegistered) {
+    return;
+  }
+  backendPreferenceIpcRegistered = true;
+
+  ipcMain.handle('backend-pref:get-snapshot', async event => {
+    assertBackendPreferenceSender(event);
+    return backendPreferenceSnapshot;
+  });
+
+  ipcMain.handle('backend-pref:complete', async (event, choice: unknown) => {
+    assertBackendPreferenceSender(event);
+    if (choice !== 'ollama' && choice !== 'lmstudio') {
+      throw new Error('Invalid backend choice');
+    }
+    appStore.set('preferredLocalBackend', choice);
+    appStore.set('backendChoice', choice);
+    const snap = backendPreferenceSnapshot;
+    if (choice === 'ollama') {
+      appStore.set('localOpenAIBaseURL', snap?.ollama.baseURL ?? 'http://127.0.0.1:11434/v1');
+    } else {
+      appStore.set(
+        'localOpenAIBaseURL',
+        snap?.lmstudio.baseURL ?? 'http://127.0.0.1:1234/v1'
+      );
+    }
+    backendPreferenceWindow?.close();
+    return true;
+  });
+
+  ipcMain.handle('backend-pref:cancel', async event => {
+    assertBackendPreferenceSender(event);
+    appStore.set('preferredLocalBackend', 'ollama');
+    const snap = backendPreferenceSnapshot;
+    appStore.set('localOpenAIBaseURL', snap?.ollama.baseURL ?? 'http://127.0.0.1:11434/v1');
+    backendPreferenceWindow?.close();
+    return true;
+  });
+}
+
+function createBackendPreferenceWindow(): void {
+  if (backendPreferenceWindow) {
+    backendPreferenceWindow.focus();
+    return;
+  }
+
+  backendPreferenceWindow = new BrowserWindow({
+    width: 560,
+    height: 640,
+    resizable: false,
+    show: false,
+    autoHideMenuBar: true,
+    title: 'Local AI backend',
+    backgroundColor: '#0f172a',
+    icon: getAppIconImage() ?? resolveAppIconPath(),
+    webPreferences: {
+      preload: path.join(__dirname, 'preload-backend-preference.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+
+  backendPreferenceWindow.loadFile(path.join(__dirname, 'backend-preference.html'));
+  backendPreferenceWindow.once('ready-to-show', () => {
+    backendPreferenceWindow?.show();
+  });
+
+  backendPreferenceWindow.on('closed', () => {
+    backendPreferenceWindow = null;
+    const pref = appStore.get('preferredLocalBackend');
+    if (pref !== 'ollama' && pref !== 'lmstudio') {
+      appStore.set('preferredLocalBackend', 'ollama');
+    }
+    backendPreferenceFlowResolver?.();
+    backendPreferenceFlowResolver = null;
+    backendPreferenceSnapshot = null;
+  });
+}
+
+async function maybeShowBackendPreferenceWindow(): Promise<void> {
+  if (skipBackendPreferenceThisLaunch) {
+    return;
+  }
+  const existing = appStore.get('preferredLocalBackend');
+  if (existing === 'ollama' || existing === 'lmstudio') {
+    return;
+  }
+  const snap = await scanParallelBackends();
+  if (!snap.ollama.installed || !snap.lmstudio.installed) {
+    return;
+  }
+  backendPreferenceSnapshot = snap;
+  await new Promise<void>(resolve => {
+    backendPreferenceFlowResolver = resolve;
+    createBackendPreferenceWindow();
+  });
+}
+
+function createFirstTimeSetupWindow(): void {
+  if (firstTimeSetupWindow) {
+    firstTimeSetupWindow.focus();
+    return;
+  }
+
+  firstTimeSetupWindow = new BrowserWindow({
+    width: 560,
+    height: 800,
+    resizable: false,
+    show: false,
+    autoHideMenuBar: true,
+    title: 'LS Editor setup',
+    backgroundColor: '#0f172a',
+    icon: getAppIconImage() ?? resolveAppIconPath(),
+    webPreferences: {
+      preload: path.join(__dirname, 'preload-first-setup.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+
+  firstTimeSetupWindow.loadFile(path.join(__dirname, 'first-time-setup.html'));
+  firstTimeSetupWindow.once('ready-to-show', () => {
+    firstTimeSetupWindow?.show();
+  });
+
+  firstTimeSetupWindow.on('closed', () => {
+    firstTimeSetupWindow = null;
+    if (!firstSetupCompletedByIpc) {
+      appStore.set('firstTimeGpuSetupShown', true);
+      if (firstSetupScenario === 'both-installed') {
+        appStore.set('preferredLocalBackend', 'ollama');
+        appStore.set('backendChoice', 'ollama');
+        appStore.set('localOpenAIBaseURL', 'http://127.0.0.1:11434/v1');
+      } else {
+        appStore.set('backendChoice', 'none');
+        appStore.delete('localOpenAIBaseURL');
+      }
+    }
+    firstSetupFlowResolver?.();
+    firstSetupFlowResolver = null;
+    firstSetupCompletedByIpc = false;
+    firstSetupDetectedModels = [];
+    firstSetupOllamaDetected = false;
+    firstSetupCanDownloadOllama = false;
+    firstSetupParallelSnapshot = null;
+  });
+}
+
+function migratePreferredLocalBackend(): void {
+  const existing = appStore.get('preferredLocalBackend');
+  if (existing === 'ollama' || existing === 'lmstudio') {
+    return;
+  }
+  const bc = appStore.get('backendChoice');
+  if (bc === 'ollama' || bc === 'lmstudio') {
+    appStore.set('preferredLocalBackend', bc);
+  }
+}
+
+function detectBackendsPreferringStored(): Promise<BackendInfo> {
+  const prefer = appStore.get('preferredLocalBackend');
+  return detectBackends(
+    prefer === 'ollama' || prefer === 'lmstudio' ? { prefer } : undefined
+  );
+}
+
+async function configureSystemOllamaFromRunningServer(scan: BackendInfo): Promise<void> {
+  const port = scan.port ?? OLLAMA_DEFAULT_PORT;
+  const base = scan.baseURL ?? `http://127.0.0.1:${port}/v1`;
+  const models = scan.models ?? [];
+  const preferred = String(appStore.get('preferredDefaultModel') || '').trim();
+  const fallbackModel = preferred || models[0] || DEFAULT_PULL_MODEL;
+  const model = models.find(m => m === preferred) ?? fallbackModel;
+  appStore.set('preferredLocalBackend', 'ollama');
+  appStore.set('backendChoice', 'ollama');
+  appStore.set('localOpenAIBaseURL', base);
+  appStore.set('preferredDefaultModel', model);
+  appStore.set('firstTimeGpuSetupShown', true);
+}
+
+/**
+ * Startup policy: if Ollama is installed locally, try to start/detect it first
+ * and wire the app to the detected local endpoint before opening the UI.
+ */
+async function ensureSystemOllamaReadyBeforeAppStart(): Promise<void> {
+  const pref = appStore.get('preferredLocalBackend');
+  if (pref === 'lmstudio') {
+    createInferenceLogger('startup-ollama').info(
+      'Skipping Ollama autostart — user prefers LM Studio.'
+    );
+    return;
+  }
+
+  let scan = await detectBackendsPreferringStored();
+  if (!scan.ollamaInstalled) {
+    return;
+  }
+
+  const ollamaAlreadyRunning = scan.type === 'ollama' && scan.running && !!scan.baseURL;
+  if (!ollamaAlreadyRunning) {
+    if (scan.ollamaExePath) {
+      console.log('[startup] Ollama installed but not running; launching system Ollama...');
+      launchOllamaApp(scan.ollamaExePath);
+    }
+    const started = await waitForOllamaServer(OLLAMA_DEFAULT_PORT, 120000);
+    if (!started) {
+      console.warn('[startup] Could not detect a running local Ollama server after launch.');
+      return;
+    }
+    scan = await detectBackendsPreferringStored();
+  }
+
+  if (scan.type !== 'ollama' || !scan.running || !scan.baseURL) {
+    return;
+  }
+
+  const models = scan.models ?? [];
+  const preferred = String(appStore.get('preferredDefaultModel') || '').trim();
+  const fallbackModel = preferred || models[0] || DEFAULT_PULL_MODEL;
+  const selectedModel = models.find(m => m === preferred) ?? fallbackModel;
+
+  appStore.set('preferredLocalBackend', 'ollama');
+  appStore.set('backendChoice', 'ollama');
+  appStore.set('localOpenAIBaseURL', scan.baseURL);
+  appStore.set('preferredDefaultModel', selectedModel);
+  mergeAiPanelSettingsFromDetection('ollama', stripOpenAiBaseToChatOrigin(scan.baseURL));
+}
+
+/**
+ * When LM Studio is the preferred stack, start the local server via `lms server start` when possible.
+ */
+async function ensureLmStudioReadyBeforeAppStart(): Promise<void> {
+  const snap = await scanParallelBackends();
+  if (!snap.lmstudio.installed || snap.lmstudio.running) {
+    return;
+  }
+  const pref = appStore.get('preferredLocalBackend');
+  if (pref === 'ollama') {
+    createInferenceLogger('startup-lmstudio').info('Skipping LM Studio autostart — user prefers Ollama.');
+    return;
+  }
+  const dual = snap.ollama.installed && snap.lmstudio.installed;
+  if (dual && pref !== 'lmstudio') {
+    createInferenceLogger('startup-lmstudio').info(
+      'Skipping LM Studio autostart — dual install without LM preference (default Ollama).'
+    );
+    return;
+  }
+  const log = createInferenceLogger('startup-lmstudio');
+  const exe = snap.lmstudio.exePath ?? (await findLmStudioExecutable());
+  const ok = await LmStudioManager.ensureLocalServerRunning({
+    lmStudioExePath: exe,
+    log,
+    timeoutMs: 120000
+  });
+  if (!ok) {
+    log.warn('LM Studio server did not become ready; start the local server from LM Studio if needed.');
+  }
+}
+
+function stripOpenAiBaseToChatOrigin(base: string): string {
+  return base.replace(/\/v1\/?$/i, '').replace(/\/$/, '');
+}
+
+function mergeAiPanelSettingsFromDetection(
+  provider: 'ollama' | 'lmstudio',
+  baseUrlWithoutV1: string
+): void {
+  const raw = appStore.get('aiPanelSettingsJson');
+  let parsed: Record<string, unknown> = {};
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      parsed = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      parsed = {};
+    }
+  }
+  const next = { ...parsed, provider, baseUrl: baseUrlWithoutV1 };
+  appStore.set('aiPanelSettingsJson', JSON.stringify(next));
+}
+
+/**
+ * After local backends are up, align app store + AI panel URL with the detected port and scheme
+ * so the main window loads with the correct endpoint (before renderer reads ai:load-settings).
+ */
+async function syncAiEndpointsBeforeWindow(bundledOpenAIBaseURL?: string): Promise<void> {
+  const storedBackendChoice = appStore.get('backendChoice');
+  const storedLocalBase = appStore.get('localOpenAIBaseURL');
+  const useSystemInference =
+    typeof storedLocalBase === 'string' &&
+    storedLocalBase.length > 0 &&
+    (storedBackendChoice === 'ollama' || storedBackendChoice === 'lmstudio');
+
+  if (!useSystemInference && bundledOpenAIBaseURL) {
+    mergeAiPanelSettingsFromDetection('ollama', stripOpenAiBaseToChatOrigin(bundledOpenAIBaseURL));
+    return;
+  }
+
+  if (storedBackendChoice === 'none') {
+    return;
+  }
+
+  const scan = await detectBackendsPreferringStored();
+  if (scan.type === 'ollama' && scan.running && scan.baseURL) {
+    appStore.set('backendChoice', 'ollama');
+    appStore.set('localOpenAIBaseURL', scan.baseURL);
+    mergeAiPanelSettingsFromDetection('ollama', stripOpenAiBaseToChatOrigin(scan.baseURL));
+  } else if (scan.type === 'lmstudio' && scan.running && scan.baseURL) {
+    appStore.set('backendChoice', 'lmstudio');
+    appStore.set('localOpenAIBaseURL', scan.baseURL);
+    mergeAiPanelSettingsFromDetection('lmstudio', stripOpenAiBaseToChatOrigin(scan.baseURL));
+  }
+}
+
+async function configureLmStudioFromRunningServer(scan?: BackendInfo): Promise<void> {
+  const latest = scan ?? (await detectBackends({ prefer: 'lmstudio' }));
+  if (latest.type !== 'lmstudio' || !latest.running || !latest.baseURL) {
+    return;
+  }
+  const base = latest.baseURL;
+  const port = latest.port ?? LM_STUDIO_DEFAULT_PORT;
+  const scheme: 'http' | 'https' = base.startsWith('https') ? 'https' : 'http';
+  let model = await fetchLmStudioFirstModelId(port, scheme);
+  if (!model) model = 'local-model';
+  appStore.set('preferredLocalBackend', 'lmstudio');
+  appStore.set('backendChoice', 'lmstudio');
+  appStore.set('localOpenAIBaseURL', base);
+  appStore.set('preferredDefaultModel', model);
+  appStore.set('firstTimeGpuSetupShown', true);
+}
+
+async function runFirstTimeBackendSetupIfNeeded(): Promise<void> {
+  skipBackendPreferenceThisLaunch = false;
+
+  if (appStore.get('firstTimeGpuSetupShown')) {
+    return;
+  }
+
+  const snap = await scanParallelBackends();
+  const gpu = snap.gpuInfo ?? (await detectGPU());
+  cachedGpuForSetup = {
+    hasDedicatedGPU: gpu.hasDedicatedGPU,
+    name: gpu.name,
+    vramGB: gpu.vramGB,
+    vramMB: gpu.vramMB
+  };
+
+  const oInstalled = snap.ollama.installed;
+  const lInstalled = snap.lmstudio.installed;
+  const oRun = snap.ollama.running && Boolean(snap.ollama.baseURL);
+  const lRun = snap.lmstudio.running && Boolean(snap.lmstudio.baseURL);
+
+  if (oInstalled && lInstalled) {
+    skipBackendPreferenceThisLaunch = true;
+    firstSetupScenario = 'both-installed';
+    firstSetupParallelSnapshot = snap;
+    firstSetupCanDownloadOllama = gpu.hasDedicatedGPU;
+    firstSetupDetectedModels = snap.ollama.models;
+    firstSetupOllamaDetected = snap.ollama.running;
+    firstSetupCompletedByIpc = false;
+    await new Promise<void>(resolve => {
+      firstSetupFlowResolver = resolve;
+      createFirstTimeSetupWindow();
+    });
+    cachedGpuForSetup = null;
+    return;
+  }
+
+  if (oRun && snap.ollama.baseURL) {
+    firstSetupScenario = 'ollama-detected';
+    firstSetupParallelSnapshot = null;
+    firstSetupCanDownloadOllama = false;
+    firstSetupDetectedModels = snap.ollama.models;
+    firstSetupOllamaDetected = true;
+    firstSetupCompletedByIpc = false;
+    await new Promise<void>(resolve => {
+      firstSetupFlowResolver = resolve;
+      createFirstTimeSetupWindow();
+    });
+    cachedGpuForSetup = null;
+    return;
+  }
+
+  if (lRun && snap.lmstudio.baseURL) {
+    firstSetupParallelSnapshot = null;
+    await configureLmStudioFromRunningServer({
+      type: 'lmstudio',
+      installed: true,
+      running: true,
+      port: snap.lmstudio.port ?? LM_STUDIO_DEFAULT_PORT,
+      baseURL: snap.lmstudio.baseURL,
+      gpuInfo: snap.gpuInfo,
+      ollamaInstalled: oInstalled,
+      lmStudioInstalled: true,
+      ollamaExePath: snap.ollama.exePath,
+      lmStudioExePath: snap.lmstudio.exePath
+    });
+    cachedGpuForSetup = null;
+    return;
+  }
+
+  if (oInstalled && !lInstalled) {
+    firstSetupScenario = 'ollama-only-installed';
+    firstSetupParallelSnapshot = snap;
+    firstSetupCanDownloadOllama = false;
+    firstSetupDetectedModels = [];
+    firstSetupOllamaDetected = true;
+    firstSetupCompletedByIpc = false;
+    if (snap.ollama.exePath) {
+      const r = await dialog.showMessageBox({
+        type: 'question',
+        buttons: ['Yes', 'No'],
+        defaultId: 0,
+        title: 'Ollama',
+        message: 'Ollama is installed but not running. Do you want to start Ollama?'
+      });
+      if (r.response === 0) {
+        launchOllamaApp(snap.ollama.exePath);
+        await waitForOllamaServer(OLLAMA_DEFAULT_PORT, 120000);
+      }
+    }
+    await new Promise<void>(resolve => {
+      firstSetupFlowResolver = resolve;
+      createFirstTimeSetupWindow();
+    });
+    cachedGpuForSetup = null;
+    return;
+  }
+
+  if (lInstalled && !oInstalled) {
+    firstSetupScenario = 'lm-only-installed';
+    firstSetupParallelSnapshot = snap;
+    firstSetupCanDownloadOllama = gpu.hasDedicatedGPU;
+    firstSetupDetectedModels = [];
+    firstSetupOllamaDetected = false;
+    firstSetupCompletedByIpc = false;
+    const lmExeForLaunch = snap.lmstudio.exePath ?? (await findLmStudioExecutable());
+    const r = await dialog.showMessageBox({
+      type: 'question',
+      buttons: ['Yes', 'No'],
+      defaultId: 0,
+      title: 'LM Studio',
+      message:
+        'LM Studio is installed but the local server is not running. Try to start it with the LM Studio CLI (lms server start)?'
+    });
+    if (r.response === 0 && lmExeForLaunch) {
+      const log = createInferenceLogger('first-run-lmstudio');
+      await LmStudioManager.ensureLocalServerRunning({
+        lmStudioExePath: lmExeForLaunch,
+        log,
+        timeoutMs: 120000
+      });
+      const s2 = await detectBackends({ prefer: 'lmstudio' });
+      if (s2.type === 'lmstudio' && s2.running && s2.baseURL) {
+        await configureLmStudioFromRunningServer(s2);
+        cachedGpuForSetup = null;
+        return;
+      }
+    }
+    await new Promise<void>(resolve => {
+      firstSetupFlowResolver = resolve;
+      createFirstTimeSetupWindow();
+    });
+    cachedGpuForSetup = null;
+    return;
+  }
+
+  if (!oInstalled && !lInstalled) {
+    firstSetupScenario = gpu.hasDedicatedGPU ? 'no-backend' : 'insufficient-hardware';
+    firstSetupParallelSnapshot = null;
+    firstSetupCanDownloadOllama = gpu.hasDedicatedGPU;
+    firstSetupDetectedModels = [];
+    firstSetupOllamaDetected = false;
+    firstSetupCompletedByIpc = false;
+    await new Promise<void>(resolve => {
+      firstSetupFlowResolver = resolve;
+      createFirstTimeSetupWindow();
+    });
+    cachedGpuForSetup = null;
+    return;
+  }
+}
+
+// Electron lifecycle: initialize services and windows after app start
 app.whenReady().then(async () => {
-  await initializeServices();
+  migratePreferredLocalBackend();
+  setupBackendPreferenceIpcHandlers();
+  setupFirstTimeSetupIpcHandlers();
+  await runFirstTimeBackendSetupIfNeeded();
+  await maybeShowBackendPreferenceWindow();
+  await ensureSystemOllamaReadyBeforeAppStart();
+  await ensureLmStudioReadyBeforeAppStart();
+
+  createSplashWindow();
+
+  let bundledOllamaBase: string | undefined;
+  let bundledOllamaModel: string | undefined;
+  const storedLocalBase = appStore.get('localOpenAIBaseURL');
+  const storedBackendChoice = appStore.get('backendChoice');
+  const useSystemInference =
+    typeof storedLocalBase === 'string' &&
+    storedLocalBase.length > 0 &&
+    (storedBackendChoice === 'ollama' || storedBackendChoice === 'lmstudio');
+
+  try {
+    ollamaManager = new OllamaManager();
+    if (
+      !useSystemInference &&
+      process.platform === 'win32' &&
+      ollamaManager.isBundledExecutablePresent()
+    ) {
+      updateSplashOllamaProgress('Starting Ollama…', null);
+      await ollamaManager.start({
+        modelsDir: path.join(app.getPath('userData'), 'ollama-models'),
+        onLogLine: line => console.log('[ollama]', line),
+        onPortParsed: p => console.log('[ollama] port from log:', p)
+      });
+      bundledOllamaBase = ollamaManager.getOpenAIBaseURL();
+      const preferredModel = appStore.get('preferredDefaultModel');
+      bundledOllamaModel = await ollamaManager.ensureDefaultModel(
+        ev => {
+          updateSplashOllamaProgress(ev.status, ev.percent);
+        },
+        preferredModel
+      );
+    } else if (app.isPackaged && process.platform === 'win32') {
+      console.warn('Bundled Ollama missing from resources/ollama/; AI will only use OPENAI_API_KEY if set.');
+    }
+  } catch (error) {
+    console.error('Ollama failed to start:', error);
+    try {
+      await ollamaManager?.stop();
+    } catch {
+      // ignore
+    }
+    ollamaManager = null;
+    if (app.isPackaged && process.platform === 'win32') {
+      await dialog.showMessageBox({
+        type: 'error',
+        title: 'Ollama',
+        message: 'Could not start the bundled Ollama.',
+        detail: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  await syncAiEndpointsBeforeWindow(bundledOllamaBase);
+  await initializeServices(bundledOllamaBase, bundledOllamaModel);
   setupIpcHandlers();
   setupFsIpcHandlers();
   setupTerminalIpcHandlers();
-  createSplashWindow();
   await createWindow();
 
   // Check for updates
@@ -1983,6 +2922,15 @@ app.whenReady().then(async () => {
 });
 
 app.on('before-quit', () => {
+  void ollamaManager?.stop().catch(() => {});
+  if (backendPreferenceWindow && !backendPreferenceWindow.isDestroyed()) {
+    backendPreferenceWindow.close();
+    backendPreferenceWindow = null;
+  }
+  if (firstTimeSetupWindow && !firstTimeSetupWindow.isDestroyed()) {
+    firstTimeSetupWindow.close();
+    firstTimeSetupWindow = null;
+  }
   if (splashWindow) {
     splashWindow.close();
     splashWindow = null;
