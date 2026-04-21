@@ -180,7 +180,17 @@ class ElectronFileSystemProvider implements IFileSystemProviderWithFileReadWrite
       throw toProviderError(new Error('ipcRenderer unavailable'), FileSystemProviderErrorCode.Unavailable, resource);
     }
 
-    const entries = await ipcRenderer.invoke('fs:readDir', resource.fsPath) as FsEntry[];
+    const raw = await ipcRenderer.invoke('fs:readDir', resource.fsPath) as
+      | FsEntry[]
+      | { __error?: boolean; message?: string };
+    if (raw && typeof raw === 'object' && (raw as { __error?: boolean }).__error) {
+      throw toProviderError(
+        new Error((raw as { message?: string }).message || 'readDir failed'),
+        FileSystemProviderErrorCode.Unknown,
+        resource
+      );
+    }
+    const entries = raw as FsEntry[];
     return entries.map((entry) => [
       entry.name,
       entry.isDirectory ? FileType.Directory : FileType.File
@@ -216,14 +226,14 @@ class ElectronFileSystemProvider implements IFileSystemProviderWithFileReadWrite
         throw createFileSystemProviderError('File not found', FileSystemProviderErrorCode.FileNotFound);
       }
 
-      const success = await ipcRenderer.invoke(
+      const writeRes = (await ipcRenderer.invoke(
         'fs:writeFileBinary',
         resource.fsPath,
         Buffer.from(content).toString('base64')
-      ) as boolean;
+      )) as { ok?: boolean; error?: string };
 
-      if (!success) {
-        throw new Error('Binary write failed');
+      if (!writeRes?.ok) {
+        throw new Error(writeRes?.error || 'Binary write failed');
       }
 
       this.fireChanges([{ type: exists ? FileChangeType.UPDATED : FileChangeType.ADDED, resource }]);
@@ -238,9 +248,16 @@ class ElectronFileSystemProvider implements IFileSystemProviderWithFileReadWrite
       throw toProviderError(new Error('ipcRenderer unavailable'), FileSystemProviderErrorCode.Unavailable, resource);
     }
 
-    const success = await ipcRenderer.invoke('fs:createDirectory', resource.fsPath) as boolean;
-    if (!success) {
-      throw toProviderError(new Error('Directory creation failed'), FileSystemProviderErrorCode.Unknown, resource);
+    const mkdirRes = (await ipcRenderer.invoke('fs:createDirectory', resource.fsPath)) as {
+      ok?: boolean;
+      error?: string;
+    };
+    if (!mkdirRes?.ok) {
+      throw toProviderError(
+        new Error(mkdirRes?.error || 'Directory creation failed'),
+        FileSystemProviderErrorCode.Unknown,
+        resource
+      );
     }
 
     this.fireChanges([{ type: FileChangeType.ADDED, resource }]);
@@ -255,9 +272,13 @@ class ElectronFileSystemProvider implements IFileSystemProviderWithFileReadWrite
     const stats = await this.stat(resource).catch(() => null);
     const isDirectory = stats?.type === FileType.Directory;
     const channel = isDirectory ? 'fs:deleteDirectory' : 'fs:deleteFile';
-    const success = await ipcRenderer.invoke(channel, resource.fsPath, options?.recursive ?? false) as boolean;
-    if (!success) {
-      throw toProviderError(new Error('Delete failed'), FileSystemProviderErrorCode.Unknown, resource);
+    const delRes = (await ipcRenderer.invoke(channel, resource.fsPath)) as { ok?: boolean; error?: string };
+    if (!delRes?.ok) {
+      throw toProviderError(
+        new Error(delRes?.error || 'Delete failed'),
+        FileSystemProviderErrorCode.Unknown,
+        resource
+      );
     }
 
     this.fireChanges([{ type: FileChangeType.DELETED, resource }]);
@@ -276,9 +297,12 @@ class ElectronFileSystemProvider implements IFileSystemProviderWithFileReadWrite
       }
     }
 
-    const success = await ipcRenderer.invoke('fs:renameFile', from.fsPath, to.fsPath) as boolean;
-    if (!success) {
-      throw toProviderError(new Error('Rename failed'), FileSystemProviderErrorCode.Unknown, from);
+    const renameRes = (await ipcRenderer.invoke('fs:renameFile', from.fsPath, to.fsPath)) as {
+      ok?: boolean;
+      error?: string;
+    };
+    if (!renameRes?.ok) {
+      throw toProviderError(new Error(renameRes?.error || 'Rename failed'), FileSystemProviderErrorCode.Unknown, from);
     }
 
     this.fireChanges([
@@ -300,9 +324,12 @@ class ElectronFileSystemProvider implements IFileSystemProviderWithFileReadWrite
       }
     }
 
-    const success = await ipcRenderer.invoke('fs:copy', from.fsPath, to.fsPath, opts.overwrite ?? false) as boolean;
-    if (!success) {
-      throw toProviderError(new Error('Copy failed'), FileSystemProviderErrorCode.Unknown, from);
+    const copyRes = (await ipcRenderer.invoke('fs:copy', from.fsPath, to.fsPath, opts.overwrite ?? false)) as {
+      ok?: boolean;
+      error?: string;
+    };
+    if (!copyRes?.ok) {
+      throw toProviderError(new Error(copyRes?.error || 'Copy failed'), FileSystemProviderErrorCode.Unknown, from);
     }
 
     this.fireChanges([{ type: FileChangeType.ADDED, resource: to }]);

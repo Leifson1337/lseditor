@@ -8,9 +8,19 @@ import React, {
   useState
 } from 'react';
 import path from 'path';
-import { AI_TOOLS, executeToolCall, ToolCall, ToolResult, EditorDiagnostic, setCurrentDiagnostics, getErrorDiagnostics } from '../services/AIToolService';
+import {
+  AI_TOOLS,
+  executeToolCall,
+  ToolCall,
+  ToolResult,
+  EditorDiagnostic,
+  setCurrentDiagnostics,
+  getErrorDiagnostics,
+  resolvePath
+} from '../services/AIToolService';
 import { isAbsoluteFilePath, joinPathPreserveAbsolute } from '../utils/pathUtils';
 import WhisperAutoStartService, { WhisperAutoStartState } from '../services/WhisperAutoStartService';
+import { mapAiConnectionError, mapRateLimitError } from '../utils/aiConnectionErrors';
 
 export type ChatSender = 'user' | 'ai' | 'system' | 'tool';
 
@@ -54,8 +64,10 @@ interface Conversation {
   messages: Message[];
 }
 
+export type AIProviderId = 'ollama' | 'lmstudio' | 'custom';
+
 export interface AISettings {
-  provider: 'lmstudio';
+  provider: AIProviderId;
   baseUrl: string;
   model: string;
   temperature: number;
@@ -71,6 +83,12 @@ export interface AISettings {
   speechMicDeviceId: string;
   speechAlwaysReady: boolean;
   subAgentsEnabled: boolean;
+  /** User-defined instructions prepended to system context for every request. */
+  globalSystemPrompt: string;
+  /** When true, `globalSystemPrompt` replaces `base-prompt.md` instead of stacking after it. */
+  replaceBasePrompt: boolean;
+  /** When true, assistant replies stream token-by-token in the chat (OpenAI-compatible SSE). */
+  streamChat: boolean;
 }
 
 export type SubAgentStatus = 'planning' | 'running' | 'done' | 'error';
@@ -95,6 +113,7 @@ interface CompletionRequestOptions {
   injectSystemPrompt?: string;
   signal?: AbortSignal;
   includeBasePrompt?: boolean;
+  useTools?: boolean;
 }
 
 export type ToolCallSupport = boolean | 'unknown';
@@ -124,6 +143,9 @@ interface AIContextType {
   isCancelling: boolean;
   settings: AISettings;
   updateSettings: (patch: Partial<AISettings>) => void;
+  /** Present when Electron reported install detection; both true = show Ollama/LM Studio switch. */
+  localBackendInstalls: { ollama: boolean; lm: boolean } | null;
+  refreshLocalBackendInstalls: () => Promise<void>;
   models: string[];
   refreshModels: () => Promise<void>;
   isFetchingModels: boolean;
@@ -148,9 +170,17 @@ interface AIContextType {
 const AIContext = createContext<AIContextType | undefined>(undefined);
 
 const SETTINGS_KEY = 'lseditor.ai.settings';
+
+/** Default OpenAI-compatible API base URLs (no trailing slash). */
+export const DEFAULT_PROVIDER_BASE_URL: Record<AIProviderId, string> = {
+  ollama: 'http://localhost:11434',
+  lmstudio: 'http://localhost:1234',
+  custom: 'http://localhost:1234'
+};
+
 const defaultSettings: AISettings = {
   provider: 'lmstudio',
-  baseUrl: 'http://localhost:1234',
+  baseUrl: DEFAULT_PROVIDER_BASE_URL.lmstudio,
   model: '',
   temperature: 0.7,
   topP: 1,
@@ -163,16 +193,33 @@ const defaultSettings: AISettings = {
   speechWhisperModel: '',
   speechMicDeviceId: '',
   speechAlwaysReady: false,
-  subAgentsEnabled: false
+  subAgentsEnabled: false,
+  globalSystemPrompt: '',
+  replaceBasePrompt: false,
+  streamChat: true
 };
 
-const MAX_AGENT_LOOPS = 30;
-const MAX_TOOL_WRITE_LINES = 140;
-const MAX_TOOL_APPEND_LINES = 120;
+const MAX_AGENT_LOOPS = 12;
 const COMPLETION_REQUEST_TIMEOUT_MS = 120000;
 const COMPLETION_MAX_RETRIES = 4;
 const DIAGNOSTIC_SETTLE_MS = 1200;
 const MAX_AUTO_FIX_ROUNDS = 3;
+
+/** Fictitious tool used only for API handshake; not executed in AIToolService. */
+const HANDSHAKE_PROBE_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: '__ls_handshake_probe',
+    description: 'Internal capability probe only. Call with status ok.',
+    parameters: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', enum: ['ok'], description: 'Acknowledgement' }
+      },
+      required: ['status']
+    }
+  }
+};
 
 // File extensions that Monaco can validate natively (TS/JS)
 const MONACO_VALIDATED_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts']);
@@ -252,18 +299,18 @@ const runSyntaxCheck = async (
   }
 };
 
-const DEFAULT_BASE_PROMPT = `Du bist LS AI, der integrierte Assistent des LS Editors.
-Du hast Tools zum Lesen, Schreiben, Suchen und Ausfuehren von Dateien und Befehlen im Workspace.
+const DEFAULT_BASE_PROMPT = `You are LS AI, the integrated assistant for the LS Editor.
+You have tools to read, write, search, and run files and commands in the workspace.
 
-Kernregeln:
-- Benutze IMMER echte Tool-Calls um Dateien zu aendern. Gib Code NICHT als Chat-Text aus.
-- Lies Dateien mit readFile BEVOR du sie aenderst. Lies grosse Dateien in Abschnitten (startLine/endLine).
-- Bevorzuge replaceInFile fuer gezielte Aenderungen. writeFile nur fuer neue Dateien.
-- Arbeite inkrementell: max ~120 Zeilen pro writeFile/appendToFile/replaceInFile.
-- Nach JEDER Code-Aenderung: getDiagnostics aufrufen. Fehler sofort beheben, nicht ignorieren.
-- Falls replaceInFile fehlschlaegt: Datei erneut lesen, Suchtext anpassen, erneut versuchen.
-- Gib niemals interne Gedanken, Analyse-Tags oder Pseudo-Tool-Syntax aus.
-- Beende abgeschlossene Aufgaben mit: ## Ergebnis, ## Vorgehen, ## Validierung`;
+Core rules:
+- ALWAYS use real tool calls to change files. Do NOT output code as chat-only text.
+- Read files with readFile BEFORE you change them. Read large files in chunks (startLine/endLine).
+- Prefer replaceInFile for targeted changes. Use writeFile only for new files.
+- For very large edits, split work across multiple tool calls if it keeps the task clearer.
+- After EVERY code change: call getDiagnostics. Fix errors immediately; do not ignore them.
+- If replaceInFile fails: re-read the file, adjust the search text, and try again.
+- Never output internal thoughts, analysis tags, or pseudo-tool syntax.
+- End completed tasks with: ## Result, ## Approach, ## Validation`;
 
 const createId = () => {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -279,10 +326,79 @@ const createConversation = (index: number): Conversation => ({
   messages: []
 });
 
+function serializeConversationsForStore(conversations: Conversation[], activeConversationId: string) {
+  return {
+    conversations: conversations.map(c => ({
+      id: c.id,
+      title: c.title,
+      createdAt: c.createdAt,
+      messages: c.messages.map(m => ({
+        ...m,
+        timestamp: m.timestamp instanceof Date ? m.timestamp.toISOString() : String(m.timestamp)
+      }))
+    })),
+    activeConversationId
+  };
+}
+
+function deserializeConversationsFromStore(
+  data: unknown
+): { conversations: Conversation[]; activeConversationId: string } | null {
+  if (!data || typeof data !== 'object') return null;
+  const o = data as { conversations?: unknown; activeConversationId?: unknown };
+  if (!Array.isArray(o.conversations) || typeof o.activeConversationId !== 'string') return null;
+  const conversations: Conversation[] = [];
+  for (const raw of o.conversations) {
+    if (!raw || typeof raw !== 'object') continue;
+    const r = raw as Record<string, unknown>;
+    if (typeof r.id !== 'string') continue;
+    const messages: Message[] = [];
+    if (Array.isArray(r.messages)) {
+      for (const m of r.messages) {
+        if (!m || typeof m !== 'object') continue;
+        const msg = m as Record<string, unknown>;
+        messages.push({
+          id: typeof msg.id === 'string' ? msg.id : createId(),
+          content: typeof msg.content === 'string' ? msg.content : '',
+          sender: (msg.sender as ChatSender) || 'user',
+          timestamp: new Date(typeof msg.timestamp === 'string' ? msg.timestamp : Date.now()),
+          rawContent: typeof msg.rawContent === 'string' ? msg.rawContent : undefined,
+          reasoning: typeof msg.reasoning === 'string' ? msg.reasoning : undefined,
+          toolCalls: Array.isArray(msg.toolCalls) ? (msg.toolCalls as ToolCallInfo[]) : undefined,
+          images: Array.isArray(msg.images) ? (msg.images as ImageAttachment[]) : undefined
+        });
+      }
+    }
+    conversations.push({
+      id: r.id,
+      title: typeof r.title === 'string' ? r.title : 'Chat',
+      createdAt: typeof r.createdAt === 'number' ? r.createdAt : Date.now(),
+      messages
+    });
+  }
+  if (!conversations.length) return null;
+  return { conversations, activeConversationId: o.activeConversationId };
+}
+
 const sanitizeBaseUrl = (url: string) => {
-  if (!url) return 'http://localhost:1234';
+  if (!url) return DEFAULT_PROVIDER_BASE_URL.lmstudio;
+  // Only strip trailing slash — preserve the URL exactly as the user typed it.
   return url.trim().replace(/\/$/, '');
 };
+
+/**
+ * Build an API endpoint URL, stripping a trailing /v1 from the base before
+ * appending the path — so both "https://api.example.com" and
+ * "https://api.example.com/v1" result in the correct final URL.
+ */
+const buildApiUrl = (baseUrl: string, path: string) => {
+  const base = baseUrl.replace(/\/v1$/, '');
+  return `${base}${path}`;
+};
+
+/** Combines rate-limit and connection-error mapping into a single call. */
+const mapAnyAiError = (error: unknown): string | null =>
+  mapRateLimitError(error) ?? mapAiConnectionError(error);
 
 const resolveToolTargetPath = (targetPath: string, projectPath?: string) => {
   if (!targetPath) return '';
@@ -351,6 +467,32 @@ const inferToolCallSupportFromModel = (modelId: string, modelData?: any): ToolCa
   }
 
   return 'unknown';
+};
+
+const inferVisionSupportFromModel = (modelId: string, modelData?: any): boolean => {
+  const lower = modelId.toLowerCase();
+  const visionFlags = [
+    modelData?.supports_vision,
+    modelData?.vision,
+    modelData?.capabilities?.vision,
+    modelData?.supportsVision,
+    Array.isArray(modelData?.modalities)
+      ? modelData.modalities.some((m: string) => /image|vision|multimodal/i.test(String(m)))
+      : undefined
+  ];
+  for (const flag of visionFlags) {
+    const resolved = coerceBoolean(flag);
+    if (resolved === true) return true;
+  }
+  if (modelData && typeof modelData === 'object') {
+    const dump = JSON.stringify(modelData).toLowerCase();
+    if (dump.includes('vision') && (dump.includes('true') || dump.includes('"vision"'))) {
+      return true;
+    }
+  }
+  return /vision|gpt-4o|gpt-4\.1|gpt-4\.5|gpt-5|gemini|claude|pixtral|llava|cogvlm|qwen2?-vl|internvl|minicpm|moondream|bakllava|llama-3\.2-vision|multimodal|vl-|llama3\.2-vision|idefics|fuyu|smolvlm/.test(
+    lower
+  );
 };
 
 const sanitizeAssistantContent = (content: string): string => {
@@ -441,17 +583,30 @@ const statesIntentWithoutActing = (content: string): boolean => {
   return /(I'll now|I will now|Let me now|I'm going to|Ich werde|Ich füge|Lass mich|Als nächstes|Now I'll|Next I'll|Let me |I'll |I need to |I should ).*(\.|:|\.\.\.)\s*$/im.test(content);
 };
 
-const READ_ONLY_TOOL_NAMES = new Set(['findFile', 'readFile', 'listFiles', 'searchFiles', 'searchWorkspace', 'getDiagnostics']);
-const MUTATING_TOOL_NAMES = new Set(['writeFile', 'appendToFile', 'replaceInFile', 'createDirectory', 'deleteFile', 'renameFile']);
+const READ_ONLY_TOOL_NAMES = new Set([
+  'findFile',
+  'readFile',
+  'listFiles',
+  'getFileTree',
+  'searchFiles',
+  'searchWorkspace',
+  'getDiagnostics'
+]);
+const MUTATING_TOOL_NAMES = new Set([
+  'writeFile',
+  'appendToFile',
+  'replaceInFile',
+  'createDirectory',
+  'deleteFile',
+  'renameFile',
+  'copyFile'
+]);
 const EXECUTION_TOOL_NAMES = new Set(['runCommand']);
 
 const toolNeedsApproval = (toolName: string) =>
   MUTATING_TOOL_NAMES.has(toolName) || EXECUTION_TOOL_NAMES.has(toolName);
 
 const getToolsForMode = (settings: AISettings) => {
-  if (settings.mode === 'qa') {
-    return AI_TOOLS.filter(tool => READ_ONLY_TOOL_NAMES.has(tool.function.name));
-  }
   if (!settings.subAgentsEnabled) {
     return AI_TOOLS.filter(tool => tool.function.name !== 'spawnSubAgent');
   }
@@ -461,17 +616,17 @@ const getToolsForMode = (settings: AISettings) => {
 const createRuntimeModePrompt = (settings: AISettings) => {
   const toolGuidance = [
     'Tool workflow: readFile (in chunks) -> edit with replaceInFile -> getDiagnostics -> fix errors -> repeat until clean.',
-    'Use searchWorkspace to find files by name or content. Use findFile when exact path is unknown.',
+    'Use getFileTree for a compact overview of folders and files; use searchWorkspace to find by name or content; use findFile when the exact path is unknown.',
     'For new larger files: create a small scaffold with writeFile, then extend with appendToFile in chunks.',
     'After code changes, ALWAYS call getDiagnostics. If errors found, read affected lines and fix with replaceInFile.',
     'For substantial tasks, use a markdown checklist (- [ ] / - [x]) and update it as you progress.',
-    'End completed tasks with: ## Ergebnis, ## Vorgehen, ## Validierung.'
+    'End completed tasks with: ## Result, ## Approach, ## Validation.'
   ].join('\n');
 
   if (settings.mode === 'qa') {
     return [
-      'Mode: QA. Read-only tools only. Do not modify files or run mutating commands.',
-      'Answer questions, explain code, propose changes. For implementation, tell user to switch to Coder mode.',
+      'Mode: QA. Prefer concise explanations and reading the codebase before changing anything.',
+      'When the user asks you to implement or edit files, use tools. File mutations and shell commands require explicit user approval in the UI unless YOLO execution mode is enabled in settings.',
       toolGuidance
     ].join('\n');
   }
@@ -510,6 +665,8 @@ const summarizeToolCall = (toolCall: ToolCall): string => {
         return `Finding ${args.query || 'file'}`;
       case 'listFiles':
         return `Listing ${args.path || 'directory'}`;
+      case 'getFileTree':
+        return `Tree ${args.path || 'directory'}`;
       case 'searchFiles':
         return `Searching ${args.pattern || 'workspace'}`;
       case 'searchWorkspace':
@@ -522,6 +679,8 @@ const summarizeToolCall = (toolCall: ToolCall): string => {
         return `Deleting ${args.path || 'path'}`;
       case 'renameFile':
         return `Renaming ${args.oldPath || 'path'}`;
+      case 'copyFile':
+        return `Copying ${args.sourcePath || ''} -> ${args.destinationPath || ''}`;
       default:
         return `Running ${toolCall.function.name}`;
     }
@@ -546,8 +705,9 @@ const delay = (ms: number) =>
   });
 
 const shouldRetryCompletionRequest = (status: number, message: string) => {
-  if ([408, 409, 425, 429, 500, 502, 503, 504].includes(status)) return true;
-  return /(timeout|timed out|network|fetch failed|econnreset|econnrefused|socket hang up|temporar|overloaded|rate limit|too many requests|aborted|broken pipe|connection reset|unexpected end|failed to fetch|load failed|server error|internal error|service unavailable)/i.test(
+  // 429 = rate limit — do NOT retry automatically; surface the error immediately
+  if ([408, 409, 425, 500, 502, 503, 504].includes(status)) return true;
+  return /(timeout|timed out|network|fetch failed|econnreset|econnrefused|socket hang up|temporar|overloaded|aborted|broken pipe|connection reset|unexpected end|failed to fetch|load failed|server error|internal error|service unavailable)/i.test(
     message
   );
 };
@@ -560,6 +720,98 @@ const extractErrorMessage = async (response: Response) => {
     return await response.text();
   }
 };
+
+/** Parse OpenAI-compatible chat completion SSE (data: JSON lines, optional [DONE]). */
+async function consumeSseChatStream(
+  response: Response,
+  onDelta: (acc: { content: string; reasoning: string }) => void,
+  signal: AbortSignal
+): Promise<{
+  content: string;
+  reasoning: string;
+  toolCallParts: Map<number, { id?: string; name?: string; arguments: string }>;
+  finishReason?: string;
+  usage?: { completion_tokens?: number; total_tokens?: number };
+}> {
+  let content = '';
+  let reasoning = '';
+  const toolCallParts = new Map<number, { id?: string; name?: string; arguments: string }>();
+  let finishReason: string | undefined;
+  let usage: { completion_tokens?: number; total_tokens?: number } | undefined;
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error('Streaming response has no body');
+  }
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (!signal.aborted) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let lineEnd: number;
+    while ((lineEnd = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, lineEnd);
+      buffer = buffer.slice(lineEnd + 1);
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith(':')) continue;
+      if (!trimmed.startsWith('data:')) continue;
+      const data = trimmed.slice(5).trimStart();
+      if (data === '[DONE]') continue;
+
+      let json: any;
+      try {
+        json = JSON.parse(data);
+      } catch {
+        continue;
+      }
+
+      if (json.usage) usage = json.usage;
+      const choice = json.choices?.[0];
+      if (!choice) continue;
+      if (choice.finish_reason) finishReason = choice.finish_reason;
+
+      const delta = choice.delta;
+      if (!delta) continue;
+
+      if (delta.content !== undefined && delta.content !== null) {
+        content += typeof delta.content === 'string' ? delta.content : '';
+      }
+      if (delta.reasoning_content) {
+        reasoning += typeof delta.reasoning_content === 'string' ? delta.reasoning_content : '';
+      }
+      if (delta.reasoning && typeof delta.reasoning === 'string') {
+        reasoning += delta.reasoning;
+      }
+
+      if (Array.isArray(delta.tool_calls)) {
+        for (const tc of delta.tool_calls) {
+          const idx = typeof tc.index === 'number' ? tc.index : 0;
+          if (!toolCallParts.has(idx)) {
+            toolCallParts.set(idx, { arguments: '' });
+          }
+          const acc = toolCallParts.get(idx)!;
+          if (tc.id) acc.id = tc.id;
+          if (tc.function?.name) acc.name = tc.function.name;
+          if (tc.function?.arguments) acc.arguments += tc.function.arguments;
+        }
+      }
+      if (delta.function_call) {
+        if (!toolCallParts.has(0)) {
+          toolCallParts.set(0, { arguments: '' });
+        }
+        const acc = toolCallParts.get(0)!;
+        if (delta.function_call?.name) acc.name = delta.function_call.name;
+        if (delta.function_call?.arguments) acc.arguments += delta.function_call.arguments;
+      }
+
+      onDelta({ content, reasoning });
+    }
+  }
+
+  return { content, reasoning, toolCallParts, finishReason, usage };
+}
 
 interface ExecutedToolRecord {
   name: string;
@@ -574,7 +826,7 @@ const buildRequestSummary = (
   stopReason?: string
 ) => {
   const sanitizedContent = combinedContent.trim();
-  const requiredHeadings = ['## Ergebnis', '## Vorgehen', '## Validierung'];
+  const requiredHeadings = ['## Result', '## Approach', '## Validation'];
   if (requiredHeadings.every(heading => sanitizedContent.includes(heading))) {
     return combinedContent;
   }
@@ -584,69 +836,37 @@ const buildRequestSummary = (
   const resultLine = sanitizedContent
     ? sanitizedContent
     : successfulTools.length
-      ? 'Die angeforderte Aufgabe wurde bearbeitet.'
-      : 'Die Anfrage wurde beantwortet, ohne Workspace-Aktionen auszufuehren.';
+      ? 'The requested task was processed.'
+      : 'The request was answered without workspace actions.';
 
   const approachLines = successfulTools.length
     ? successfulTools.map(tool => `- ${tool.summary}: ${tool.result.replace(/\s+/g, ' ').trim().slice(0, 220)}`)
-    : ['- Es waren keine Tool-Aufrufe fuer diese Antwort erforderlich.'];
+    : ['- No tool calls were required for this response.'];
 
   const validationLines = [
     ...executedTools
       .filter(tool => tool.name === 'runCommand')
-      .map(tool => `- Befehl ausgefuehrt: ${tool.result.replace(/\s+/g, ' ').trim().slice(0, 220)}`),
-    ...failedTools.map(tool => `- Offener Punkt: ${tool.summary} -> ${tool.result.replace(/\s+/g, ' ').trim().slice(0, 220)}`),
-    ...(stopReason ? [`- Abschlussstatus: ${stopReason}`] : [])
+      .map(tool => `- Command run: ${tool.result.replace(/\s+/g, ' ').trim().slice(0, 220)}`),
+    ...failedTools.map(tool => `- Open point: ${tool.summary} -> ${tool.result.replace(/\s+/g, ' ').trim().slice(0, 220)}`),
+    ...(stopReason ? [`- Completion status: ${stopReason}`] : [])
   ];
 
   if (!validationLines.length) {
-    validationLines.push('- Kein separater Test- oder Build-Schritt wurde in dieser Anfrage ausgefuehrt.');
+    validationLines.push('- No separate test or build step was run for this request.');
   }
 
   const summaryBlock = [
-    '## Ergebnis',
+    '## Result',
     resultLine,
     '',
-    '## Vorgehen',
+    '## Approach',
     ...approachLines,
     '',
-    '## Validierung',
+    '## Validation',
     ...validationLines
   ].join('\n');
 
   return sanitizedContent ? `${sanitizedContent}\n\n${summaryBlock}` : summaryBlock;
-};
-
-const countLines = (value: string) => String(value || '').replace(/\r/g, '').split('\n').length;
-
-const containsOversizedWriteToolCall = (toolCalls: ToolCall[]) => {
-  return toolCalls.some(tc => {
-    const args = safeJsonParse(tc.function.arguments || '{}');
-    if (tc.function.name === 'writeFile') {
-      return countLines(typeof args.content === 'string' ? args.content : '') > MAX_TOOL_WRITE_LINES;
-    }
-    if (tc.function.name === 'appendToFile') {
-      return countLines(typeof args.content === 'string' ? args.content : '') > MAX_TOOL_APPEND_LINES;
-    }
-    if (tc.function.name === 'replaceInFile') {
-      return countLines(typeof args.replace === 'string' ? args.replace : '') > MAX_TOOL_WRITE_LINES;
-    }
-    return false;
-  });
-};
-
-const isLargeNewFileWrite = (toolCall: ToolCall, preview?: ToolCallPreview) => {
-  if (toolCall.function.name !== 'writeFile') return false;
-  if (!preview || preview.kind !== 'file' || preview.action !== 'create') return false;
-  const args = safeJsonParse(toolCall.function.arguments || '{}');
-  return countLines(typeof args.content === 'string' ? args.content : '') > 60;
-};
-
-const isRiskyWritePreview = (preview?: ToolCallPreview) => {
-  if (!preview || preview.kind !== 'file' || preview.action !== 'update') return false;
-  const originalLines = countLines(preview.originalContent || '');
-  const newLines = countLines(preview.newContent || '');
-  return originalLines >= 20 && newLines <= Math.max(5, Math.floor(originalLines * 0.4));
 };
 
 const findReplaceSearchMiss = (toolCalls: ToolCall[], toolResults: ToolResult[]) => {
@@ -686,8 +906,7 @@ const serializeToolMessageForModel = (message: Message) => {
   return sections.join('\n');
 };
 
-const userRequestLikelyNeedsTools = (content: string, mode: AISettings['mode']) => {
-  if (mode === 'qa') return false;
+const userRequestLikelyNeedsTools = (content: string, _mode: AISettings['mode']) => {
   // Action verbs that clearly imply file mutations
   const actionPattern = /\b(program|implement|create|write|save|edit|change|modify|update|fix|refactor|build|run|test|add|remove|delete|rename|move|install|deploy|optimize|improve|replace|insert|append|merge|setup|configure|erstell|schreib|programmier|aender|änder|fixe|teste|baue|hinzufüg|entfern|lösch|verschieb|installier|einricht|optimier|verbesse|fuer mich|mach|mache)\b/i;
   // Exclude purely informational queries even if they contain action words
@@ -750,6 +969,9 @@ const safeJsonParse = (value: string) => {
 const normalizeTrackedPath = (value: string) =>
   String(value || '').replace(/\\/g, '/').trim().toLowerCase();
 
+/** Module-level cache for base-prompt.md — never changes during a session. */
+let basePromptCache: string | null = null;
+
 interface CompletionResult {
   content: string;
   reasoning?: string;
@@ -762,6 +984,22 @@ interface CompletionResult {
   };
 }
 
+const normalizeLegacyFunctionCall = (fc: any): ToolCall[] | undefined => {
+  const name = fc?.name;
+  if (!name || typeof name !== 'string') return undefined;
+  const argsRaw = fc?.arguments;
+  return [
+    {
+      id: createId(),
+      type: 'function',
+      function: {
+        name,
+        arguments: typeof argsRaw === 'string' && argsRaw.trim() ? argsRaw : '{}'
+      }
+    }
+  ];
+};
+
 interface AgentLoopState {
   conversationId: string;
   apiMessages: any[];
@@ -769,6 +1007,8 @@ interface AgentLoopState {
   requestId: string;
   combinedContent: string;
   combinedReasoning: string[];
+  /** Streaming placeholder from the previous turn; removed on the next turn if not committed. */
+  pendingStreamMessageId?: string;
   stopReason?: string;
   loops: number;
   performedMutationTool: boolean;
@@ -782,6 +1022,10 @@ interface AgentLoopState {
   completionWithoutMutationCorrectionSent: boolean;
   autoFixRounds: number;
   consecutiveEmptyResponses: number;
+  /** Fingerprint of last assistant tool_calls batch (anti-loop). */
+  lastToolCallsFingerprint?: string;
+  /** How many consecutive completions repeated the same tool_calls fingerprint. */
+  identicalToolCallsRounds?: number;
 }
 
 interface PendingToolExecutionState extends AgentLoopState {
@@ -796,11 +1040,20 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
     try {
       const stored = window.localStorage.getItem(SETTINGS_KEY);
       if (stored) {
-        const parsed = JSON.parse(stored);
+        const parsed = JSON.parse(stored) as Partial<AISettings>;
+        const provider: AIProviderId =
+          parsed.provider === 'ollama' || parsed.provider === 'lmstudio' || parsed.provider === 'custom'
+            ? parsed.provider
+            : 'lmstudio';
         return {
           ...defaultSettings,
           ...parsed,
-          baseUrl: sanitizeBaseUrl(parsed.baseUrl ?? defaultSettings.baseUrl)
+          provider,
+          baseUrl: sanitizeBaseUrl(
+            parsed.baseUrl ||
+              (provider !== 'custom' ? DEFAULT_PROVIDER_BASE_URL[provider] : defaultSettings.baseUrl)
+          ),
+          streamChat: parsed.streamChat !== false
         };
       }
     } catch (error) {
@@ -811,6 +1064,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
 
   const [conversations, setConversations] = useState<Conversation[]>([createConversation(1)]);
   const [activeConversationId, setActiveConversationId] = useState(conversations[0].id);
+  const chatPersistReadyRef = useRef(false);
   const [models, setModels] = useState<string[]>([]);
   const [isThinking, setIsThinking] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
@@ -825,6 +1079,34 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
   const projectPathRef = useRef(projectPath);
   const modelMetadataRef = useRef<Map<string, any>>(new Map());
   const pendingToolExecutionRef = useRef<Map<string, PendingToolExecutionState>>(new Map());
+  const [localBackendInstalls, setLocalBackendInstalls] = useState<{
+    ollama: boolean;
+    lm: boolean;
+  } | null>(null);
+
+  const refreshLocalBackendInstalls = useCallback(async () => {
+    const ipc = window.electron?.ipcRenderer;
+    if (!ipc) {
+      setLocalBackendInstalls(null);
+      return;
+    }
+    try {
+      const res = (await ipc.invoke('ai:get-local-backends-installed')) as {
+        ollamaInstalled?: boolean;
+        lmStudioInstalled?: boolean;
+      };
+      setLocalBackendInstalls({
+        ollama: Boolean(res?.ollamaInstalled),
+        lm: Boolean(res?.lmStudioInstalled)
+      });
+    } catch {
+      setLocalBackendInstalls(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshLocalBackendInstalls();
+  }, [refreshLocalBackendInstalls]);
 
   const buildToolCallPreview = useCallback(
     async (toolCall: ToolCall): Promise<ToolCallPreview | undefined> => {
@@ -950,17 +1232,23 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
   }, []);
 
   const loadBasePrompt = useCallback(async (): Promise<string> => {
+    if (basePromptCache !== null) {
+      basePromptRef.current = basePromptCache;
+      return basePromptCache;
+    }
     try {
       if (window.electron?.ipcRenderer) {
         const content = await window.electron.ipcRenderer.invoke('ai:getBasePrompt');
         if (typeof content === 'string' && content.trim().length > 0) {
-          basePromptRef.current = content.trim();
+          basePromptCache = content.trim();
+          basePromptRef.current = basePromptCache;
           return basePromptRef.current;
         }
       }
     } catch (error) {
       console.warn('Failed to load base prompt, falling back to default.', error);
     }
+    basePromptCache = DEFAULT_BASE_PROMPT;
     basePromptRef.current = DEFAULT_BASE_PROMPT;
     return basePromptRef.current;
   }, []);
@@ -969,35 +1257,213 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
     loadBasePrompt();
   }, [loadBasePrompt]);
 
+  /** Prefer electron-store (main) over localStorage when available */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const ipc = window.electron?.ipcRenderer;
+        if (!ipc) return;
+        const raw = await ipc.invoke('ai:load-settings');
+        if (cancelled || typeof raw !== 'string' || !raw.trim()) return;
+        const parsed = JSON.parse(raw) as Partial<AISettings>;
+        const provider: AIProviderId | undefined =
+          parsed.provider === 'ollama' || parsed.provider === 'lmstudio' || parsed.provider === 'custom'
+            ? parsed.provider
+            : undefined;
+        setSettings(prev => ({
+          ...prev,
+          ...parsed,
+          ...(provider ? { provider } : {}),
+          // For custom provider: keep whatever baseUrl was saved; never fall back to a
+          // local default. For local providers: use detected default if nothing was saved.
+          baseUrl: sanitizeBaseUrl(
+            parsed.baseUrl ||
+              (provider && provider !== 'custom' ? DEFAULT_PROVIDER_BASE_URL[provider] : prev.baseUrl)
+          )
+        }));
+      } catch (e) {
+        console.warn('Failed to load AI settings from disk', e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const ipc = window.electron?.ipcRenderer;
+        if (!ipc) {
+          chatPersistReadyRef.current = true;
+          return;
+        }
+        const raw = await ipc.invoke('ai:load-chat-state');
+        if (cancelled) return;
+        const restored = deserializeConversationsFromStore(raw);
+        if (restored && restored.conversations.length) {
+          const activeOk = restored.conversations.some(c => c.id === restored.activeConversationId);
+          setConversations(restored.conversations);
+          setActiveConversationId(activeOk ? restored.activeConversationId : restored.conversations[0].id);
+        }
+      } catch (e) {
+        console.warn('Failed to load chat history', e);
+      } finally {
+        if (!cancelled) {
+          chatPersistReadyRef.current = true;
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!chatPersistReadyRef.current) return;
+    const ipc = window.electron?.ipcRenderer;
+    if (!ipc) return;
+    const timer = window.setTimeout(() => {
+      void ipc
+        .invoke('ai:save-chat-state', serializeConversationsForStore(conversations, activeConversationId))
+        .catch(() => {});
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [conversations, activeConversationId]);
+
   useEffect(() => {
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
     }
+    const ipc = window.electron?.ipcRenderer;
+    if (!ipc) return;
+    const t = window.setTimeout(() => {
+      void ipc.invoke('ai:save-settings', JSON.stringify(settings)).catch(() => undefined);
+    }, 500);
+    return () => window.clearTimeout(t);
   }, [settings]);
 
   const updateSettings = useCallback((patch: Partial<AISettings>) => {
-    setSettings(prev => ({
-      ...prev,
-      ...patch,
-      baseUrl: patch.baseUrl ? sanitizeBaseUrl(patch.baseUrl) : prev.baseUrl
-    }));
+    setSettings(prev => {
+      const next: AISettings = { ...prev, ...patch };
+      if (
+        patch.provider != null &&
+        patch.provider !== prev.provider &&
+        patch.baseUrl === undefined &&
+        patch.provider !== 'custom'
+      ) {
+        next.baseUrl = sanitizeBaseUrl(DEFAULT_PROVIDER_BASE_URL[patch.provider]);
+      } else if (patch.baseUrl != null) {
+        next.baseUrl = sanitizeBaseUrl(patch.baseUrl);
+      } else {
+        next.baseUrl = sanitizeBaseUrl(prev.baseUrl);
+      }
+      return next;
+    });
   }, []);
 
   const refreshModels = useCallback(async () => {
-    const baseUrl = sanitizeBaseUrl(settings.baseUrl);
+    let baseUrl = sanitizeBaseUrl(settings.baseUrl);
+    if (settings.provider === 'ollama' || settings.provider === 'lmstudio') {
+      const ipc = window.electron?.ipcRenderer;
+      if (ipc) {
+        try {
+          const res = (await ipc.invoke(
+            'ai:resolve-local-provider-base-url',
+            settings.provider
+          )) as {
+            baseUrl?: string | null;
+          };
+          if (res?.baseUrl) {
+            const detected = sanitizeBaseUrl(res.baseUrl);
+            if (detected !== baseUrl) {
+              baseUrl = detected;
+              setSettings(prev => {
+                if (prev.provider !== settings.provider) return prev;
+                if (sanitizeBaseUrl(prev.baseUrl) === detected) return prev;
+                return { ...prev, baseUrl: detected };
+              });
+            }
+          }
+        } catch {
+          // keep stored baseUrl
+        }
+      }
+    }
     setIsFetchingModels(true);
     setConnectionStatus('connecting');
 
     try {
-      const endpoints = [`${baseUrl}/v1/models`, `${baseUrl}/models`];
+      const ipcRenderer = window.electron?.ipcRenderer;
+
+      // LM Studio: list models in the main process. Renderer `fetch` often fails on https://127.0.0.1
+      // (self-signed TLS). Ollama is usually plain HTTP so fetch works.
+      if (settings.provider === 'lmstudio' && ipcRenderer) {
+        try {
+          const ipcList = (await ipcRenderer.invoke('ai:list-local-models', 'lmstudio')) as {
+            models?: string[];
+            baseUrl?: string | null;
+            error?: string;
+          };
+          if (ipcList?.baseUrl) {
+            const detected = sanitizeBaseUrl(ipcList.baseUrl);
+            setSettings(prev => {
+              if (prev.provider !== 'lmstudio') return prev;
+              if (sanitizeBaseUrl(prev.baseUrl) === detected) return prev;
+              return { ...prev, baseUrl: detected };
+            });
+          }
+          if (ipcList?.models && ipcList.models.length > 0) {
+            modelMetadataRef.current = new Map();
+            setModels(ipcList.models);
+            setConnectionStatus('ready');
+            setLastError(undefined);
+            setToolCallSupported(prev => (settings.model ? prev : 'unknown'));
+            setSettings(prev => {
+              if (prev.provider !== 'lmstudio') return prev;
+              if (prev.model && ipcList.models!.includes(prev.model)) return prev;
+              return { ...prev, model: ipcList.models![0]! };
+            });
+            return;
+          }
+          if (ipcList?.baseUrl && (!ipcList.models || ipcList.models.length === 0)) {
+            setModels([]);
+            setConnectionStatus('error');
+            setLastError(
+              ipcList.error ||
+                'LM Studio is running but returned no models. Load a model in LM Studio, then click Refresh.'
+            );
+            setToolCallSupported('unknown');
+            return;
+          }
+        } catch {
+          // fall through to fetch-based fallback
+        }
+      }
+
+      const endpoints = [buildApiUrl(baseUrl, '/v1/models'), buildApiUrl(baseUrl, '/models')];
+      if (settings.provider === 'ollama') {
+        endpoints.push(buildApiUrl(baseUrl, '/api/tags'));
+      }
       let fetched: string[] = [];
       let fetchedMetadata = new Map<string, any>();
       let lastErrorMessage = '';
 
+      const fetchHeaders: Record<string, string> = {};
+      if (settings.apiKey) {
+        fetchHeaders['Authorization'] = `Bearer ${settings.apiKey}`;
+      }
+
       for (const endpoint of endpoints) {
         try {
-          const response = await fetch(endpoint);
+          const response = await fetch(endpoint, { headers: fetchHeaders });
           if (!response.ok) {
+            if (response.status === 429) {
+              // Rate limit on models endpoint — stop trying, surface a friendly message
+              throw new Error('rate_limit_models');
+            }
             lastErrorMessage = `HTTP ${response.status}`;
             continue;
           }
@@ -1023,7 +1489,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       }
 
       if (!fetched.length) {
-        throw new Error(lastErrorMessage || 'Keine Modelle gefunden');
+        throw new Error(lastErrorMessage || 'No models found');
       }
       modelMetadataRef.current = fetchedMetadata;
 
@@ -1033,21 +1499,22 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       setToolCallSupported(prev => (settings.model ? prev : 'unknown'));
 
       setSettings(prev => {
-        if (prev.model && fetched.includes(prev.model)) {
-          return prev;
-        }
-        return { ...prev, model: fetched[0] };
+        // For custom provider the user types the model name manually — never auto-override it.
+        if (prev.provider === 'custom') return prev;
+        if (prev.model && fetched.includes(prev.model)) return prev;
+        return { ...prev, model: fetched[0] ?? '' };
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const friendly = mapAnyAiError(error);
+      const message = friendly ?? (error instanceof Error ? error.message : String(error));
       setModels([]);
-      setConnectionStatus('error');
+      setConnectionStatus(mapRateLimitError(error) ? 'ready' : 'error');
       setLastError(message);
       setToolCallSupported('unknown');
     } finally {
       setIsFetchingModels(false);
     }
-  }, [settings.baseUrl, settings.model]);
+  }, [settings.baseUrl, settings.provider, settings.apiKey]);
 
   useEffect(() => {
     refreshModels();
@@ -1070,44 +1537,27 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       return inferred;
     }
 
-    // Make a small test request to check if tool calls are actually supported
     const baseUrl = sanitizeBaseUrl(settings.baseUrl);
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {})
+    };
+
     try {
       const testController = new AbortController();
-      const timeoutId = setTimeout(() => testController.abort(), 5000);
+      const timeoutId = setTimeout(() => testController.abort(), 8000);
 
-      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      const response = await fetch(buildApiUrl(baseUrl, '/v1/chat/completions'), {
         method: 'POST',
         signal: testController.signal,
-        headers: {
-          'Content-Type': 'application/json',
-          ...(settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {})
-        },
+        headers,
         body: JSON.stringify({
           model: selectedModel,
           temperature: 0,
-          max_tokens: 10,
-          messages: [
-            {
-              role: 'user',
-              content: 'Test'
-            }
-          ],
-          tools: [
-            {
-              type: 'function',
-              function: {
-                name: 'test',
-                description: 'Test function',
-                parameters: {
-                  type: 'object',
-                  properties: {},
-                  additionalProperties: false
-                }
-              }
-            }
-          ],
-          tool_choice: 'none'
+          max_tokens: 64,
+          messages: [{ role: 'user', content: 'ping' }],
+          tools: [HANDSHAKE_PROBE_TOOL],
+          tool_choice: 'required'
         })
       });
 
@@ -1116,8 +1566,6 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
         const lower = errorText.toLowerCase();
-        
-        // Check for explicit tool-related errors
         if (
           lower.includes('tool') ||
           lower.includes('function call') ||
@@ -1128,45 +1576,50 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
           setToolCallSupported(false);
           return false;
         }
-        
-        // Other errors don't tell us about tool support
         setToolCallSupported('unknown');
         return 'unknown';
       }
 
-      // If the request succeeded with tools parameter, the model supports tools
       const payload = await response.json();
-      
-      // Check if response has tool_calls field (even if empty)
-      const choice = payload?.choices?.[0];
-      if (choice?.message && ('tool_calls' in choice.message)) {
+      const message = payload?.choices?.[0]?.message;
+      const toolCalls = message?.tool_calls;
+      const legacyFunctionCalls = normalizeLegacyFunctionCall(message?.function_call);
+      if (
+        (Array.isArray(toolCalls) && toolCalls.length > 0) ||
+        (legacyFunctionCalls && legacyFunctionCalls.length > 0)
+      ) {
         setToolCallSupported(true);
         return true;
       }
 
-      // If no error and request went through, assume support
-      setToolCallSupported(true);
-      return true;
+      setToolCallSupported(false);
+      return false;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      
-      // Timeout or network error - can't determine
+      const friendly = mapAiConnectionError(error);
+      const message = friendly ?? (error instanceof Error ? error.message : String(error));
+
       if (message.includes('abort') || message.includes('timeout')) {
         setToolCallSupported('unknown');
         return 'unknown';
       }
-      
-      console.warn('Failed to verify tool calling support', error);
+
+      if (friendly) {
+        setToolCallSupported('unknown');
+        return 'unknown';
+      }
+
+      console.warn('Tool handshake failed', error);
       setToolCallSupported('unknown');
       return 'unknown';
     }
   }, [settings.apiKey, settings.baseUrl, settings.model]);
 
+  /** On connect + model: hidden handshake (tools + tool_choice required) to set toolCallSupported. */
   useEffect(() => {
-    if (settings.model) {
-      checkToolCallSupport();
+    if (connectionStatus === 'ready' && settings.model?.trim()) {
+      void checkToolCallSupport();
     }
-  }, [settings.model]);
+  }, [connectionStatus, settings.model, checkToolCallSupport]);
 
   const getActiveConversation = useCallback(
     () => conversations.find(conv => conv.id === activeConversationId) ?? conversations[0],
@@ -1216,6 +1669,16 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
   }, [activeConversationId]);
 
   const cancelRequest = useCallback(() => {
+    setToolStatus(undefined);
+    // Waiting for tool approval: abort ref is cleared — dismiss approvals so Stop works.
+    if (pendingToolExecutionRef.current.size > 0) {
+      pendingToolExecutionRef.current.clear();
+      setPendingToolApprovals([]);
+      setIsThinking(false);
+      setIsCancelling(false);
+      setLastError(undefined);
+      return;
+    }
     if (abortControllerRef.current) {
       setIsCancelling(true);
       abortControllerRef.current.abort();
@@ -1326,7 +1789,8 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       payloadMessages: any[],
       signal: AbortSignal,
       useTools: boolean = false,
-      toolChoice: 'auto' | 'required' = 'auto'
+      toolChoice: 'auto' | 'required' = 'auto',
+      streamOptions?: { onDelta: (acc: { content: string; reasoning: string }) => void }
     ): Promise<CompletionResult> => {
       // Ensure there is always at least one user-role message.
       // Some LM Studio Jinja templates error with "No user query found" otherwise.
@@ -1338,7 +1802,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
         const insertAt = firstNonSystem === -1 ? payloadMessages.length : firstNonSystem;
         finalMessages = [
           ...payloadMessages.slice(0, insertAt),
-          { role: 'user', content: 'Bitte antworte auf die vorherige Anfrage.' },
+          { role: 'user', content: 'Please respond to the previous request.' },
           ...payloadMessages.slice(insertAt)
         ];
       }
@@ -1356,6 +1820,13 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
         body.tool_choice = toolChoice;
       }
 
+      const useSse =
+        Boolean(settings.streamChat && streamOptions?.onDelta);
+
+      if (useSse) {
+        body.stream = true;
+      }
+
       let payload: any;
       let lastAttemptError: Error | null = null;
 
@@ -1370,7 +1841,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
         signal.addEventListener('abort', abortRelay, { once: true });
 
         try {
-          const response = await fetch(`${sanitizeBaseUrl(settings.baseUrl)}/v1/chat/completions`, {
+          const response = await fetch(buildApiUrl(sanitizeBaseUrl(settings.baseUrl), '/v1/chat/completions'), {
             method: 'POST',
             signal: attemptController.signal,
             headers: {
@@ -1382,7 +1853,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
 
           if (!response.ok) {
             const detail = await extractErrorMessage(response);
-            const message = detail || `LM Studio antwortete mit Status ${response.status}`;
+            const message = detail || `LM Studio responded with status ${response.status}`;
             if (attempt < COMPLETION_MAX_RETRIES && shouldRetryCompletionRequest(response.status, message)) {
               lastAttemptError = new Error(message);
               await delay(Math.min(500 * Math.pow(2, attempt - 1), 5000));
@@ -1391,24 +1862,77 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
             throw new Error(message);
           }
 
+          if (useSse && streamOptions?.onDelta) {
+            const { content: streamedRaw, reasoning: streamedReasoning, toolCallParts, finishReason, usage } =
+              await consumeSseChatStream(response, streamOptions.onDelta, attemptController.signal);
+
+            const rawContent = streamedRaw.trim() || '';
+            const reasoningContent = sanitizeReasoningContent(streamedReasoning.trim() || '');
+            const isReasoningOnly = !rawContent && !!reasoningContent && toolCallParts.size === 0;
+            const aiContent = sanitizeAssistantContent(rawContent);
+
+            let toolCalls: ToolCall[] | undefined;
+            if (toolCallParts.size > 0) {
+              const indices = [...toolCallParts.keys()].sort((a, b) => a - b);
+              const mapped: ToolCall[] = [];
+              for (const idx of indices) {
+                const p = toolCallParts.get(idx)!;
+                if (p.name) {
+                  mapped.push({
+                    id: p.id || createId(),
+                    type: 'function' as const,
+                    function: {
+                      name: p.name,
+                      arguments: p.arguments || '{}'
+                    }
+                  });
+                }
+              }
+              toolCalls = mapped.length ? mapped : undefined;
+            } else if (useTools) {
+              const pseudoToolCalls = extractPseudoToolCalls(rawContent);
+              if (pseudoToolCalls.length > 0) {
+                toolCalls = pseudoToolCalls;
+              }
+            }
+
+            if (!aiContent && !reasoningContent && !toolCalls?.length) {
+              return { content: '', finishReason, toolCalls: undefined, usage };
+            }
+
+            return {
+              content: aiContent,
+              reasoning: reasoningContent,
+              finishReason,
+              reasoningOnly: isReasoningOnly,
+              toolCalls,
+              usage
+            };
+          }
+
           payload = await response.json();
           lastAttemptError = null;
           break;
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const friendly = mapAnyAiError(error);
+          const message = friendly ?? (error instanceof Error ? error.message : String(error));
           const attemptTimedOut = attemptController.signal.aborted && !signal.aborted;
 
           if (signal.aborted) {
             throw error instanceof Error ? error : new Error(message);
           }
 
-          if (attempt < COMPLETION_MAX_RETRIES && (attemptTimedOut || shouldRetryCompletionRequest(0, message))) {
+          if (
+            attempt < COMPLETION_MAX_RETRIES &&
+            (attemptTimedOut || shouldRetryCompletionRequest(0, message)) &&
+            !friendly
+          ) {
             lastAttemptError = error instanceof Error ? error : new Error(message);
             await delay(Math.min(500 * Math.pow(2, attempt - 1), 5000));
             continue;
           }
 
-          throw error instanceof Error ? error : new Error(message);
+          throw new Error(message);
         } finally {
           clearTimeout(timeoutId);
           signal.removeEventListener('abort', abortRelay);
@@ -1420,11 +1944,12 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       }
 
       const choice = payload?.choices?.[0];
-      const rawContent = choice?.message?.content?.trim() || '';
-      const reasoningContent = sanitizeReasoningContent(choice?.message?.reasoning_content?.trim() || '');
+      const rawMessage = choice?.message;
+      const rawContent = rawMessage?.content?.trim() || '';
+      const reasoningContent = sanitizeReasoningContent(rawMessage?.reasoning_content?.trim() || '');
       const isReasoningOnly = !rawContent && !!reasoningContent;
       const aiContent = sanitizeAssistantContent(rawContent);
-      const rawToolCalls = choice?.message?.tool_calls;
+      const rawToolCalls = rawMessage?.tool_calls;
 
       let toolCalls: ToolCall[] | undefined;
       if (Array.isArray(rawToolCalls) && rawToolCalls.length > 0) {
@@ -1436,6 +1961,11 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
             arguments: tc.function?.arguments || '{}'
           }
         }));
+      } else if (rawMessage?.function_call) {
+        const legacyFunctionCalls = normalizeLegacyFunctionCall(rawMessage?.function_call);
+        if (legacyFunctionCalls?.length) {
+          toolCalls = legacyFunctionCalls;
+        }
       } else if (useTools) {
         const pseudoToolCalls = extractPseudoToolCalls(rawContent);
         if (pseudoToolCalls.length > 0) {
@@ -1463,16 +1993,27 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
   const buildSystemMessages = useCallback(
     async (injectSystemPrompt?: string, includeBasePrompt: boolean = true) => {
       const systemMessages: Array<{ role: string; content: string }> = [];
-      const basePrompt = includeBasePrompt ? await loadBasePrompt() : '';
-      if (basePrompt) {
-        systemMessages.push({ role: 'system', content: basePrompt });
+      const globalPrompt = settings.globalSystemPrompt?.trim();
+      const useReplace = Boolean(settings.replaceBasePrompt && globalPrompt);
+
+      if (useReplace) {
+        systemMessages.push({ role: 'system', content: globalPrompt });
+      } else if (includeBasePrompt) {
+        const basePrompt = await loadBasePrompt();
+        if (basePrompt) {
+          systemMessages.push({ role: 'system', content: basePrompt });
+        }
       }
+
       systemMessages.push({ role: 'system', content: createRuntimeModePrompt(settings) });
       if (projectPathRef.current) {
         systemMessages.push({
           role: 'system',
           content: `Current workspace/project path: ${projectPathRef.current}`
         });
+      }
+      if (!useReplace && globalPrompt) {
+        systemMessages.push({ role: 'system', content: globalPrompt });
       }
       if (injectSystemPrompt) {
         systemMessages.push({ role: 'system', content: injectSystemPrompt });
@@ -1495,7 +2036,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
         options?.includeBasePrompt ?? true
       );
       const signal = options?.signal ?? new AbortController().signal;
-      const result = await performCompletion([...systemMessages, ...payloadMessages], signal, false);
+      const result = await performCompletion([...systemMessages, ...payloadMessages], signal, options?.useTools ?? false);
       return result?.content;
     },
     [buildSystemMessages, performCompletion, settings.model]
@@ -1521,6 +2062,32 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       )
     );
   }, []);
+
+  const removeMessageFromConversation = useCallback((conversationId: string, messageId: string) => {
+    setConversations(prev =>
+      prev.map(conv =>
+        conv.id !== conversationId
+          ? conv
+          : { ...conv, messages: conv.messages.filter(m => m.id !== messageId) }
+      )
+    );
+  }, []);
+
+  const updateMessageInConversation = useCallback(
+    (conversationId: string, messageId: string, patch: Partial<Message>) => {
+      setConversations(prev =>
+        prev.map(conv =>
+          conv.id !== conversationId
+            ? conv
+            : {
+                ...conv,
+                messages: conv.messages.map(m => (m.id === messageId ? { ...m, ...patch } : m))
+              }
+        )
+      );
+    },
+    []
+  );
 
   const updateToolMessage = useCallback(
     (
@@ -1553,8 +2120,27 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       combinedContent: string,
       combinedReasoning: string[],
       stopReason?: string,
-      executedTools: ExecutedToolRecord[] = []
+      executedTools: ExecutedToolRecord[] = [],
+      options?: { streamed?: boolean }
     ) => {
+      if (options?.streamed) {
+        const note = stopReason?.trim();
+        if (
+          note &&
+          (note.includes('Stopped by user') ||
+            note.includes('loop guard') ||
+            note.includes('empty responses') ||
+            note.includes('execution loop'))
+        ) {
+          addMessageToConversation(conversationId, {
+            id: createId(),
+            content: `*${note}*`,
+            sender: 'system',
+            timestamp: new Date()
+          });
+        }
+        return;
+      }
       const parts: string[] = [];
       if (combinedContent) parts.push(combinedContent);
       if (stopReason) parts.push(`\n\n---\n*${stopReason}*`);
@@ -1590,21 +2176,56 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
           const useTools = settings.toolsEnabled;
           const forceToolChoice =
             toolCallSupported !== false &&
-            settings.mode !== 'qa' &&
             currentState.mutationCorrectionSent &&
             !currentState.performedMutationTool;
 
-          // Prune context if message history has grown large
-          const prunedMessages = pruneApiMessages(currentState.apiMessages);
+          // Prune context if message history has grown large.
+          // Input budget mirrors the output limit set in settings (maxTokens).
+          // Both input and output are capped at maxTokens tokens, so total ≤ maxTokens × 2.
+          // Chars ≈ tokens × 4. Minimum 8 000 chars so very small maxTokens don't over-prune.
+          const inputCharBudget = Math.max(8000, settings.maxTokens * 4);
+          const prunedMessages = pruneApiMessages(currentState.apiMessages, inputCharBudget);
           if (prunedMessages.length < currentState.apiMessages.length) {
             currentState.apiMessages = prunedMessages;
           }
 
+          if (settings.streamChat && currentState.pendingStreamMessageId) {
+            removeMessageFromConversation(currentState.conversationId, currentState.pendingStreamMessageId);
+            currentState.pendingStreamMessageId = undefined;
+          }
+
+          let streamMsgId: string | undefined;
+          if (settings.streamChat) {
+            streamMsgId = createId();
+            currentState.pendingStreamMessageId = streamMsgId;
+            addMessageToConversation(currentState.conversationId, {
+              id: streamMsgId,
+              content: '',
+              sender: 'ai',
+              timestamp: new Date()
+            });
+          }
+
+          let streamFirstChunk = true;
           const result = await performCompletion(
             currentState.apiMessages,
             currentState.controller.signal,
             useTools,
-            forceToolChoice ? 'required' : 'auto'
+            forceToolChoice ? 'required' : 'auto',
+            streamMsgId
+              ? {
+                  onDelta: ({ content, reasoning }) => {
+                    if (streamFirstChunk) {
+                      streamFirstChunk = false;
+                      setIsThinking(false);
+                    }
+                    updateMessageInConversation(currentState.conversationId, streamMsgId!, {
+                      content,
+                      reasoning: reasoning.trim() || undefined
+                    });
+                  }
+                }
+              : undefined
           );
 
           if (result.reasoning && !currentState.combinedReasoning.includes(result.reasoning)) {
@@ -1613,103 +2234,49 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
 
           if (result.toolCalls && result.toolCalls.length > 0) {
             const toolCalls = result.toolCalls;
-            if (containsOversizedWriteToolCall(toolCalls)) {
-              currentState.apiMessages = [
-                ...currentState.apiMessages,
-                buildAssistantToolMessage(toolCalls, result.content),
-                {
-                  role: 'user',
-                  content:
-                    'Do not write such a large block at once. Split the work into smaller tool-call chunks, ideally under 200 lines per write or replacement. For new files, create a small scaffold first and then extend it incrementally.'
-                }
-              ];
-              continue;
+            const toolFp = JSON.stringify(
+              toolCalls.map(tc => ({ n: tc.function.name, a: tc.function.arguments }))
+            );
+            if (toolFp === currentState.lastToolCallsFingerprint) {
+              currentState.identicalToolCallsRounds = (currentState.identicalToolCallsRounds ?? 0) + 1;
+            } else {
+              currentState.lastToolCallsFingerprint = toolFp;
+              currentState.identicalToolCallsRounds = 0;
             }
-            const invalidReadCall = toolCalls.find(tc => {
-              if (tc.function.name !== 'readFile') return false;
-              const args = safeJsonParse(tc.function.arguments || '{}');
-              return args.startLine == null && args.endLine == null;
-            });
-            if (invalidReadCall) {
-              currentState.apiMessages = [
-                ...currentState.apiMessages,
-                buildAssistantToolMessage(toolCalls, result.content),
-                {
-                  role: 'user',
-                  content:
-                    'Do not read full files in one call. Use readFile with explicit startLine and endLine, then continue with the next range if needed.'
-                }
-              ];
-              continue;
-            }
-            const blockedReplaceCall = toolCalls.find(tc => {
-              if (tc.function.name !== 'replaceInFile') return false;
-              const args = safeJsonParse(tc.function.arguments || '{}');
-              const pathKey = normalizeTrackedPath(String(args.path || ''));
-              return currentState.replaceReReadRequiredPaths.includes(pathKey);
-            });
-            if (blockedReplaceCall) {
-              currentState.apiMessages = [
-                ...currentState.apiMessages,
-                buildAssistantToolMessage(toolCalls, result.content),
-                {
-                  role: 'user',
-                  content:
-                    'You must reread that file in chunks with readFile using startLine/endLine before trying replaceInFile again. Do not retry the same edit against stale content.'
-                }
-              ];
-              continue;
+            if ((currentState.identicalToolCallsRounds ?? 0) >= 4) {
+              currentState.stopReason =
+                'Stopped: the model repeated the same tool calls too many times. Try rephrasing or start a new chat.';
+              break;
             }
             const toolCallInfos: ToolCallInfo[] = await Promise.all(
               toolCalls.map(tc => buildToolCallInfo(tc))
             );
-            const riskyOverwrite = toolCallInfos.find(
-              (info, index) =>
-                toolCalls[index]?.function.name === 'writeFile' &&
-                isRiskyWritePreview(info.preview)
-            );
-            if (riskyOverwrite) {
-              currentState.apiMessages = [
-                ...currentState.apiMessages,
-                buildAssistantToolMessage(toolCalls, result.content),
-                {
-                  role: 'user',
-                  content:
-                    'This writeFile looks destructive because it would overwrite an existing file with much less content. Do not replace the whole file. Read the current file again if needed and use a precise replaceInFile-based edit or a clearly justified full rewrite.'
-                }
-              ];
-              continue;
-            }
-            const largeNewFileWrite = toolCallInfos.find(
-              (info, index) => isLargeNewFileWrite(toolCalls[index], info.preview)
-            );
-            if (largeNewFileWrite) {
-              currentState.apiMessages = [
-                ...currentState.apiMessages,
-                buildAssistantToolMessage(toolCalls, result.content),
-                {
-                  role: 'user',
-                  content:
-                    'This new file is too large for a single writeFile call. First create a minimal scaffold with writeFile, then continue in multiple appendToFile or small replaceInFile chunks. Keep each chunk small and meaningful.'
-                }
-              ];
-              continue;
-            }
 
             currentState.apiMessages = [
               ...currentState.apiMessages,
               buildAssistantToolMessage(toolCalls, result.content)
             ];
 
+            const toolMessageId = streamMsgId ?? createId();
             const toolMessage: Message = {
-              id: createId(),
+              id: toolMessageId,
               content: result.content || '',
               reasoning: result.reasoning,
               sender: 'tool',
               timestamp: new Date(),
               toolCalls: toolCallInfos
             };
-            addMessageToConversation(currentState.conversationId, toolMessage);
+            if (streamMsgId) {
+              updateMessageInConversation(currentState.conversationId, streamMsgId, {
+                sender: 'tool',
+                content: toolMessage.content,
+                reasoning: toolMessage.reasoning,
+                toolCalls: toolCallInfos
+              });
+              currentState.pendingStreamMessageId = undefined;
+            } else {
+              addMessageToConversation(currentState.conversationId, toolMessage);
+            }
 
             if (
               !settings.yoloMode &&
@@ -1719,7 +2286,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
               pendingToolExecutionRef.current.set(approvalId, {
                 ...currentState,
                 id: approvalId,
-                messageId: toolMessage.id,
+                messageId: toolMessageId,
                 toolCalls
               });
               setPendingToolApprovals(prev => [
@@ -1727,7 +2294,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
                 {
                   id: approvalId,
                   conversationId: currentState.conversationId,
-                  messageId: toolMessage.id,
+                  messageId: toolMessageId,
                   summary: toolCalls.map(summarizeToolCall).join(' | '),
                   toolCalls: toolCallInfos
                 }
@@ -1747,7 +2314,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
 
             if (allReadOnly && toolCalls.length > 1) {
               setToolStatus(`Running ${toolCalls.length} read-only tools...`);
-              updateToolMessage(currentState.conversationId, toolMessage.id, current =>
+              updateToolMessage(currentState.conversationId, toolMessageId, current =>
                 current.map(entry => ({ ...entry, status: 'running' }))
               );
               const parallelResults = await Promise.all(
@@ -1781,7 +2348,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
                   }
                 }
               }
-              updateToolMessage(currentState.conversationId, toolMessage.id, current =>
+              updateToolMessage(currentState.conversationId, toolMessageId, current =>
                 current.map((entry, entryIndex) => {
                   const toolResult = parallelResults[entryIndex];
                   if (!toolResult) return entry;
@@ -1797,7 +2364,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
                 const tc = toolCalls[index];
                 setToolStatus(summarizeToolCall(tc));
 
-                updateToolMessage(currentState.conversationId, toolMessage.id, current =>
+                updateToolMessage(currentState.conversationId, toolMessageId, current =>
                   current.map((entry, entryIndex) =>
                     entryIndex === index ? { ...entry, status: 'running' } : entry
                   )
@@ -1834,7 +2401,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
                   }
                 }
 
-                updateToolMessage(currentState.conversationId, toolMessage.id, current =>
+                updateToolMessage(currentState.conversationId, toolMessageId, current =>
                   current.map((entry, entryIndex) =>
                     entryIndex === index
                       ? {
@@ -1859,7 +2426,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
             if (currentState.controller.signal.aborted) {
               break;
             }
-            updateToolMessage(currentState.conversationId, toolMessage.id, current =>
+            updateToolMessage(currentState.conversationId, toolMessageId, current =>
               current.map((entry, entryIndex) => {
                 const toolResult = toolResults[entryIndex];
                 if (!toolResult) return entry;
@@ -2049,8 +2616,8 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
             if (currentState.consecutiveEmptyResponses >= 3) {
               currentState.stopReason = 'Stopped: model returned multiple empty responses.';
               currentState.combinedContent += currentState.combinedContent
-                ? '\n\nDas Modell konnte keine Antwort generieren. Bitte versuche es mit einer praeziseren Anfrage erneut.'
-                : 'Das Modell konnte keine Antwort generieren. Bitte versuche es mit einer praeziseren Anfrage erneut.';
+                ? '\n\nThe model could not generate a response. Please try again with a more precise request.'
+                : 'The model could not generate a response. Please try again with a more precise request.';
               break;
             }
             currentState.apiMessages = [
@@ -2128,9 +2695,11 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
               ...currentState.apiMessages,
               { role: 'assistant', content: result.content }
             ];
+            currentState.pendingStreamMessageId = undefined;
           }
 
           if (shouldContinue(result)) {
+            currentState.pendingStreamMessageId = undefined;
             currentState.apiMessages = [
               ...currentState.apiMessages,
               {
@@ -2169,21 +2738,26 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
         const stopReason = currentState.controller.signal.aborted
           ? 'Stopped by user.'
           : currentState.stopReason || 'Stopped: response completed.';
+        if (currentState.pendingStreamMessageId) {
+          removeMessageFromConversation(currentState.conversationId, currentState.pendingStreamMessageId);
+        }
         finalizeAssistantMessage(
           currentState.conversationId,
           currentState.combinedContent,
           currentState.combinedReasoning,
           stopReason,
-          currentState.executedTools
+          currentState.executedTools,
+          { streamed: settings.streamChat }
         );
         return currentState.combinedContent;
       } catch (error) {
         const aborted = state.controller.signal.aborted;
-        const message = error instanceof Error ? error.message : String(error);
-        setLastError(aborted ? 'Anfrage abgebrochen.' : message);
+        const friendly = mapAnyAiError(error);
+        const message = friendly ?? (error instanceof Error ? error.message : String(error));
+        setLastError(aborted ? 'Request cancelled.' : message);
         addMessageToConversation(state.conversationId, {
           id: createId(),
-          content: aborted ? 'Anfrage abgebrochen.' : `Fehler: ${message}`,
+          content: aborted ? 'Request cancelled.' : `Error: ${message}`,
           sender: 'system',
           timestamp: new Date()
         });
@@ -2203,9 +2777,12 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       finalizeAssistantMessage,
       performCompletion,
       pruneApiMessages,
+      removeMessageFromConversation,
+      setIsThinking,
       settings,
       shouldContinue,
       toolCallSupported,
+      updateMessageInConversation,
       updateToolMessage
     ]
   );
@@ -2449,6 +3026,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
           requestId: createId(),
           combinedContent: '',
           combinedReasoning: [],
+          pendingStreamMessageId: undefined,
           stopReason: undefined,
           loops: 0,
           performedMutationTool: false,
@@ -2478,9 +3056,9 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
 
   const visionSupported = useMemo(() => {
     if (!settings.model) return false;
-    const lower = settings.model.toLowerCase();
-    return /vision|gpt-4o|gpt-4\.1|gpt-4\.5|gpt-5|gemini|claude|pixtral|llava|cogvlm|qwen2?-vl|internvl|minicpm/.test(lower);
-  }, [settings.model]);
+    const meta = modelMetadataRef.current.get(settings.model);
+    return inferVisionSupportFromModel(settings.model, meta);
+  }, [settings.model, settings.provider, models]);
 
   // ── Whisper Auto-Start ──
   useEffect(() => {
@@ -2574,9 +3152,18 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
     const handler = (event: Event) => {
       const { agentId, task, systemPrompt } = (event as CustomEvent).detail as { agentId: string; task: string; systemPrompt: string };
       setSubAgents(prev => [...prev, { id: agentId, task, status: 'running' }]);
+
+      const currentProjectPath = projectPathRef.current;
+      const projectPathInjection = currentProjectPath
+        ? `\nCurrent workspace/project path: ${currentProjectPath}\nAll file operations must use this path as root.`
+        : '';
+      const fullSystemPrompt = systemPrompt
+        ? `${systemPrompt}${projectPathInjection}`
+        : projectPathInjection.trim();
+
       requestCompletion(
         [{ role: 'user', content: task }],
-        { injectSystemPrompt: systemPrompt }
+        { injectSystemPrompt: fullSystemPrompt || undefined, useTools: true }
       ).then(result => {
         setSubAgents(prev => prev.map(a => a.id === agentId ? { ...a, status: 'done', result: result?.trim() || 'Completed.' } : a));
         window.dispatchEvent(new CustomEvent('ai:subAgentDone', { detail: { agentId, task, result: result?.trim() || '' } }));
@@ -2604,6 +3191,8 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       isCancelling,
       settings,
       updateSettings,
+      localBackendInstalls,
+      refreshLocalBackendInstalls,
       models,
       refreshModels,
       isFetchingModels,
@@ -2637,6 +3226,8 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       isCancelling,
       settings,
       updateSettings,
+      localBackendInstalls,
+      refreshLocalBackendInstalls,
       models,
       refreshModels,
       isFetchingModels,
@@ -2669,3 +3260,6 @@ export const useAI = () => {
   }
   return context;
 };
+
+/** Safe when StatusBar may render outside AIProvider (e.g. splash). */
+export const useOptionalAI = () => useContext(AIContext);

@@ -63,7 +63,7 @@
   max-height: none;
   padding: 8px 0;
   display: block;
-  /* Ermögliche mehr Scrollbereich oben/unten */
+  /* Extra scroll margin top/bottom */
   margin-bottom: 32px;
   margin-top: 16px;
 }
@@ -142,12 +142,12 @@
   background: #4f4f4f;
 }
 
-/* Entferne alle Margins */
+/* Remove all margins */
 .sidebar-content-panel .file-explorer {
   margin: 0;
 }
 
-/* Styling für die ausklappbaren Elemente */
+/* Styling for expandable items */
 .file-children {
   margin-left: 16px;
   display: flex;
@@ -157,7 +157,7 @@
   overflow-y: visible;
 }
 
-/* Verbesserte Styles für Ordner und Dateien */
+/* Improved styles for folders and files */
 .file-node {
   display: flex;
   align-items: center;
@@ -208,7 +208,7 @@
 .file-node[data-level="4"] { padding-left: 90px; }
 .file-node[data-level="5"] { padding-left: 110px; }
 
-/* Kontextmenü für Rechtsklick */
+/* Context menu for right-click */
 .file-context-menu {
   position: fixed;
   background: #23272e;

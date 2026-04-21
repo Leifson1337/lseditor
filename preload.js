@@ -1,6 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-// Speichern der Event-Listener, um sie später entfernen zu können
+// Store event listeners so they can be removed later
 const listeners = new Map();
 
 // Whitelist for allowed IPC channels
@@ -11,11 +11,15 @@ const ALLOWED_INVOKE_CHANNELS = [
   'fs:stat', 'fs:readFileBinary', 'fs:writeFileBinary', 'fs:watch', 'fs:unwatch', 'fs:copy',
   'getDirectoryEntries', 'extension:search', 'extension:install', 'extension:uninstall', 'extension:list',
   'window:minimize', 'window:maximize', 'window:unmaximize', 'window:close', 'window:isMaximized',
-  'ai:getBasePrompt', 'ai:chat', 'ai:refactor',
+  'ai:getBasePrompt', 'ai:load-chat-state', 'ai:save-chat-state', 'ai:load-settings', 'ai:save-settings',
+  'ai:resolve-local-provider-base-url',
+  'ai:get-local-backends-installed',
+  'ai:list-local-models',
+  'ai:chat', 'ai:refactor',
   'get-code-completion', 'explain-code', 'refactor-code', 'editor:findInFiles',
   'exec', 'exec:kill', 'terminal:create', 'terminal:kill', 'terminal:resize', 'terminal:dispose',
   'dialog:showOpenDialog', 'dialog:openDirectory', 'dialog:inputBox',
-  'app:getVersion', 'app:openAbout', 'app:newWindow', 'app:openFile', 'app:openFolder', 'app:exit', 'app:getUserDataPath', 'app:getPath',
+  'app:getVersion', 'app:openAbout', 'app:newWindow', 'app:openFile', 'app:openFolder', 'app:exit', 'app:getUserDataPath', 'app:getPath', 'app:consume-open-ai-settings-flag',
   'shell:openPath', 'edit:undo', 'edit:redo', 'edit:cut', 'edit:copy', 'edit:paste', 'edit:find', 'edit:replace',
   'view:toggleFullScreen', 'view:reload', 'terminal:new', 'terminal:runActiveFile', 'file:newTextFile',
   'fs:readFileBase64'
@@ -53,29 +57,29 @@ contextBridge.exposeInMainWorld('electron', {
         console.error(`Blocked unauthorized IPC listener on channel: ${channel}`);
         return;
       }
-      // Wrapper-Funktion erstellen, um den ursprünglichen Listener zu speichern
+      // Create wrapper to store the original listener
       const wrappedListener = (event, ...args) => listener(event, ...args);
 
-      // Listener und Wrapper in der Map speichern
+      // Store listener and wrapper in the map
       if (!listeners.has(channel)) {
         listeners.set(channel, new Map());
       }
       listeners.get(channel).set(listener, wrappedListener);
 
-      // Event-Listener hinzufügen
+      // Add event listener
       ipcRenderer.on(channel, wrappedListener);
     },
     removeListener: (channel, listener) => {
-      // Wrapper-Funktion aus der Map abrufen
+      // Get wrapper from the map
       if (listeners.has(channel) && listeners.get(channel).has(listener)) {
         const wrappedListener = listeners.get(channel).get(listener);
 
-        // Event-Listener entfernen
+        // Remove event listener
         ipcRenderer.removeListener(channel, wrappedListener);
 
-        // Listener aus der Map entfernen
+        // Remove listener from the map
         listeners.get(channel).delete(listener);
-        // Kanal aus der Map entfernen, wenn keine Listener mehr vorhanden sind
+        // Remove channel from map when no listeners remain
         if (listeners.get(channel).size === 0) {
           listeners.delete(channel);
         }

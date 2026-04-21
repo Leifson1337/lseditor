@@ -23,7 +23,7 @@ export const ExtensionViewPanel: React.FC<ExtensionViewPanelProps> = ({ viewCont
             sidebarDisposableRef.current = disposable;
         } catch (e) {
             console.error('[ExtensionViewPanel] Failed to attach sidebar part', e);
-            setError('Sidebar konnte nicht eingebunden werden.');
+            setError('Could not load sidebar.');
         }
         return () => {
             sidebarDisposableRef.current?.dispose();
@@ -57,7 +57,7 @@ export const ExtensionViewPanel: React.FC<ExtensionViewPanelProps> = ({ viewCont
                         retryTimer = window.setTimeout(tryOpen, 500);
                     } else {
                         console.error('[ExtensionViewPanel] Failed to open view container', viewContainerId, e);
-                        setError(`View "${viewContainerId}" konnte nicht geöffnet werden.`);
+                        setError(`Could not open view "${viewContainerId}".`);
                     }
                 }
             }

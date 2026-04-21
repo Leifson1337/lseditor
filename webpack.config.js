@@ -49,6 +49,10 @@ const mainConfig = {
     path: path.resolve(__dirname, 'dist'),
     filename: 'main.js'
   },
+  plugins: [
+    new webpack.IgnorePlugin({ resourceRegExp: /^osx-temperature-sensor$/ }),
+    new webpack.IgnorePlugin({ resourceRegExp: /^macos-temperature-sensor$/ })
+  ],
   externals: {
     'node-pty-prebuilt-multiarch': 'commonjs node-pty-prebuilt-multiarch',
     'electron': 'commonjs electron'
@@ -122,4 +126,128 @@ rendererConfig.resolve.alias = {
   'process': 'process/browser.js'
 };
 
-module.exports = [mainConfig, rendererConfig];
+const firstSetupConfig = {
+  ...commonConfig,
+  target: 'web',
+  entry: ['./src/global-shim.js', './src/firstTimeSetupEntry.tsx'],
+  output: {
+    path: path.resolve(__dirname, 'dist'),
+    filename: 'firstTimeSetup.js'
+  },
+  resolve: {
+    ...commonConfig.resolve,
+    fallback: {
+      buffer: require.resolve('buffer/'),
+      stream: require.resolve('stream-browserify'),
+      process: require.resolve('process/browser'),
+      fs: false,
+      path: require.resolve('path-browserify'),
+      events: require.resolve('events/'),
+      crypto: false,
+      http: require.resolve('stream-http'),
+      https: require.resolve('https-browserify'),
+      util: require.resolve('util/'),
+      url: require.resolve('url/'),
+      assert: require.resolve('assert/'),
+      zlib: require.resolve('browserify-zlib')
+    },
+    alias: {
+      ...commonConfig.resolve.alias,
+      process: 'process/browser.js'
+    }
+  },
+  plugins: [
+    new webpack.BannerPlugin({
+      banner: 'window.global = window; self.global = self;',
+      raw: true,
+      entryOnly: true
+    }),
+    new webpack.DefinePlugin({
+      'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development')
+    }),
+    new webpack.ProvidePlugin({
+      process: 'process/browser.js',
+      Buffer: ['buffer', 'Buffer'],
+      global: require.resolve('global')
+    }),
+    new HtmlWebpackPlugin({
+      template: './public/first-time-setup.html',
+      filename: 'first-time-setup.html',
+      inject: 'body'
+    })
+  ],
+  experiments: {
+    topLevelAwait: true
+  }
+};
+
+firstSetupConfig.module.rules.push({
+  test: /\.m?js/,
+  resolve: {
+    fullySpecified: false
+  }
+});
+
+const backendPreferenceConfig = {
+  ...commonConfig,
+  target: 'web',
+  entry: ['./src/global-shim.js', './src/backendPreferenceEntry.tsx'],
+  output: {
+    path: path.resolve(__dirname, 'dist'),
+    filename: 'backendPreference.js'
+  },
+  resolve: {
+    ...commonConfig.resolve,
+    fallback: {
+      buffer: require.resolve('buffer/'),
+      stream: require.resolve('stream-browserify'),
+      process: require.resolve('process/browser'),
+      fs: false,
+      path: require.resolve('path-browserify'),
+      events: require.resolve('events/'),
+      crypto: false,
+      http: require.resolve('stream-http'),
+      https: require.resolve('https-browserify'),
+      util: require.resolve('util/'),
+      url: require.resolve('url/'),
+      assert: require.resolve('assert/'),
+      zlib: require.resolve('browserify-zlib')
+    },
+    alias: {
+      ...commonConfig.resolve.alias,
+      process: 'process/browser.js'
+    }
+  },
+  plugins: [
+    new webpack.BannerPlugin({
+      banner: 'window.global = window; self.global = self;',
+      raw: true,
+      entryOnly: true
+    }),
+    new webpack.DefinePlugin({
+      'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development')
+    }),
+    new webpack.ProvidePlugin({
+      process: 'process/browser.js',
+      Buffer: ['buffer', 'Buffer'],
+      global: require.resolve('global')
+    }),
+    new HtmlWebpackPlugin({
+      template: './public/backend-preference.html',
+      filename: 'backend-preference.html',
+      inject: 'body'
+    })
+  ],
+  experiments: {
+    topLevelAwait: true
+  }
+};
+
+backendPreferenceConfig.module.rules.push({
+  test: /\.m?js/,
+  resolve: {
+    fullySpecified: false
+  }
+});
+
+module.exports = [mainConfig, rendererConfig, firstSetupConfig, backendPreferenceConfig];

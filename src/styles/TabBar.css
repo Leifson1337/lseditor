@@ -1,13 +1,14 @@
 .tab-bar {
   display: flex;
   align-items: center;
-  background: #23272e;
-  border-bottom: 1px solid #333;
-  height: 36px;
+  background: var(--bg-secondary, #1a1d25);
+  border-bottom: 1px solid var(--border-color, #2a2e3a);
+  height: 34px;
   margin: 0;
   padding: 0;
   box-sizing: border-box;
   overflow: hidden;
+  flex-shrink: 0;
 }
 
 .tabs-scroll-container {
@@ -25,61 +26,81 @@
 .tab {
   display: flex;
   align-items: center;
-  background: none;
+  gap: 6px;
+  background: transparent;
   border: none;
-  color: #ddd;
-  padding: 0 16px;
-  height: 36px;
+  color: var(--text-secondary, #858fa0);
+  padding: 0 12px;
+  height: 34px;
   cursor: pointer;
-  font-size: 14px;
-  border-right: 1px solid #333;
+  font-size: 13px;
+  border-right: 1px solid var(--border-color, #2a2e3a);
   position: relative;
-  transition: background 0.15s, transform 0.15s;
+  transition: background 0.12s, color 0.12s;
   box-sizing: border-box;
   user-select: none;
+  min-width: 100px;
+  max-width: 180px;
 }
 
 .tab.active {
-  background: #1e1e1e;
-  color: #fff;
+  background: var(--bg-primary, #13141b);
+  color: var(--text-primary, #e2e4ec);
+  border-bottom: 2px solid var(--accent-blue, #5b8fff);
 }
 
 .tab.drag-over {
-  background: rgba(59, 130, 246, 0.15);
-  border-left: 2px solid #3b82f6;
+  background: rgba(91, 143, 255, 0.1);
+  border-left: 2px solid var(--accent-blue, #5b8fff);
 }
 
 .tab:hover:not(.active) {
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary, #e2e4ec);
 }
 
 .tab-close {
   background: none;
   border: none;
-  color: #888;
-  margin-left: 0;
+  color: var(--text-secondary, #858fa0);
+  margin-left: auto;
   cursor: pointer;
   font-size: 13px;
   padding: 0;
-  transition: color 0.15s;
-  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.1s, color 0.1s, background 0.1s;
+}
+
+.tab:hover .tab-close,
+.tab.active .tab-close {
+  opacity: 1;
 }
 
 .tab-close:hover {
-  color: #f14c4c;
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.12);
 }
 
 .tab-title {
+  flex: 1;
   max-width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   box-sizing: border-box;
+  font-size: 13px;
 }
 
-/* Extra: Zeilennummern in Monaco Editor immer sichtbar */
+/* Monaco Editor chrome */
 .monaco-editor .margin {
-  background: #222 !important;
-  color: #888 !important;
-  border-right: 1px solid #333 !important;
+  background: #141720 !important;
+  color: #4a5270 !important;
+  border-right: 1px solid #232840 !important;
 }

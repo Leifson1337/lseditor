@@ -18,8 +18,8 @@
 }
 
 .file-explorer-resizable {
-  background: #222;
-  border-right: 1px solid #333;
+  background: var(--bg-secondary, #1a1d25);
+  border-right: 1px solid var(--border-color, #2a2e3a);
   display: flex;
   flex-direction: column;
 }
@@ -31,25 +31,27 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  background: var(--bg-primary, #13141b);
 }
 
 .editor-path-display {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 14px;
-  font-size: 12px;
-  color: #cfd8dc;
-  background: #14141a;
-  border-bottom: 1px solid #2c2c2c;
-  min-height: 28px;
+  padding: 0 14px;
+  font-size: 11.5px;
+  color: var(--text-secondary, #858fa0);
+  background: var(--bg-secondary, #1a1d25);
+  border-bottom: 1px solid var(--border-color, #2a2e3a);
+  min-height: 26px;
   overflow: hidden;
   white-space: nowrap;
 }
 
 .editor-path-label {
-  color: #8fd0ff;
-  font-weight: 500;
+  color: #5b8fff;
+  font-weight: 600;
+  flex-shrink: 0;
 }
 
 .editor-path-value {
@@ -58,6 +60,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: #a8b0bd;
 }
 
 .editor-area {
@@ -67,52 +70,54 @@
   overflow: hidden;
 }
 
-.editor-area .monaco-editor,
-.editor-area .monaco-editor .overflow-guard,
-.editor-area .monaco-editor-background,
-.editor-area .monaco-editor .inputarea.ime-input {
-  max-width: 100%;
-}
-
+/* Monaco editor chrome */
 .editor-area .monaco-editor .margin {
-  background: #181c24 !important;
-  border-right: 1px solid #283244 !important;
+  background: #141720 !important;
+  border-right: 1px solid #232840 !important;
 }
 
 .editor-area .monaco-editor .line-numbers {
-  color: #7f8ba3 !important;
+  color: #4a5270 !important;
 }
 
 .editor-area .monaco-editor .current-line-margin,
 .editor-area .monaco-editor .margin-view-overlays .current-line {
-  background: rgba(56, 189, 248, 0.08) !important;
+  background: rgba(91, 143, 255, 0.06) !important;
 }
 
+/* Empty editor state */
 .editor-empty-ui {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: #888;
+  color: #3d4460;
+  gap: 0;
 }
 
 .editor-empty-title {
-  font-size: 1.2em;
-  margin-top: 16px;
+  font-size: 1.1em;
+  margin-top: 18px;
+  color: #545d78;
+  font-weight: 500;
 }
 
 .editor-empty-desc {
   margin-top: 8px;
+  font-size: 13px;
+  color: #3d4460;
 }
 
+/* Terminal panel */
 .terminal-resizable {
-  border-top: 1px solid #333;
+  border-top: 1px solid var(--border-color, #2a2e3a);
 }
 
+/* AI panel */
 .ai-panel-resizable {
-  background: #1e1e1e;
-  border-left: 1px solid #333;
+  background: var(--bg-secondary, #1a1d25);
+  border-left: 1px solid var(--border-color, #2a2e3a);
   display: flex;
   flex-direction: column;
   height: 100% !important;
@@ -138,4 +143,23 @@
   flex: 1 1 auto;
   overflow: hidden;
   box-sizing: border-box;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2a2e3a;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #353a4a;
 }

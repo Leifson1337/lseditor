@@ -26,7 +26,7 @@ initializeVSCodeWorkbench().then(() => {
   console.error('Failed to initialize VS Code API:', err);
 });
 
-// Setze das Theme auf dark
+// Set theme to dark
 document.documentElement.setAttribute('data-theme', 'dark');
 
 /**

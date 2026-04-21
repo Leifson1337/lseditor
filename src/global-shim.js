@@ -1,7 +1,7 @@
 window.global = window;
 self.global = self;
 
-// Buffer explizit im globalen Scope bereitstellen (für xterm-Addons)
+// Provide Buffer explicitly in global scope (for xterm addons)
 let BufferPolyfill = undefined;
 try {
   if (typeof require === 'function') {

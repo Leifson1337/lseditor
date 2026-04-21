@@ -150,12 +150,15 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   async function renameFile(oldPath: string, newName: string): Promise<boolean> {
     if (window.electron?.ipcRenderer.invoke) {
       try {
-        const result = await window.electron.ipcRenderer.invoke('fs:renameFile', oldPath, newName);
-        if (!result) {
-          alert('Rename failed. Please check the new name or permissions.');
+        const result = (await window.electron.ipcRenderer.invoke('fs:renameFile', oldPath, newName)) as {
+          ok?: boolean;
+          error?: string;
+        };
+        if (!result?.ok) {
+          alert(`Rename failed: ${result?.error || 'Please check the new name or permissions.'}`);
           return false;
         }
-        return Boolean(result);
+        return true;
       } catch (e: any) {
         alert('Error renaming: ' + (typeof e === 'object' && 'message' in e ? (e as any).message : String(e)));
       }
@@ -166,7 +169,14 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   async function deleteFile(filePath: string): Promise<boolean> {
     if (window.electron?.ipcRenderer.invoke) {
       try {
-        await window.electron.ipcRenderer.invoke('fs:deleteFile', filePath);
+        const del = (await window.electron.ipcRenderer.invoke('fs:deleteFile', filePath)) as {
+          ok?: boolean;
+          error?: string;
+        };
+        if (!del?.ok) {
+          alert(`Delete failed: ${del?.error || 'unknown error'}`);
+          return false;
+        }
         return true;
       } catch (e: any) {
         alert('Error deleting: ' + (typeof e === 'object' && 'message' in e ? (e as any).message : String(e)));
@@ -197,7 +207,10 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     const fileName = renameValue.trim() || 'untitled.txt';
     const targetPath = path.join(newFileDraft.parentPath, fileName);
     try {
-      await window.electron?.ipcRenderer?.invoke('fs:writeFile', targetPath, '');
+      const wr = await window.electron?.ipcRenderer?.invoke('fs:writeFile', targetPath, '');
+      if (wr && typeof wr === 'object' && 'ok' in wr && !wr.ok) {
+        throw new Error((wr as { error?: string }).error || 'Write failed');
+      }
       dispatchExplorerRefresh();
       onOpenFile(targetPath);
     } catch (error) {
@@ -322,7 +335,10 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     if (!name) return;
     const targetPath = isAbsoluteFilePath(name) ? path.normalize(name) : path.join(projectPath, name);
     try {
-      await window.electron?.ipcRenderer?.invoke('fs:createDirectory', targetPath);
+      const mr = await window.electron?.ipcRenderer?.invoke('fs:createDirectory', targetPath);
+      if (mr && typeof mr === 'object' && 'ok' in mr && !mr.ok) {
+        throw new Error((mr as { error?: string }).error || 'mkdir failed');
+      }
       dispatchExplorerRefresh();
     } catch (error) {
       alert(`Failed to create folder: ${error instanceof Error ? error.message : String(error)}`);

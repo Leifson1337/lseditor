@@ -160,3 +160,28 @@
   font-size: 12px;
   color: var(--muted-color, #9ca3af);
 }
+
+.settings-local-backend-btns {
+  display: flex;
+  gap: 8px;
+}
+
+.settings-local-backend-btns button {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: var(--input-background);
+  color: var(--text-color);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.settings-local-backend-btns button:hover {
+  background: var(--hover-color);
+}
+
+.settings-local-backend-btns button.active {
+  border-color: var(--accent-color, #6366f1);
+  background: rgba(99, 102, 241, 0.12);
+}

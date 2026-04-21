@@ -22,6 +22,53 @@
 .status-bar-center {
   flex: 1;
   justify-content: center;
+  min-width: 0;
+}
+
+.status-context-meter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 220px;
+  padding: 0 10px;
+}
+
+.status-context-meter-label {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.75);
+  white-space: nowrap;
+}
+
+.status-context-meter-track {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.2);
+  overflow: hidden;
+  min-width: 72px;
+}
+
+.status-context-meter-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: #4ade80;
+  transition: width 0.2s ease, background 0.2s ease;
+}
+
+.status-context-meter-fill.mid {
+  background: #fbbf24;
+}
+
+.status-context-meter-fill.high {
+  background: #f87171;
+}
+
+.status-context-meter-pct {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.9);
+  min-width: 32px;
+  text-align: right;
 }
 
 .status-item {

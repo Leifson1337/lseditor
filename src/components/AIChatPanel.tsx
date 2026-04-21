@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import path from 'path';
-import { FiRefreshCw, FiSend, FiPlus, FiSettings, FiCopy, FiCheck, FiAlertTriangle, FiX, FiMessageSquare, FiCode, FiFileText, FiTerminal, FiPaperclip, FiZap, FiShield, FiMic, FiMicOff } from 'react-icons/fi';
+import { DiffEditor } from '@monaco-editor/react';
+import { FiRefreshCw, FiSend, FiPlus, FiSettings, FiCopy, FiCheck, FiAlertTriangle, FiX, FiMessageSquare, FiCode, FiFileText, FiTerminal, FiPaperclip, FiZap, FiShield, FiMic, FiMicOff, FiSquare } from 'react-icons/fi';
 import { LuLoader2 } from 'react-icons/lu';
 import { VoiceInputService, MicDevice } from '../services/VoiceInputService';
 import { diffLines } from 'diff';
@@ -19,6 +20,34 @@ import {
 import { EditorDiagnostic } from '../services/AIToolService';
 
 marked.setOptions({ breaks: true });
+
+function languageForPatch(filePath: string): string {
+  const ext = (filePath.split('.').pop() || '').toLowerCase();
+  const map: Record<string, string> = {
+    ts: 'typescript',
+    tsx: 'typescript',
+    mts: 'typescript',
+    js: 'javascript',
+    jsx: 'javascript',
+    mjs: 'javascript',
+    cjs: 'javascript',
+    json: 'json',
+    jsonc: 'json',
+    md: 'markdown',
+    mdx: 'markdown',
+    css: 'css',
+    scss: 'scss',
+    html: 'html',
+    py: 'python',
+    rs: 'rust',
+    go: 'go',
+    yaml: 'yaml',
+    yml: 'yaml',
+    xml: 'xml',
+    toml: 'plaintext'
+  };
+  return map[ext] || 'plaintext';
+}
 
 interface AIChatPanelProps {
   fileStructure: FileNode[];
@@ -289,6 +318,8 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     isCancelling,
     settings,
     updateSettings,
+    localBackendInstalls,
+    refreshLocalBackendInstalls,
     models,
     refreshModels,
     isFetchingModels,
@@ -321,9 +352,22 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
   const [input, setInput] = useState('');
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [settingsMenuTab, setSettingsMenuTab] = useState<'general' | 'model' | 'advanced'>('general');
+
+  useEffect(() => {
+    if (showSettingsMenu && settingsMenuTab === 'model') {
+      void refreshLocalBackendInstalls();
+    }
+  }, [showSettingsMenu, settingsMenuTab, refreshLocalBackendInstalls]);
+
+  /** Popup body scrolls; Mode is at the top — reset so users always see it when opening or switching tabs. */
+  useEffect(() => {
+    if (!showSettingsMenu) return;
+    settingsPopupBodyRef.current?.scrollTo(0, 0);
+  }, [showSettingsMenu, settingsMenuTab]);
   const [attachedFiles, setAttachedFiles] = useState<Array<{ name: string; type: string; dataUrl?: string; content?: string }>>([]);
   const [showYoloConfirm, setShowYoloConfirm] = useState(false);
   const settingsMenuRef = useRef<HTMLDivElement | null>(null);
+  const settingsPopupBodyRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [autoContextEnabled, setAutoContextEnabled] = useState(() => {
     if (typeof window === 'undefined') return false;
@@ -332,6 +376,17 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
   const [autoContextStatus, setAutoContextStatus] = useState('');
   const [isAutoContextBusy, setIsAutoContextBusy] = useState(false);
   const [autoContextFiles, setAutoContextFiles] = useState<string[]>([]);
+  const [isSending, setIsSending] = useState(false);
+  /** Agent run in progress: same control becomes Stop instead of Send. */
+  const conversationRunActive = useMemo(
+    () =>
+      isSending ||
+      isThinking ||
+      isAutoContextBusy ||
+      Boolean(toolStatus) ||
+      activeApprovals.length > 0,
+    [isSending, isThinking, isAutoContextBusy, toolStatus, activeApprovals.length]
+  );
   const [autoContextActivity, setAutoContextActivity] = useState<string[]>([]);
   const autoContextAbortRef = useRef<AbortController | null>(null);
   const [pendingEdits, setPendingEdits] = useState<PendingFileEdit[]>([]);
@@ -357,6 +412,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
 
   // ── Sub-agent trigger state ──
   const [showSubAgentPanel, setShowSubAgentPanel] = useState(false);
+  const [dismissedError, setDismissedError] = useState<string | undefined>();
 
   const ensureAbsolutePath = useMemo(() => {
     const resolveBaseDirectory = () => {
@@ -529,7 +585,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
   useEffect(() => {
     if (!messagesContainerRef.current) return;
     messageEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages, isThinking, isAutoContextBusy]);
+  }, [messages, isThinking, isAutoContextBusy, toolStatus]);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -556,6 +612,26 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     };
     window.addEventListener('editor:diagnosticsChanged', handler);
     return () => window.removeEventListener('editor:diagnosticsChanged', handler);
+  }, []);
+
+  // Global shortcuts: focus input (Ctrl+L) / quick edit on selection (Ctrl+K)
+  useEffect(() => {
+    const onFocusInput = () => {
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    };
+    const onQuickEdit = (ev: Event) => {
+      const text = (ev as CustomEvent<{ text?: string }>).detail?.text ?? '';
+      const block = text.trim().length ? `\n\n\`\`\`\n${text}\n\`\`\`\n` : '\n\n';
+      const msg = `Quick edit — improve or rewrite the following:${block}`;
+      setInput(prev => (prev.trim() ? `${prev}\n\n${msg}` : msg));
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    };
+    window.addEventListener('ai:focusChatInput', onFocusInput);
+    window.addEventListener('ai:quickEdit', onQuickEdit as EventListener);
+    return () => {
+      window.removeEventListener('ai:focusChatInput', onFocusInput);
+      window.removeEventListener('ai:quickEdit', onQuickEdit as EventListener);
+    };
   }, []);
 
   // Handle click on code copy buttons
@@ -831,7 +907,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
 
   const handleSend = async () => {
     if (!input.trim() && !attachedFiles.length) return;
-    if (isThinking || isAutoContextBusy) return;
+    if (conversationRunActive) return;
     const question = input.trim();
 
     // Separate images from text files
@@ -868,15 +944,19 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
 
     if (!fullMessage && !images?.length) return;
 
-    // Send with proper multimodal support
-    if (autoContextEnabled && availableFiles.length) {
-      // For auto context, we need to inject context and pass images separately
-      await sendWithAutoContext(fullMessage || '', images, displayContent);
-    } else {
-      await sendMessage(fullMessage || (images ? '' : ''), {
-        displayContent,
-        images
-      });
+    setIsSending(true);
+    try {
+      // Send with proper multimodal support
+      if (autoContextEnabled && availableFiles.length) {
+        await sendWithAutoContext(fullMessage || '', images, displayContent);
+      } else {
+        await sendMessage(fullMessage || (images ? '' : ''), {
+          displayContent,
+          images
+        });
+      }
+    } finally {
+      setIsSending(false);
     }
   };
 
@@ -937,9 +1017,15 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
   const acceptEdit = async (edit: PendingFileEdit) => {
     try {
       if (edit.action === 'delete') {
-        await window.electron?.ipcRenderer?.invoke('fs:deleteFile', edit.absolutePath);
+        const del = await window.electron?.ipcRenderer?.invoke('fs:deleteFile', edit.absolutePath);
+        if (del && typeof del === 'object' && 'ok' in del && !del.ok) {
+          throw new Error((del as { error?: string }).error || 'Delete failed');
+        }
       } else {
-        await window.electron?.ipcRenderer?.invoke('fs:writeFile', edit.absolutePath, edit.newContent ?? '');
+        const wr = await window.electron?.ipcRenderer?.invoke('fs:writeFile', edit.absolutePath, edit.newContent ?? '');
+        if (wr && typeof wr === 'object' && 'ok' in wr && !wr.ok) {
+          throw new Error((wr as { error?: string }).error || 'Write failed');
+        }
       }
       window.dispatchEvent(new CustomEvent('editor:fileChanged', { detail: edit.absolutePath }));
       window.dispatchEvent(new CustomEvent('editor:openFile', { detail: edit.absolutePath }));
@@ -1075,26 +1161,6 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     return result;
   };
 
-  const renderDiff = (edit: PendingFileEdit) => {
-    const rows = buildDiffRows(edit.originalContent ?? '', edit.newContent ?? '', edit.id);
-    return (
-      <pre className="ai-diff">
-        {rows.map(row => row.type === 'separator' ? (
-          <div key={row.key} className="ai-diff-line separator">{row.text}</div>
-        ) : (
-          <div key={row.key} className={`ai-diff-line ${row.type}`}>
-            <span className="ai-diff-line-number">{row.oldLineNumber ?? ''}</span>
-            <span className="ai-diff-line-number">{row.newLineNumber ?? ''}</span>
-            <span className="ai-diff-gutter">
-              {row.type === 'added' ? '+' : row.type === 'removed' ? '-' : ' '}
-            </span>
-            <span className="ai-diff-code">{row.text || '\u00A0'}</span>
-          </div>
-        ))}
-      </pre>
-    );
-  };
-
   const renderToolPreview = (approvalId: string, index: number, toolCall: any) => {
     if (!toolCall.preview || toolCall.preview.kind !== 'file') return null;
     const preview = toolCall.preview;
@@ -1142,13 +1208,19 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     setRevertingToolCalls(prev => new Set(prev).add(toolKey));
     try {
       if (preview.action === 'create') {
-        await window.electron?.ipcRenderer?.invoke('fs:deleteFile', ensureAbsolutePath(preview.path));
+        const del = await window.electron?.ipcRenderer?.invoke('fs:deleteFile', ensureAbsolutePath(preview.path));
+        if (del && typeof del === 'object' && 'ok' in del && !del.ok) {
+          throw new Error((del as { error?: string }).error || 'Delete failed');
+        }
       } else {
-        await window.electron?.ipcRenderer?.invoke(
+        const wr = await window.electron?.ipcRenderer?.invoke(
           'fs:writeFile',
           ensureAbsolutePath(preview.path),
           preview.originalContent ?? ''
         );
+        if (wr && typeof wr === 'object' && 'ok' in wr && !wr.ok) {
+          throw new Error((wr as { error?: string }).error || 'Write failed');
+        }
       }
       window.dispatchEvent(new CustomEvent('editor:fileChanged', { detail: ensureAbsolutePath(preview.path) }));
       window.dispatchEvent(new CustomEvent('editor:openFile', { detail: ensureAbsolutePath(preview.path) }));
@@ -1241,7 +1313,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
   };
 
   const renderReasoning = (message: typeof messages[number]) => {
-    if (message.sender !== 'ai') return null;
+    if (message.sender !== 'ai' && message.sender !== 'tool') return null;
     if (!message.reasoning?.trim()) return null;
     const reasoningKey = `reasoning-${message.id}`;
     const isExpanded = expandedReasoning.has(reasoningKey);
@@ -1354,7 +1426,42 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
             </button>
           </div>
         </div>
+        <div
+          className="ai-chat-context-bar"
+          title={`Context usage: ${contextUsagePercent}%`}
+        >
+          <div
+            className={`ai-chat-context-bar-fill ${contextUsagePercent >= 85 ? 'high' : contextUsagePercent >= 60 ? 'mid' : ''}`}
+            style={{ width: `${Math.min(100, Math.max(0, contextUsagePercent))}%` }}
+          />
+        </div>
       </div>
+
+      {subAgents.length > 0 && (
+        <div className="ai-subagents-panel">
+          <div className="ai-subagents-panel-header">
+            <span>Sub-agents</span>
+            <button type="button" className="ai-subagents-clear" onClick={() => clearSubAgents()}>
+              Clear
+            </button>
+          </div>
+          <ul className="ai-subagents-list">
+            {subAgents.map(a => (
+              <li key={a.id} className={`ai-subagent-item ai-subagent-${a.status}`}>
+                <span className="ai-subagent-status-badge">{a.status}</span>
+                <span className="ai-subagent-task" title={a.task}>
+                  {a.task.length > 140 ? `${a.task.slice(0, 140)}…` : a.task}
+                </span>
+                {a.result ? (
+                  <span className="ai-subagent-result" title={a.result}>
+                    {a.result.length > 200 ? `${a.result.slice(0, 200)}…` : a.result}
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* ─── Messages ─── */}
       <div className="ai-chat-messages" ref={messagesContainerRef}>
@@ -1420,6 +1527,14 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
               </div>
               {isSummaryMessage ? renderSummaryCard(message) : <div className="ai-chat-message-bubble">
                 {message.toolCalls && message.toolCalls.length > 0 ? (
+                  <>
+                    {renderReasoning(message)}
+                    {(() => {
+                      const { body: toolBody } = splitStopReason(message.content);
+                      return toolBody?.trim() ? (
+                        <div className="ai-chat-tool-assistant-text">{renderMessageContent(toolBody)}</div>
+                      ) : null;
+                    })()}
                   <div className="ai-chat-tool-calls">
                     {message.toolCalls.map((tc, idx) => {
                       const tcKey = `${message.id}-tc-${idx}`;
@@ -1450,6 +1565,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                       );
                     })}
                   </div>
+                  </>
                 ) : (
                   <>
                     {renderReasoning(message)}
@@ -1462,7 +1578,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
         )}
 
         {/* Thinking indicator */}
-        {(isThinking || isAutoContextBusy) && (
+        {(isThinking || isAutoContextBusy || Boolean(toolStatus)) && (
           <div className="ai-chat-thinking">
             <div className="ai-thinking-dots">
               <span /><span /><span />
@@ -1485,7 +1601,19 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       </div>
 
       {/* Error bar */}
-      {lastError && <div className="ai-chat-alert">{lastError}</div>}
+      {lastError && lastError !== dismissedError && (
+        <div className="ai-chat-alert" role="alert">
+          <span className="ai-chat-alert-text">{lastError}</span>
+          <button
+            className="ai-chat-alert-dismiss"
+            type="button"
+            title="Dismiss"
+            onClick={() => setDismissedError(lastError)}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* ─── Input ─── */}
       {activeApproval && (
@@ -1535,6 +1663,14 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
           <div className="ai-chat-input-status">Cancelling...</div>
         )}
 
+        {!projectPath?.trim() && (
+          <div className="ai-chat-capability-hint" role="status">
+            <div className="ai-chat-capability-hint-row">
+              <span>Open a project folder so relative paths resolve to your workspace.</span>
+            </div>
+          </div>
+        )}
+
         {/* Attached files preview */}
         {attachedFiles.length > 0 && (
           <div className="ai-chat-attachments">
@@ -1565,32 +1701,31 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
             rows={1}
             disabled={inputDisabled}
           />
-          {(isThinking || isAutoContextBusy) ? (
-            <button
-              type="button"
-              className="ai-chat-cancel-button"
-              onClick={() => {
+          <button
+            type="button"
+            className={
+              conversationRunActive ? 'ai-chat-send-btn ai-chat-send-btn--stop' : 'ai-chat-send-btn'
+            }
+            onClick={() => {
+              if (conversationRunActive) {
                 cancelRequest();
                 autoContextAbortRef.current?.abort();
                 autoContextAbortRef.current = null;
                 setAutoContextStatus('');
                 setIsAutoContextBusy(false);
                 setAutoContextFiles([]);
-              }}
-            >
-              Stop
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="ai-chat-send-btn"
-              onClick={handleSend}
-              disabled={inputDisabled || (!input.trim() && !attachedFiles.length)}
-              title="Send"
-            >
-              <FiSend />
-            </button>
-          )}
+                return;
+              }
+              void handleSend();
+            }}
+            disabled={
+              conversationRunActive ? false : inputDisabled || (!input.trim() && !attachedFiles.length)
+            }
+            title={conversationRunActive ? 'Stop generation' : 'Send'}
+            aria-label={conversationRunActive ? 'Stop generation' : 'Send message'}
+          >
+            {conversationRunActive ? <FiSquare size={14} /> : <FiSend />}
+          </button>
         </div>
 
         {/* Bottom action bar */}
@@ -1624,12 +1759,22 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
               <div style={{ position: 'relative' }}>
                 <button
                   type="button"
-                  className={`ai-chat-input-icon-btn ai-voice-btn ${voiceState === 'recording' ? 'recording' : voiceState === 'transcribing' ? 'transcribing' : ''}`}
+                  className={`ai-chat-input-icon-btn ai-voice-btn ${voiceState === 'recording' ? 'recording' : voiceState === 'transcribing' ? 'transcribing' : voiceState === 'acquiring' ? 'acquiring' : ''}`}
                   onClick={handleVoiceClick}
-                  title={voiceState === 'recording' ? 'Stop recording' : voiceState === 'transcribing' ? 'Transcribing...' : 'Start voice input'}
+                  title={
+                    voiceState === 'recording'
+                      ? 'Stop recording'
+                      : voiceState === 'transcribing'
+                        ? 'Transcribing...'
+                        : voiceState === 'acquiring'
+                          ? 'Accessing microphone...'
+                          : 'Start voice input'
+                  }
                   disabled={voiceState === 'transcribing' || voiceState === 'acquiring'}
                 >
-                  {voiceState === 'recording' ? <FiMicOff size={15} /> : <FiMic size={15} />}
+                  <span className="ai-voice-btn-inner">
+                    {voiceState === 'recording' ? <FiMicOff size={15} /> : <FiMic size={15} />}
+                  </span>
                 </button>
                 {showMicPicker && micDevices.length > 0 && (
                   <div className="ai-mic-picker" ref={micPickerRef}>
@@ -1755,11 +1900,11 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
               </button>
             </div>
 
-            <div className="ai-settings-popup-body">
+            <div className="ai-settings-popup-body" ref={settingsPopupBodyRef}>
               {/* ── General tab ── */}
               {settingsMenuTab === 'general' && (
                 <>
-                  <div className="ai-settings-popup-section">
+                  <div className="ai-settings-popup-section ai-settings-popup-section--mode-sticky">
                     <div className="ai-settings-popup-label">Mode</div>
                     <div className="ai-chat-mode-switch" role="tablist">
                       {(['qa', 'coder', 'autonomous'] as const).map(mode => (
@@ -1774,9 +1919,29 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                       ))}
                     </div>
                     <span className="ai-settings-popup-hint">
-                      {settings.mode === 'qa' ? 'Read-only Q&A'
-                        : settings.mode === 'coder' ? 'Can edit files and run commands'
-                        : 'Plans, codes and validates autonomously'}
+                      {settings.mode === 'qa'
+                        ? 'Answers first; writes/commands need approval unless YOLO is on'
+                        : settings.mode === 'coder'
+                          ? 'Can edit files and run commands'
+                          : 'Plans, codes and validates autonomously'}
+                    </span>
+                  </div>
+
+                  <div className="ai-settings-popup-section">
+                    <div className="ai-settings-popup-label">Streaming</div>
+                    <button
+                      type="button"
+                      className={`ai-chat-toggle ${settings.streamChat !== false ? 'active' : ''}`}
+                      onClick={() =>
+                        updateSettings({ streamChat: !(settings.streamChat !== false) })
+                      }
+                    >
+                      Live stream replies
+                    </button>
+                    <span className="ai-settings-popup-hint">
+                      {settings.streamChat !== false
+                        ? 'Assistant text appears token-by-token (recommended)'
+                        : 'Replies appear all at once when the model finishes'}
                     </span>
                   </div>
 
@@ -1885,6 +2050,11 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                         All actions execute without confirmation. Fully unrestricted.
                       </span>
                     )}
+                    {!settings.yoloMode && !showYoloConfirm && (
+                      <span className="ai-settings-popup-hint">
+                        File writes, deletes, and shell commands ask for approval in chat before running.
+                      </span>
+                    )}
                   </div>
 
                   {/* ── Speech section ── */}
@@ -1972,29 +2142,76 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
               {settingsMenuTab === 'model' && (
                 <>
                   <div className="ai-settings-popup-section">
-                    <div className="ai-settings-popup-label">Model</div>
-                    <div className="ai-settings-popup-row">
-                      <select
-                        className="ai-chat-model-select"
-                        value={settings.model}
-                        onChange={event => updateSettings({ model: event.target.value })}
-                        disabled={!models.length}
-                      >
-                        {models.length === 0 && <option value="">No models</option>}
-                        {models.map(model => (
-                          <option key={model} value={model}>{model}</option>
-                        ))}
-                      </select>
+                    <div className="ai-settings-popup-label">Provider</div>
+                    <div className="ai-settings-popup-row ai-local-backend-switch">
+                      {localBackendInstalls?.ollama && (
+                        <button
+                          type="button"
+                          className={`ai-chat-toggle ${settings.provider === 'ollama' ? 'active' : ''}`}
+                          onClick={() => updateSettings({ provider: 'ollama' })}
+                        >
+                          Ollama
+                        </button>
+                      )}
+                      {localBackendInstalls?.lm && (
+                        <button
+                          type="button"
+                          className={`ai-chat-toggle ${settings.provider === 'lmstudio' ? 'active' : ''}`}
+                          onClick={() => updateSettings({ provider: 'lmstudio' })}
+                        >
+                          LM Studio
+                        </button>
+                      )}
                       <button
-                        className="ai-chat-icon-button"
                         type="button"
-                        onClick={refreshModels}
-                        title="Refresh Models"
-                        disabled={isFetchingModels}
+                        className={`ai-chat-toggle ${settings.provider === 'custom' ? 'active' : ''}`}
+                        onClick={() => updateSettings({ provider: 'custom' })}
                       >
-                        {isFetchingModels ? <LuLoader2 className="ai-chat-spinner" /> : <FiRefreshCw size={13} />}
+                        Custom
                       </button>
                     </div>
+                    {settings.provider === 'custom' && (
+                      <span className="ai-settings-popup-hint">
+                        Enter any OpenAI-compatible endpoint (local or internet) and type your model name manually.
+                      </span>
+                    )}
+                  </div>
+                  <div className="ai-settings-popup-section">
+                    <div className="ai-settings-popup-label">Model</div>
+                    {settings.provider === 'custom' ? (
+                      <div className="ai-settings-popup-row">
+                        <input
+                          type="text"
+                          className="ai-settings-popup-input"
+                          value={settings.model}
+                          onChange={e => updateSettings({ model: e.target.value })}
+                          placeholder="e.g. gpt-4o, claude-3-5-sonnet-20241022"
+                        />
+                      </div>
+                    ) : (
+                      <div className="ai-settings-popup-row">
+                        <select
+                          className="ai-chat-model-select"
+                          value={settings.model}
+                          onChange={event => updateSettings({ model: event.target.value })}
+                          disabled={!models.length}
+                        >
+                          {models.length === 0 && <option value="">No models</option>}
+                          {models.map(model => (
+                            <option key={model} value={model}>{model}</option>
+                          ))}
+                        </select>
+                        <button
+                          className="ai-chat-icon-button"
+                          type="button"
+                          onClick={refreshModels}
+                          title="Refresh Models"
+                          disabled={isFetchingModels}
+                        >
+                          {isFetchingModels ? <LuLoader2 className="ai-chat-spinner" /> : <FiRefreshCw size={13} />}
+                        </button>
+                      </div>
+                    )}
                     <div className="ai-settings-popup-row">
                       <span className="ai-settings-popup-hint">
                         Tool Support: {' '}
@@ -2012,7 +2229,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                       className="ai-settings-popup-input"
                       value={settings.baseUrl}
                       onChange={e => updateSettings({ baseUrl: e.target.value })}
-                      placeholder="http://localhost:1234"
+                      placeholder={settings.provider === 'custom' ? 'https://api.openai.com' : 'http://localhost:1234'}
                     />
                   </div>
 
@@ -2085,10 +2302,35 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
           <div className="ai-edit-panel-header">
             <div>
               <h4>Patch Suggestions</h4>
-              <p>Review changes and apply or reject them.</p>
+              <p>Preview changes below, then apply or reject per file.</p>
             </div>
             <span className="ai-edit-count">{pendingEdits.length}</span>
           </div>
+          {selectedEdit && (
+            <div className="ai-edit-diff ai-edit-diff-preview-block">
+              <div className="ai-edit-diff-header">
+                <strong>Preview — {selectedEdit.displayPath}</strong>
+                <span className={`tag tag-${selectedEdit.action}`}>{selectedEdit.action}</span>
+              </div>
+              <div className="ai-patch-monaco-diff" role="region" aria-label="Inline diff preview">
+                <DiffEditor
+                  height={260}
+                  theme="vs-dark"
+                  language={languageForPatch(selectedEdit.displayPath)}
+                  original={selectedEdit.originalContent ?? ''}
+                  modified={selectedEdit.newContent ?? ''}
+                  options={{
+                    readOnly: true,
+                    renderSideBySide: true,
+                    minimap: { enabled: false },
+                    fontSize: 12,
+                    scrollBeyondLastLine: false,
+                    wordWrap: 'on'
+                  }}
+                />
+              </div>
+            </div>
+          )}
           <div className="ai-edit-files">
             {pendingEdits.map(edit => (
               <div key={edit.id} className={`ai-edit-file ${selectedEditId === edit.id ? 'active' : ''}`}>
@@ -2103,15 +2345,6 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
               </div>
             ))}
           </div>
-          {selectedEdit && (
-            <div className="ai-edit-diff">
-              <div className="ai-edit-diff-header">
-                <strong>{selectedEdit.displayPath}</strong>
-                <span className={`tag tag-${selectedEdit.action}`}>{selectedEdit.action}</span>
-              </div>
-              {renderDiff(selectedEdit)}
-            </div>
-          )}
         </div>
       )}
     </div>

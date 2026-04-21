@@ -1,9 +1,8 @@
 import { EventEmitter } from '../utils/EventEmitter';
 
-// Sichere ipcRenderer-Initialisierung - mit Prozess-Check
+// Safe ipcRenderer initialization with process check
 // ipcRenderer is used for inter-process communication between the main process and renderer process
 let ipcRenderer: any = null;
-// Prüfe, ob wir im Renderer-Prozess sind
 // Check if we're in the renderer process
 const isRenderer = typeof window !== 'undefined' && typeof process !== 'undefined' && process.type === 'renderer';
 try {
@@ -14,7 +13,6 @@ try {
   console.error('Failed to initialize ipcRenderer in TerminalManager', e);
 }
 
-// Hilfsfunktion für sichere IPC-Aufrufe
 // Helper function for safe IPC calls
 async function safeIpcInvoke(channel: string, ...args: any[]): Promise<any> {
   if (!ipcRenderer) {

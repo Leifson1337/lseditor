@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const filesToCopy = ['preload.js', 'logo.png'];
+const filesToCopy = ['preload.js', 'preload-first-setup.js', 'preload-backend-preference.js', 'logo.png'];
 const distDir = path.join(__dirname, 'dist');
 
 filesToCopy.forEach(file => {

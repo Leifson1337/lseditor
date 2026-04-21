@@ -104,7 +104,7 @@ export const ExtensionActions: React.FC<ExtensionActionsProps> = ({
                     <button
                         className="extension-action-btn overflow-trigger"
                         onClick={() => setShowMore(!showMore)}
-                        title="Weitere Aktionen..."
+                        title="More actions..."
                     >
                         <FaEllipsisV />
                     </button>
