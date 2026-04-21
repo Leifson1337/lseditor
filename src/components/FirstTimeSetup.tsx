@@ -173,12 +173,21 @@ export const FirstTimeSetup: React.FC = () => {
     if (!api) return;
     setIsRefreshingModels(true);
     try {
-      const response = await fetch(`${OLLAMA_DEFAULT_ORIGIN}/api/tags`);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = (await response.json()) as { models?: { name?: string }[] };
-      const names = (data.models ?? []).map(m => m.name).filter((n): n is string => Boolean(n));
-      setOllamaReachable(true);
-      setOllamaTagModels(names);
+      // Prefer the IPC bridge which uses dynamic port detection (findOllamaListeningPort)
+      // so that non-default Ollama ports are handled correctly.
+      if (api.getOllamaModels) {
+        const result = await api.getOllamaModels();
+        setOllamaReachable(result.reachable);
+        setOllamaTagModels(result.models);
+      } else {
+        // Fallback: direct fetch against the default origin
+        const response = await fetch(`${OLLAMA_DEFAULT_ORIGIN}/api/tags`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = (await response.json()) as { models?: { name?: string }[] };
+        const names = (data.models ?? []).map(m => m.name).filter((n): n is string => Boolean(n));
+        setOllamaReachable(true);
+        setOllamaTagModels(names);
+      }
     } catch {
       setOllamaReachable(false);
       setOllamaTagModels([]);

@@ -906,9 +906,11 @@ ipcMain.handle('ai:save-settings', async (event, payload: unknown) => {
       appStore.set('preferredLocalBackend', parsed.provider);
       appStore.set('backendChoice', parsed.provider);
     } else if (parsed.provider === 'custom') {
-      // Custom provider — disable local backend autostart so Ollama/LM Studio
-      // are not launched on the next app startup.
+      // Custom provider — clear all local-backend flags so Ollama/LM Studio
+      // are not auto-started on the next launch and stale URLs are not reused.
       appStore.set('backendChoice', 'none');
+      appStore.set('preferredLocalBackend', 'none');
+      appStore.delete('localOpenAIBaseURL');
     }
   } catch {
     // ignore malformed JSON

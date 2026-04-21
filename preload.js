@@ -19,7 +19,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   'get-code-completion', 'explain-code', 'refactor-code', 'editor:findInFiles',
   'exec', 'exec:kill', 'terminal:create', 'terminal:kill', 'terminal:resize', 'terminal:dispose',
   'dialog:showOpenDialog', 'dialog:openDirectory', 'dialog:inputBox',
-  'app:getVersion', 'app:openAbout', 'app:newWindow', 'app:openFile', 'app:openFolder', 'app:exit', 'app:getUserDataPath', 'app:getPath',
+  'app:getVersion', 'app:openAbout', 'app:newWindow', 'app:openFile', 'app:openFolder', 'app:exit', 'app:getUserDataPath', 'app:getPath', 'app:consume-open-ai-settings-flag',
   'shell:openPath', 'edit:undo', 'edit:redo', 'edit:cut', 'edit:copy', 'edit:paste', 'edit:find', 'edit:replace',
   'view:toggleFullScreen', 'view:reload', 'terminal:new', 'terminal:runActiveFile', 'file:newTextFile',
   'fs:readFileBase64'
