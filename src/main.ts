@@ -18,6 +18,7 @@ import AdmZip from 'adm-zip';
 import { spawn as spawnProcess, ChildProcessWithoutNullStreams } from 'child_process';
 import { randomUUID } from 'crypto';
 import * as https from 'https';
+import * as http from 'http';
 
 // Main window and service instances
 let mainWindow: BrowserWindow | null = null;
@@ -1469,6 +1470,278 @@ ipcMain.handle('getDirectoryEntries', async (event, dirPath) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Ollama local-model management (download & run models directly in-app).
+// Talks to the local Ollama daemon (default http://127.0.0.1:11434) over HTTP so
+// no CORS handling is needed in the renderer. Pull progress is streamed back to
+// the renderer via the 'ollama:pullProgress' event channel.
+// ─────────────────────────────────────────────────────────────────────────────
+const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
+const activeOllamaPulls = new Map<string, http.ClientRequest>();
+// Once we learn the default registry (registry.ollama.ai) is blocked on this
+// machine, route bare pulls straight to ollama.com to avoid a ~15s dead attempt.
+let ollamaDefaultRegistryBlocked = false;
+
+const ollamaRequest = (
+  method: string,
+  apiPath: string,
+  body?: unknown,
+  timeoutMs = 8000
+): Promise<{ status: number; data: string }> => {
+  return new Promise((resolve, reject) => {
+    let target: URL;
+    try {
+      target = new URL(apiPath, OLLAMA_HOST);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    const payload = body !== undefined ? Buffer.from(JSON.stringify(body)) : undefined;
+    const req = http.request(
+      {
+        hostname: target.hostname,
+        port: target.port || 11434,
+        path: target.pathname + target.search,
+        method,
+        headers: payload
+          ? { 'Content-Type': 'application/json', 'Content-Length': payload.length }
+          : undefined
+      },
+      res => {
+        const chunks: Buffer[] = [];
+        res.on('data', chunk => chunks.push(chunk));
+        res.on('end', () =>
+          resolve({ status: res.statusCode || 0, data: Buffer.concat(chunks).toString('utf-8') })
+        );
+      }
+    );
+    req.on('error', reject);
+    req.setTimeout(timeoutMs, () => req.destroy(new Error('Ollama request timed out')));
+    if (payload) req.write(payload);
+    req.end();
+  });
+};
+
+// Is the Ollama daemon reachable?
+ipcMain.handle('ollama:status', async event => {
+  assertTrustedSender(event);
+  try {
+    const res = await ollamaRequest('GET', '/api/version', undefined, 2500);
+    if (res.status === 200) {
+      let version = '';
+      try { version = JSON.parse(res.data).version || ''; } catch {}
+      return { running: true, version, host: OLLAMA_HOST };
+    }
+    return { running: false, host: OLLAMA_HOST };
+  } catch {
+    return { running: false, host: OLLAMA_HOST };
+  }
+});
+
+// List locally installed models.
+ipcMain.handle('ollama:list', async event => {
+  assertTrustedSender(event);
+  try {
+    const res = await ollamaRequest('GET', '/api/tags', undefined, 5000);
+    if (res.status !== 200) return { models: [] };
+    const parsed = JSON.parse(res.data || '{}');
+    const models = Array.isArray(parsed.models)
+      ? parsed.models.map((m: any) => ({
+          name: m.name,
+          size: m.size,
+          parameterSize: m.details?.parameter_size,
+          quantization: m.details?.quantization_level,
+          family: m.details?.family,
+          modified: m.modified_at
+        }))
+      : [];
+    return { models };
+  } catch (error) {
+    return { models: [], error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+// Delete an installed model.
+ipcMain.handle('ollama:remove', async (event, modelName: unknown) => {
+  assertTrustedSender(event);
+  const name = typeof modelName === 'string' ? modelName.trim() : '';
+  if (!name) return { ok: false, error: 'Missing model name' };
+  try {
+    const res = await ollamaRequest('DELETE', '/api/delete', { name }, 10000);
+    return { ok: res.status === 200, status: res.status };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+// Cancel an in-flight pull.
+ipcMain.handle('ollama:cancelPull', async (event, modelName: unknown) => {
+  assertTrustedSender(event);
+  const name = typeof modelName === 'string' ? modelName.trim() : '';
+  const req = activeOllamaPulls.get(name);
+  if (req) {
+    req.destroy(new Error('cancelled'));
+    activeOllamaPulls.delete(name);
+    return { ok: true };
+  }
+  return { ok: false };
+});
+
+// A registry/network failure looks like a manifest or connection problem rather
+// than e.g. an unknown-model error. When the default registry (registry.ollama.ai)
+// is blocked we transparently retry via the canonical ollama.com registry.
+const isOllamaNetworkError = (msg?: string | null) =>
+  !!msg && /manifest|connection|timed out|wsarecv|dial|refused|lookup|reset|EOF|registry|i\/o timeout|no route/i.test(msg);
+
+interface PullResult { ok: boolean; error?: string; networkError?: boolean }
+
+// Runs one /api/pull stream. Progress is emitted under `displayName` so the UI
+// keeps tracking the card by the name the user clicked, even on a fallback pull.
+const streamOllamaPull = (
+  pullName: string,
+  displayName: string,
+  sender: Electron.WebContents
+): Promise<PullResult> => {
+  return new Promise(resolve => {
+    let target: URL;
+    try {
+      target = new URL('/api/pull', OLLAMA_HOST);
+    } catch (error) {
+      resolve({ ok: false, error: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+    const payload = Buffer.from(JSON.stringify({ name: pullName, stream: true }));
+    const emit = (data: Record<string, unknown>) => {
+      if (!sender.isDestroyed()) sender.send('ollama:pullProgress', { model: displayName, ...data });
+    };
+    const req = http.request(
+      {
+        hostname: target.hostname,
+        port: target.port || 11434,
+        path: target.pathname,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': payload.length }
+      },
+      res => {
+        let buffer = '';
+        let sawError: string | null = null;
+        res.on('data', chunk => {
+          buffer += chunk.toString('utf-8');
+          let newlineIndex;
+          while ((newlineIndex = buffer.indexOf('\n')) >= 0) {
+            const line = buffer.slice(0, newlineIndex).trim();
+            buffer = buffer.slice(newlineIndex + 1);
+            if (!line) continue;
+            try {
+              const obj = JSON.parse(line);
+              // Ollama streams a single {"error": "..."} line on failure then closes.
+              if (obj && typeof obj.error === 'string') {
+                sawError = obj.error;
+                if (!isOllamaNetworkError(obj.error)) {
+                  emit({ status: 'error', error: obj.error, done: true });
+                }
+              } else {
+                emit(obj);
+              }
+            } catch {
+              /* ignore malformed line */
+            }
+          }
+        });
+        res.on('end', () => {
+          activeOllamaPulls.delete(displayName);
+          if (sawError) {
+            resolve({ ok: false, error: sawError, networkError: isOllamaNetworkError(sawError) });
+          } else {
+            emit({ status: 'success', done: true });
+            resolve({ ok: res.statusCode === 200 });
+          }
+        });
+      }
+    );
+    req.on('error', error => {
+      activeOllamaPulls.delete(displayName);
+      resolve({ ok: false, error: error.message, networkError: isOllamaNetworkError(error.message) });
+    });
+    activeOllamaPulls.set(displayName, req);
+    req.write(payload);
+    req.end();
+  });
+};
+
+// Copies a registry-prefixed model to a clean short name (e.g.
+// ollama.com/library/qwen2.5-coder:1.5b → qwen2.5-coder:1.5b) and removes the
+// prefixed copy. Ollama's OpenAI-compatible /v1 endpoint only serves clean names.
+const normalizeOllamaModelName = async (
+  source: string,
+  destination: string,
+  sender: Electron.WebContents
+): Promise<void> => {
+  try {
+    const copyRes = await ollamaRequest('POST', '/api/copy', { source, destination }, 30000);
+    if (copyRes.status === 200) {
+      await ollamaRequest('DELETE', '/api/delete', { name: source }, 15000);
+      // Nudge the renderer to reload the installed list with the clean name.
+      if (!sender.isDestroyed()) {
+        sender.send('ollama:pullProgress', { model: destination, status: 'success', done: true });
+      }
+    }
+  } catch {
+    /* best effort — if copy/delete fails the prefixed model still exists */
+  }
+};
+
+// Pull (download) a model, streaming NDJSON progress back to the renderer.
+// Falls back to the ollama.com registry if the default registry is unreachable.
+ipcMain.handle('ollama:pull', async (event, modelName: unknown) => {
+  assertTrustedSender(event);
+  const name = typeof modelName === 'string' ? modelName.trim() : '';
+  if (!name) return { ok: false, error: 'Missing model name' };
+  const sender = event.sender;
+  const emitErr = (error: string) => {
+    if (!sender.isDestroyed()) sender.send('ollama:pullProgress', { model: name, status: 'error', error, done: true });
+  };
+
+  // Does the name already carry an explicit registry host? (contains a "/" in the
+  // first segment with a dot, e.g. ollama.com/library/foo). If not, it's a bare
+  // library name that we can re-route to the ollama.com registry on failure.
+  const hasExplicitHost = /^[^/]+\.[^/]+\//.test(name);
+  const fallbackName = `ollama.com/library/${name.replace(/^library\//, '')}`;
+  const canFallback = !hasExplicitHost;
+
+  // If we already know the default registry is blocked, skip straight to ollama.com.
+  if (canFallback && ollamaDefaultRegistryBlocked) {
+    const direct = await streamOllamaPull(fallbackName, name, sender);
+    if (!direct.ok && direct.error) emitErr(direct.error);
+    return direct;
+  }
+
+  const first = await streamOllamaPull(name, name, sender);
+  if (first.ok) return first;
+
+  // Only retry when the failure looks like a blocked/unreachable registry and we
+  // can safely re-route a bare library name through ollama.com.
+  if (first.networkError && canFallback) {
+    ollamaDefaultRegistryBlocked = true;
+    if (!sender.isDestroyed()) {
+      sender.send('ollama:pullProgress', { model: name, status: 'default registry blocked — retrying via ollama.com…' });
+    }
+    const second = await streamOllamaPull(fallbackName, name, sender);
+    if (second.ok) {
+      // The model installs under the prefixed name (ollama.com/library/...),
+      // which Ollama's OpenAI /v1 endpoint cannot serve. Copy it to the clean
+      // short name and drop the prefixed copy so chat + catalog matching work.
+      await normalizeOllamaModelName(fallbackName, name, sender);
+    } else if (second.error) {
+      emitErr(second.error);
+    }
+    return second;
+  }
+
+  if (first.error) emitErr(first.error);
+  return first;
+});
+
 ipcMain.handle('window:isMaximized', (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   return win ? win.isMaximized() : false;
@@ -1557,6 +1830,24 @@ ipcMain.handle('shell:openPath', async (_event, targetPath: unknown) => {
     return true;
   } catch (error) {
     console.error('Failed to open path in shell:', error);
+    return false;
+  }
+});
+
+// Open an http/https URL in the user's default browser (safe external links only).
+ipcMain.handle('shell:openExternal', async (_event, url: unknown) => {
+  assertTrustedSender(_event);
+  if (typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  if (!/^https?:\/\//i.test(trimmed)) {
+    console.warn('Blocked non-http(s) external open:', trimmed);
+    return false;
+  }
+  try {
+    await shell.openExternal(trimmed);
+    return true;
+  } catch (error) {
+    console.error('Failed to open external URL:', error);
     return false;
   }
 });

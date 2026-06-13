@@ -2,8 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { FolderIcon, FileIcon, ChevronRightIcon, ChevronDownIcon } from './Icons';
 import { SiJavascript, SiTypescript, SiCss3, SiHtml5, SiPython, SiJson, SiMarkdown } from 'react-icons/si';
 import '../styles/FileExplorer.css';
-import path from 'path';
-import { isAbsoluteFilePath } from '../utils/pathUtils';
+import { isAbsoluteFilePath, getBaseName, getDirName, joinPaths, toNativeSeparators } from '../utils/pathUtils';
 
 // FileNode describes a node in the file tree (either a file or directory)
 interface FileNode {
@@ -86,13 +85,13 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     if (!filePath) {
       return projectPath || '';
     }
-    if (path.isAbsolute(filePath)) {
-      return filePath;
+    if (isAbsoluteFilePath(filePath)) {
+      return toNativeSeparators(filePath);
     }
     if (projectPath) {
-      return path.join(projectPath, filePath);
+      return joinPaths(projectPath, filePath);
     }
-    return path.resolve(filePath);
+    return toNativeSeparators(filePath);
   }, [projectPath]);
 
   const resetRenameState = () => {
@@ -141,7 +140,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     if (contextMenu) {
       setNewFileDraft(null);
       setRenamingFile(contextMenu.file);
-      setRenameValue(path.basename(contextMenu.file) || '');
+      setRenameValue(getBaseName(contextMenu.file) || '');
       setContextMenu(null);
     }
   };
@@ -195,7 +194,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
       return;
     }
     const fileName = renameValue.trim() || 'untitled.txt';
-    const targetPath = path.join(newFileDraft.parentPath, fileName);
+    const targetPath = joinPaths(newFileDraft.parentPath, fileName);
     try {
       await window.electron?.ipcRenderer?.invoke('fs:writeFile', targetPath, '');
       dispatchExplorerRefresh();
@@ -232,14 +231,14 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
       return;
     }
 
-    const currentName = path.basename(absoluteOriginal);
+    const currentName = getBaseName(absoluteOriginal);
     if (trimmed === currentName) {
       resetRenameState();
       return;
     }
 
-    const dir = path.dirname(absoluteOriginal);
-    const newPath = path.join(dir, trimmed);
+    const dir = getDirName(absoluteOriginal);
+    const newPath = joinPaths(dir, trimmed);
 
     const success = await renameFile(absoluteOriginal, newPath);
     resetRenameState();
@@ -320,7 +319,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     if (!projectPath) return;
     const name = await promptForName('Enter new folder name', 'New Folder');
     if (!name) return;
-    const targetPath = isAbsoluteFilePath(name) ? path.normalize(name) : path.join(projectPath, name);
+    const targetPath = isAbsoluteFilePath(name) ? toNativeSeparators(name) : joinPaths(projectPath, name);
     try {
       await window.electron?.ipcRenderer?.invoke('fs:createDirectory', targetPath);
       dispatchExplorerRefresh();

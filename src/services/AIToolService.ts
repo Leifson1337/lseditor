@@ -801,16 +801,36 @@ export async function executeToolCall(
           result = workspaceError;
           break;
         }
-        const content = await renderer.invoke('fs:readFile', resolvedPath);
-        if (typeof content !== 'string') {
-          result = `Error: File not found: ${resolvedPath}`;
-          break;
-        }
+        const rawContent = await renderer.invoke('fs:readFile', resolvedPath);
+        const fileExists = typeof rawContent === 'string';
+        const content = fileExists ? rawContent : '';
 
         const search = String(args.search ?? '');
         const replace = String(args.replace ?? '');
+
+        // Robustness for weaker models: replaceInFile with an empty search is a
+        // common way they (mis)use the tool to *create* a file. Treat an empty
+        // search against a missing or empty file as a create/write instead of
+        // erroring, so the user's intent still succeeds.
         if (!search) {
-          result = 'Error: replaceInFile requires a non-empty search string';
+          if (!fileExists || content.trim() === '') {
+            const created = await renderer.invoke('fs:writeFile', resolvedPath, replace);
+            if (!created) {
+              result = `Error: Failed to create ${resolvedPath}`;
+              break;
+            }
+            notifyFileChanged(resolvedPath);
+            window.dispatchEvent(new Event('explorer:refresh'));
+            const prefix0 = guessed ? `[Resolved from ${args.path} to ${resolvedPath}] ` : '';
+            result = `${prefix0}Created ${resolvedPath} (${replace.split('\n').length} lines)`;
+            break;
+          }
+          result = 'Error: replaceInFile requires a non-empty search string when the file already has content. Use writeFile to overwrite, or provide the exact text to replace.';
+          break;
+        }
+
+        if (!fileExists) {
+          result = `Error: File not found: ${resolvedPath}. Use writeFile to create new files.`;
           break;
         }
         if (search === replace) {

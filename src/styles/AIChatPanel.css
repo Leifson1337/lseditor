@@ -2357,3 +2357,79 @@
   max-height: 50px;
   overflow-y: auto;
 }
+
+/* ── Enhanced chat animations (Atomic Chat-style polish) ─────────────────── */
+
+/* Directional entrance: user bubbles drift in from the right, AI from the left. */
+.ai-chat-message.user { animation: msg-in-right 0.32s cubic-bezier(0.16, 1, 0.3, 1); }
+.ai-chat-message.ai { animation: msg-in-left 0.32s cubic-bezier(0.16, 1, 0.3, 1); }
+
+@keyframes msg-in-right {
+  from { opacity: 0; transform: translateY(8px) translateX(14px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) translateX(0) scale(1); }
+}
+@keyframes msg-in-left {
+  from { opacity: 0; transform: translateY(8px) translateX(-14px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) translateX(0) scale(1); }
+}
+
+/* Bubble settles with a soft shadow and lifts slightly on hover. */
+.ai-chat-message-bubble {
+  transition: box-shadow 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+}
+.ai-chat-message.ai .ai-chat-message-bubble:hover,
+.ai-chat-message.user .ai-chat-message-bubble:hover {
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+  transform: translateY(-1px);
+}
+
+/* Streaming caret on the most recent assistant message while generating. */
+.ai-chat-message.ai:last-of-type .ai-chat-message-content > p:last-child::after {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: linear-gradient(180deg, #8b5cf6, #6366f1);
+  border-radius: 1px;
+  opacity: 0;
+}
+.ai-chat-messages.is-streaming .ai-chat-message.ai:last-of-type .ai-chat-message-content > p:last-child::after {
+  opacity: 1;
+  animation: stream-caret 1s steps(2) infinite;
+}
+@keyframes stream-caret {
+  0%, 100% { opacity: 0; }
+  50% { opacity: 1; }
+}
+
+/* Smoother, gradient thinking dots. */
+.ai-thinking-dots span {
+  background: linear-gradient(135deg, #8b5cf6, #6366f1) !important;
+  box-shadow: 0 0 6px rgba(139, 92, 246, 0.5);
+}
+
+/* Thinking row gets a subtle shimmer. */
+.ai-chat-thinking {
+  position: relative;
+  overflow: hidden;
+}
+.ai-chat-thinking::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 30%, rgba(139, 92, 246, 0.06) 50%, transparent 70%);
+  transform: translateX(-100%);
+  animation: thinking-shimmer 1.8s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes thinking-shimmer {
+  to { transform: translateX(100%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-chat-message.user,
+  .ai-chat-message.ai { animation: none; }
+  .ai-chat-thinking::after { animation: none; }
+}

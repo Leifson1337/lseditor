@@ -10,9 +10,8 @@ import { ThemeProvider } from '../contexts/ThemeContext';
 import { AIProvider } from '../contexts/AIContext';
 import { TerminalSettingsDialog } from './TerminalSettingsDialog';
 import Titlebar from './Titlebar';
-import path from 'path';
 import { notifyWorkspaceChanged, persistWorkspacePath } from '../services/VSCodeWorkbenchBridge';
-import { isAbsoluteFilePath } from '../utils/pathUtils';
+import { isAbsoluteFilePath, joinPaths, toNativeSeparators } from '../utils/pathUtils';
 
 // Extend StoreSchema to include all required properties for the editor and terminal
 declare module '../store/store' {
@@ -182,7 +181,7 @@ const App: React.FC = () => {
     }
     const name = await promptForName('New file name', 'untitled.txt');
     if (!name) return;
-    const target = isAbsoluteFilePath(name) ? path.normalize(name) : path.join(projectPath, name);
+    const target = isAbsoluteFilePath(name) ? toNativeSeparators(name) : joinPaths(projectPath, name);
     try {
       await window.electron?.ipcRenderer?.invoke('fs:writeFile', target, '');
       window.dispatchEvent(new Event('explorer:refresh'));
@@ -199,7 +198,7 @@ const App: React.FC = () => {
     }
     const name = await promptForName('New folder name', 'New Folder');
     if (!name) return;
-    const target = isAbsoluteFilePath(name) ? path.normalize(name) : path.join(projectPath, name);
+    const target = isAbsoluteFilePath(name) ? toNativeSeparators(name) : joinPaths(projectPath, name);
     try {
       await window.electron?.ipcRenderer?.invoke('fs:createDirectory', target);
       window.dispatchEvent(new Event('explorer:refresh'));

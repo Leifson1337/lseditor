@@ -458,40 +458,85 @@ const getToolsForMode = (settings: AISettings) => {
   return AI_TOOLS;
 };
 
+// One-line usage reference per real tool, generated so it always matches the
+// actual schema names the executor accepts.
+const TOOL_USAGE: Record<string, string> = {
+  findFile: 'findFile(query) — locate a file when you do not know its exact path.',
+  readFile: 'readFile(path) — read a file before editing it.',
+  writeFile: 'writeFile(path, content) — create a NEW file or overwrite one. content MUST contain the full file text.',
+  appendToFile: 'appendToFile(path, content) — append text to the end of an existing file.',
+  replaceInFile: 'replaceInFile(path, search, replace) — replace exact existing text. search must match the current file content.',
+  listFiles: 'listFiles(path) — list the contents of a directory.',
+  searchFiles: 'searchFiles(pattern) — find files by glob pattern.',
+  searchWorkspace: 'searchWorkspace(query) — search file names and contents across the project.',
+  runCommand: 'runCommand(command) — run a shell/terminal command in the project.',
+  createDirectory: 'createDirectory(path) — create a directory.',
+  deleteFile: 'deleteFile(path) — delete a file.',
+  renameFile: 'renameFile(oldPath, newPath) — rename or move a file.',
+  getDiagnostics: 'getDiagnostics() — get current compiler/linter errors and warnings.',
+  spawnSubAgent: 'spawnSubAgent(task) — delegate an isolated sub-task to a helper agent.'
+};
+
+const buildToolReference = (settings: AISettings) => {
+  const tools = getToolsForMode(settings);
+  const lines = tools
+    .map(tool => TOOL_USAGE[tool.function.name])
+    .filter(Boolean)
+    .map(line => `- ${line}`);
+  return `Available tools (use ONLY these exact names — do not invent others):\n${lines.join('\n')}`;
+};
+
+const TOOL_PROTOCOL = [
+  'TOOL PROTOCOL (critical):',
+  '- To perform any action you MUST issue a real tool call. NEVER print a tool call as text, JSON, or inside a ```code block — the user cannot see it and it will NOT run.',
+  '- Use ONLY the exact tool names listed below. Do not invent names like "createFile" — to create a file use writeFile.',
+  '- To create a new file, call writeFile with BOTH "path" and the COMPLETE "content". Never call a tool with only a path and no content.',
+  '- Provide every required argument. Use absolute paths or paths relative to the workspace root.',
+  '- Take one concrete step at a time, wait for the tool result, then decide the next step.',
+  '- Never claim a file was created/changed or a command succeeded unless a tool call actually returned success.'
+].join('\n');
+
 const createRuntimeModePrompt = (settings: AISettings) => {
   const toolGuidance = [
-    'Tool workflow: readFile (in chunks) -> edit with replaceInFile -> getDiagnostics -> fix errors -> repeat until clean.',
-    'Use searchWorkspace to find files by name or content. Use findFile when exact path is unknown.',
-    'For new larger files: create a small scaffold with writeFile, then extend with appendToFile in chunks.',
-    'After code changes, ALWAYS call getDiagnostics. If errors found, read affected lines and fix with replaceInFile.',
-    'For substantial tasks, use a markdown checklist (- [ ] / - [x]) and update it as you progress.',
+    'Workflow: readFile (in chunks) -> edit with replaceInFile -> getDiagnostics -> fix errors -> repeat until clean.',
+    'Use searchWorkspace to find files by name or content. Use findFile when the exact path is unknown.',
+    'For new files: call writeFile with the full content. For large files, scaffold with writeFile then extend with appendToFile in chunks.',
+    'After code changes, ALWAYS call getDiagnostics. If errors are found, read the affected lines and fix them with replaceInFile.',
+    'For substantial tasks, keep a markdown checklist (- [ ] / - [x]) and update it as you progress.',
     'End completed tasks with: ## Ergebnis, ## Vorgehen, ## Validierung.'
   ].join('\n');
+
+  const toolReference = buildToolReference(settings);
 
   if (settings.mode === 'qa') {
     return [
       'Mode: QA. Read-only tools only. Do not modify files or run mutating commands.',
-      'Answer questions, explain code, propose changes. For implementation, tell user to switch to Coder mode.',
+      'Answer questions, explain code, propose changes. For implementation, tell the user to switch to Coder mode.',
+      TOOL_PROTOCOL,
+      toolReference,
       toolGuidance
-    ].join('\n');
+    ].join('\n\n');
   }
 
   if (settings.mode === 'autonomous') {
     return [
       'Mode: Autonomous. Work like a senior engineer: plan, implement, validate, iterate.',
       'Create a checklist plan first. Execute step by step. After each step, validate with getDiagnostics and runCommand.',
-      'Keep improving until the checklist is done and getDiagnostics reports no errors.',
-      'Only stop when work is verified complete.',
+      'Keep improving until the checklist is done and getDiagnostics reports no errors. Only stop when work is verified complete.',
+      TOOL_PROTOCOL,
+      toolReference,
       toolGuidance
-    ].join('\n');
+    ].join('\n\n');
   }
 
   return [
     'Mode: Coder. Read, write, create files and run commands to complete coding tasks.',
-    'Prefer tool calls over prose. Create a short checklist, execute it, stop when done.',
-    'Do not keep iterating beyond the plan unless user asks for more.',
+    'Prefer tool calls over prose. Create a short checklist, execute it with tool calls, and stop when done.',
+    'Do not keep iterating beyond the plan unless the user asks for more.',
+    TOOL_PROTOCOL,
+    toolReference,
     toolGuidance
-  ].join('\n');
+  ].join('\n\n');
 };
 
 const summarizeToolCall = (toolCall: ToolCall): string => {
@@ -696,47 +741,180 @@ const userRequestLikelyNeedsTools = (content: string, mode: AISettings['mode']) 
   return actionPattern.test(content);
 };
 
+const KNOWN_TOOL_NAMES = new Set(AI_TOOLS.map(tool => tool.function.name));
+
+// Maps the tool names models commonly hallucinate / use from other agent
+// frameworks onto this app's real tool names. Lets weaker models succeed even
+// when they don't use the exact schema name (OpenCode-style robustness).
+const TOOL_ALIASES: Record<string, string> = {
+  createfile: 'writeFile', create_file: 'writeFile', create: 'writeFile',
+  newfile: 'writeFile', new_file: 'writeFile', touch: 'writeFile',
+  write: 'writeFile', write_file: 'writeFile', save: 'writeFile', savefile: 'writeFile',
+  putfile: 'writeFile', create_or_update_file: 'writeFile',
+  editfile: 'replaceInFile', edit_file: 'replaceInFile', edit: 'replaceInFile',
+  modify: 'replaceInFile', modifyfile: 'replaceInFile', updatefile: 'replaceInFile',
+  update_file: 'replaceInFile', replace: 'replaceInFile', replace_in_file: 'replaceInFile',
+  str_replace: 'replaceInFile', str_replace_editor: 'replaceInFile', apply_patch: 'replaceInFile',
+  patch: 'replaceInFile', applydiff: 'replaceInFile', apply_diff: 'replaceInFile',
+  append: 'appendToFile', append_file: 'appendToFile', appendfile: 'appendToFile', append_to_file: 'appendToFile',
+  read: 'readFile', read_file: 'readFile', readfile: 'readFile', cat: 'readFile',
+  openfile: 'readFile', open_file: 'readFile', viewfile: 'readFile', view: 'readFile', getfile: 'readFile',
+  bash: 'runCommand', shell: 'runCommand', sh: 'runCommand', cmd: 'runCommand',
+  execute: 'runCommand', exec: 'runCommand', run: 'runCommand', run_command: 'runCommand',
+  runterminalcommand: 'runCommand', terminal: 'runCommand', execute_command: 'runCommand',
+  ls: 'listFiles', list: 'listFiles', list_files: 'listFiles', listdir: 'listFiles',
+  list_directory: 'listFiles', listdirectory: 'listFiles', dir: 'listFiles',
+  grep: 'searchFiles', search: 'searchWorkspace', search_files: 'searchFiles',
+  searchcode: 'searchWorkspace', search_workspace: 'searchWorkspace', codebase_search: 'searchWorkspace',
+  mkdir: 'createDirectory', makedirectory: 'createDirectory', make_directory: 'createDirectory',
+  create_directory: 'createDirectory', createdir: 'createDirectory',
+  rm: 'deleteFile', remove: 'deleteFile', delete: 'deleteFile', delete_file: 'deleteFile', removefile: 'deleteFile',
+  mv: 'renameFile', move: 'renameFile', rename: 'renameFile', rename_file: 'renameFile', movefile: 'renameFile',
+  find: 'findFile', findfile: 'findFile', glob: 'findFile', locate: 'findFile',
+  diagnostics: 'getDiagnostics', get_diagnostics: 'getDiagnostics', lint: 'getDiagnostics', checkerrors: 'getDiagnostics'
+};
+
+// Resolves a possibly-aliased / mis-cased tool name to the real schema name.
+const canonicalizeToolName = (name: string): string => {
+  if (!name) return name;
+  const stripped = name.includes('.') ? name.split('.').pop()! : name;
+  if (KNOWN_TOOL_NAMES.has(stripped)) return stripped;
+  const key = stripped.toLowerCase().replace(/[\s-]+/g, '_');
+  if (TOOL_ALIASES[key]) return TOOL_ALIASES[key];
+  const compact = key.replace(/_/g, '');
+  return TOOL_ALIASES[compact] || stripped;
+};
+
+// Pull balanced {...} / [...] JSON substrings out of free text. Correctly skips
+// over braces inside quoted strings and handles arbitrary nesting. Used to
+// recover tool calls that models emit as plain text/JSON (in ```json fences,
+// <tool_call> tags, or bare) instead of via the native tool_calls field.
+const extractJsonCandidates = (text: string): string[] => {
+  const results: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let opener = '';
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === '{' || ch === '[') {
+      if (depth === 0) { start = i; opener = ch; }
+      depth += 1;
+    } else if (ch === '}' || ch === ']') {
+      if (depth > 0) {
+        depth -= 1;
+        if (depth === 0 && start >= 0) {
+          results.push(text.slice(start, i + 1));
+          start = -1;
+          void opener;
+        }
+      }
+    }
+  }
+  return results;
+};
+
+// Normalize one parsed object into { name, args } if it looks like a call to a
+// known tool. Accepts OpenAI, ReAct and several common community formats:
+//   {name, arguments}  {tool, parameters}  {function:{name, arguments}}
+//   {tool_call:{...}}  {action, action_input}  {recipient_name, ...}
+const normalizePseudoToolObject = (input: any): { name: string; args: string } | null => {
+  let obj = input;
+  if (!obj || typeof obj !== 'object') return null;
+  if (obj.tool_call && typeof obj.tool_call === 'object') obj = obj.tool_call;
+  if (obj.function_call && typeof obj.function_call === 'object') obj = obj.function_call;
+
+  let name: unknown;
+  let rawArgs: unknown;
+  if (obj.function && typeof obj.function === 'object') {
+    name = obj.function.name;
+    rawArgs = obj.function.arguments ?? obj.function.parameters ?? obj.function.input;
+  } else {
+    name = obj.name ?? obj.tool ?? obj.tool_name ?? obj.action ?? obj.recipient_name;
+    rawArgs = obj.arguments ?? obj.parameters ?? obj.args ?? obj.input ?? obj.action_input ?? obj.tool_input;
+  }
+  if (typeof name !== 'string' || !name) return null;
+  // Resolve namespace prefixes and common aliases (e.g. "createFile" → writeFile).
+  const cleanName = canonicalizeToolName(name);
+  if (!KNOWN_TOOL_NAMES.has(cleanName)) return null;
+
+  let args: string;
+  if (typeof rawArgs === 'string') args = rawArgs;
+  else if (rawArgs == null) args = '{}';
+  else args = JSON.stringify(rawArgs);
+  return { name: cleanName, args };
+};
+
 const extractPseudoToolCalls = (content: string): ToolCall[] => {
   if (!content) return [];
   const calls: ToolCall[] = [];
+  const seen = new Set<string>();
   const pushCall = (name: string, args: string) => {
     if (!name) return;
-    calls.push({
-      id: createId(),
-      type: 'function',
-      function: {
-        name,
-        arguments: args || '{}'
-      }
-    });
+    const key = `${name}:${args}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    calls.push({ id: createId(), type: 'function', function: { name, arguments: args || '{}' } });
   };
 
-  const fnPattern = /(?:functions?\.)?([A-Za-z_]\w*)\s*\((\{[\s\S]*?\})\)/g;
+  // 1) functionName({...}) call syntax, e.g. writeFile({"path": "a.txt"}).
+  const fnPattern = /(?:functions?\.)?([A-Za-z_]\w*)\s*\(\s*(\{[\s\S]*?\})\s*\)/g;
   let fnMatch: RegExpExecArray | null;
   while ((fnMatch = fnPattern.exec(content)) !== null) {
-    const toolName = fnMatch[1];
-    if (AI_TOOLS.some(tool => tool.function.name === toolName)) {
-      pushCall(toolName, fnMatch[2]);
-    }
+    if (KNOWN_TOOL_NAMES.has(fnMatch[1])) pushCall(fnMatch[1], fnMatch[2]);
   }
 
-  const tagPattern = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
-  let tagMatch: RegExpExecArray | null;
-  while ((tagMatch = tagPattern.exec(content)) !== null) {
-    try {
-      const parsed = JSON.parse(tagMatch[1]);
-      const toolName = parsed?.name || parsed?.tool || parsed?.function?.name;
-      const args =
-        typeof parsed?.arguments === 'string'
-          ? parsed.arguments
-          : JSON.stringify(parsed?.arguments || parsed?.parameters || {});
-      if (toolName) pushCall(toolName, args);
-    } catch {
-      // ignore malformed pseudo tool calls
+  // 2) Any balanced JSON object/array in the text. This single pass covers
+  //    ```json fences, <tool_call> tags, bare JSON and arrays of calls. Gated on
+  //    a known tool name so ordinary code/JSON the model writes is ignored.
+  for (const jsonStr of extractJsonCandidates(content)) {
+    let parsed: any;
+    try { parsed = JSON.parse(jsonStr); } catch { continue; }
+    const candidates = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.tool_calls)
+        ? parsed.tool_calls
+        : [parsed];
+    for (const candidate of candidates) {
+      const normalized = normalizePseudoToolObject(candidate);
+      if (normalized) pushCall(normalized.name, normalized.args);
     }
   }
 
   return calls;
+};
+
+// Removes tool-call JSON/fences/tags from assistant text so the user sees prose,
+// not the raw call, once we've extracted and executed it.
+const stripToolCallArtifacts = (content: string): string => {
+  if (!content) return content;
+  let out = content.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '');
+  // Drop fenced blocks whose body parses to a known tool call.
+  out = out.replace(/```[a-zA-Z_]*\s*([\s\S]*?)\s*```/g, (match, inner) => {
+    try {
+      const parsed = JSON.parse(String(inner).trim());
+      const arr = Array.isArray(parsed) ? parsed : [parsed];
+      if (arr.some(p => normalizePseudoToolObject(p))) return '';
+    } catch { /* keep non-JSON code blocks */ }
+    return match;
+  });
+  // Drop any remaining bare JSON objects that are tool calls.
+  for (const jsonStr of extractJsonCandidates(out)) {
+    try {
+      const parsed = JSON.parse(jsonStr);
+      const arr = Array.isArray(parsed) ? parsed : [parsed];
+      if (arr.some(p => normalizePseudoToolObject(p))) out = out.replace(jsonStr, '');
+    } catch { /* ignore */ }
+  }
+  return out.replace(/\n{3,}/g, '\n\n').trim();
 };
 
 const safeJsonParse = (value: string) => {
@@ -1427,29 +1605,33 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       const rawToolCalls = choice?.message?.tool_calls;
 
       let toolCalls: ToolCall[] | undefined;
+      let displayContent = aiContent;
       if (Array.isArray(rawToolCalls) && rawToolCalls.length > 0) {
         toolCalls = rawToolCalls.map((tc: any) => ({
           id: tc.id || createId(),
           type: 'function' as const,
           function: {
-            name: tc.function?.name || '',
+            name: canonicalizeToolName(tc.function?.name || ''),
             arguments: tc.function?.arguments || '{}'
           }
         }));
       } else if (useTools) {
+        // Recover tool calls models emit as text/JSON instead of via the native
+        // tool_calls field, then strip that JSON from the displayed prose.
         const pseudoToolCalls = extractPseudoToolCalls(rawContent);
         if (pseudoToolCalls.length > 0) {
           toolCalls = pseudoToolCalls;
+          displayContent = sanitizeAssistantContent(stripToolCallArtifacts(rawContent));
         }
       }
 
-      if (!aiContent && !reasoningContent && !toolCalls?.length) {
+      if (!displayContent && !reasoningContent && !toolCalls?.length) {
         // Return empty so the agent loop can re-prompt instead of crashing
         return { content: '', finishReason: choice?.finish_reason, toolCalls: undefined, usage: payload?.usage };
       }
 
       return {
-        content: aiContent,
+        content: displayContent,
         reasoning: reasoningContent,
         finishReason: choice?.finish_reason,
         reasoningOnly: isReasoningOnly,

@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import path from 'path';
-import { FiRefreshCw, FiSend, FiPlus, FiSettings, FiCopy, FiCheck, FiAlertTriangle, FiX, FiMessageSquare, FiCode, FiFileText, FiTerminal, FiPaperclip, FiZap, FiShield, FiMic, FiMicOff } from 'react-icons/fi';
+import { FiRefreshCw, FiSend, FiPlus, FiSettings, FiCopy, FiCheck, FiAlertTriangle, FiX, FiMessageSquare, FiCode, FiFileText, FiTerminal, FiPaperclip, FiZap, FiShield, FiMic, FiMicOff, FiCpu } from 'react-icons/fi';
 import { LuLoader2 } from 'react-icons/lu';
+import { ModelManager } from './ModelManager';
 import { VoiceInputService, MicDevice } from '../services/VoiceInputService';
 import { diffLines } from 'diff';
 import '../styles/AIChatPanel.css';
@@ -319,6 +320,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
   const activeApproval = activeApprovals[0] ?? null;
 
   const [input, setInput] = useState('');
+  const [showModelManager, setShowModelManager] = useState(false);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [settingsMenuTab, setSettingsMenuTab] = useState<'general' | 'model' | 'advanced'>('general');
   const [attachedFiles, setAttachedFiles] = useState<Array<{ name: string; type: string; dataUrl?: string; content?: string }>>([]);
@@ -1334,6 +1336,14 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
               </span>
             )}
             {settings.yoloMode && <span className="ai-chat-yolo-badge" title="YOLO Mode active">YOLO</span>}
+            <button
+              type="button"
+              className="ai-chat-header-btn"
+              onClick={() => setShowModelManager(true)}
+              title="Local models — download & run models on your machine"
+            >
+              <FiCpu size={14} />
+            </button>
             {conversations.length > 1 && (
               <button
                 type="button"
@@ -1357,7 +1367,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
       </div>
 
       {/* ─── Messages ─── */}
-      <div className="ai-chat-messages" ref={messagesContainerRef}>
+      <div className={`ai-chat-messages ${isThinking ? 'is-streaming' : ''}`} ref={messagesContainerRef}>
         {currentPlan.length > 0 && (
           <div className={`ai-chat-plan-card ${planStats.finished ? 'finished' : ''}`}>
             <div className="ai-chat-plan-header">
@@ -2114,6 +2124,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
           )}
         </div>
       )}
+      {showModelManager && <ModelManager onClose={() => setShowModelManager(false)} />}
     </div>
   );
 };

@@ -16,9 +16,10 @@ const ALLOWED_INVOKE_CHANNELS = [
   'exec', 'exec:kill', 'terminal:create', 'terminal:kill', 'terminal:resize', 'terminal:dispose',
   'dialog:showOpenDialog', 'dialog:openDirectory', 'dialog:inputBox',
   'app:getVersion', 'app:openAbout', 'app:newWindow', 'app:openFile', 'app:openFolder', 'app:exit', 'app:getUserDataPath', 'app:getPath',
-  'shell:openPath', 'edit:undo', 'edit:redo', 'edit:cut', 'edit:copy', 'edit:paste', 'edit:find', 'edit:replace',
+  'shell:openPath', 'shell:openExternal', 'edit:undo', 'edit:redo', 'edit:cut', 'edit:copy', 'edit:paste', 'edit:find', 'edit:replace',
   'view:toggleFullScreen', 'view:reload', 'terminal:new', 'terminal:runActiveFile', 'file:newTextFile',
-  'fs:readFileBase64'
+  'fs:readFileBase64',
+  'ollama:status', 'ollama:list', 'ollama:pull', 'ollama:cancelPull', 'ollama:remove'
 ];
 
 const ALLOWED_SEND_CHANNELS = [
@@ -30,7 +31,7 @@ const ALLOWED_ON_CHANNELS = [
   'terminal:data', 'terminal:exit', 'terminal:error', 'terminal:output',
   'editor:openFile', 'editor:menu', 'sidebar:switch', 'create-new-text-file',
   'folder:open', 'file:open', 'editor:findInFilesResults', 'explorer:refresh',
-  'fs:watchEvent'
+  'fs:watchEvent', 'ollama:pullProgress'
 ];
 
 contextBridge.exposeInMainWorld('electron', {
