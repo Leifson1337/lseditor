@@ -1381,6 +1381,11 @@
   color: #fbbf24;
 }
 
+.ai-settings-popup-hint-detail {
+  color: #6b7280;
+  font-style: italic;
+}
+
 .ai-settings-popup-input {
   width: 100%;
   font-size: 11px;

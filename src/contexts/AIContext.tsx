@@ -11,6 +11,7 @@ import path from 'path';
 import { AI_TOOLS, executeToolCall, ToolCall, ToolResult, EditorDiagnostic, setCurrentDiagnostics, getErrorDiagnostics } from '../services/AIToolService';
 import { isAbsoluteFilePath, joinPathPreserveAbsolute } from '../utils/pathUtils';
 import WhisperAutoStartService, { WhisperAutoStartState } from '../services/WhisperAutoStartService';
+import { classifyModel, ModelClassification } from '../services/modelCapabilities';
 
 export type ChatSender = 'user' | 'ai' | 'system' | 'tool';
 
@@ -132,6 +133,8 @@ interface AIContextType {
   toolStatus?: string;
   toolCallSupported: ToolCallSupport;
   checkToolCallSupport: () => Promise<ToolCallSupport>;
+  /** Per-model capability classification (tool support, vision, kind) for the picker. */
+  modelClassifications: Record<string, ModelClassification>;
   visionSupported: boolean;
   pendingToolApprovals: PendingToolApproval[];
   approvePendingToolApproval: (id: string) => Promise<void>;
@@ -252,18 +255,29 @@ const runSyntaxCheck = async (
   }
 };
 
-const DEFAULT_BASE_PROMPT = `Du bist LS AI, der integrierte Assistent des LS Editors.
-Du hast Tools zum Lesen, Schreiben, Suchen und Ausfuehren von Dateien und Befehlen im Workspace.
+const DEFAULT_BASE_PROMPT = `You are LS AI, the integrated coding agent of LS Editor. You can read, write and
+edit files and run shell commands in the user's workspace — but ONLY by invoking tools.
+You are an agent, not a chatbot: when the user asks about the project or asks you to
+create, change, run or fix something, you find the answer or do the work with tools.
 
-Kernregeln:
-- Benutze IMMER echte Tool-Calls um Dateien zu aendern. Gib Code NICHT als Chat-Text aus.
-- Lies Dateien mit readFile BEVOR du sie aenderst. Lies grosse Dateien in Abschnitten (startLine/endLine).
-- Bevorzuge replaceInFile fuer gezielte Aenderungen. writeFile nur fuer neue Dateien.
-- Arbeite inkrementell: max ~120 Zeilen pro writeFile/appendToFile/replaceInFile.
-- Nach JEDER Code-Aenderung: getDiagnostics aufrufen. Fehler sofort beheben, nicht ignorieren.
-- Falls replaceInFile fehlschlaegt: Datei erneut lesen, Suchtext anpassen, erneut versuchen.
-- Gib niemals interne Gedanken, Analyse-Tags oder Pseudo-Tool-Syntax aus.
-- Beende abgeschlossene Aufgaben mit: ## Ergebnis, ## Vorgehen, ## Validierung`;
+How you invoke tools is described in the "HOW TO USE TOOLS" section that follows.
+Follow its format EXACTLY — it differs depending on the active model. Always:
+- ACT, don't describe. To answer "what is in file X?" you call readFile on X and read
+  the result — you do NOT explain how one could read it. To create a file you call
+  writeFile. Never replace a real action with a description of it.
+- NEVER write pseudo-code, snippets, lambdas or expressions that merely LOOK like a
+  tool call (e.g. readFile(path), runCommand(x => readFile(...)), lua/js/python). That
+  text does nothing — use the exact tool-call format from the protocol section.
+- Use ONLY the exact tool names and argument keys you are given. To create a file use
+  writeFile with the FULL content — there is no "createFile".
+- One step at a time: call, wait for the result, then decide the next step.
+- Read files before editing. Prefer replaceInFile for targeted edits; writeFile only for
+  new files. Work in small chunks (~120 lines per write/replace).
+- After every code change call getDiagnostics and fix reported errors. If replaceInFile
+  fails, re-read the file, adjust the search text, retry.
+- Never claim a file was changed or a command succeeded unless a tool returned that.
+- Do not reveal internal reasoning or emit fake function-call/protocol syntax in prose.
+- End substantial completed tasks with: ## Ergebnis, ## Vorgehen, ## Validierung`;
 
 const createId = () => {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -282,6 +296,76 @@ const createConversation = (index: number): Conversation => ({
 const sanitizeBaseUrl = (url: string) => {
   if (!url) return 'http://localhost:1234';
   return url.trim().replace(/\/$/, '');
+};
+
+const TOOL_SUPPORT_CACHE_KEY = 'lseditor.ai.toolSupportCache';
+const toolSupportCacheId = (baseUrl: string, model: string) => `${sanitizeBaseUrl(baseUrl)}::${model}`;
+
+const loadToolSupportCache = (): Map<string, ToolCallSupport> => {
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(TOOL_SUPPORT_CACHE_KEY) : null;
+    if (!raw) return new Map();
+    const parsed = JSON.parse(raw) as Record<string, ToolCallSupport>;
+    // Only persist definitive verdicts; 'unknown' is never cached.
+    return new Map(Object.entries(parsed).filter(([, v]) => v === true || v === false));
+  } catch {
+    return new Map();
+  }
+};
+
+const saveToolSupportCache = (cache: Map<string, ToolCallSupport>) => {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    const obj: Record<string, ToolCallSupport> = {};
+    cache.forEach((value, key) => {
+      if (value === true || value === false) obj[key] = value;
+    });
+    localStorage.setItem(TOOL_SUPPORT_CACHE_KEY, JSON.stringify(obj));
+  } catch {
+    /* ignore quota / serialization errors */
+  }
+};
+
+/**
+ * Ollama exposes richer capability data than the OpenAI-compatible `/v1/models`
+ * route. When the endpoint is an Ollama server, fetch the native model list
+ * (`/api/tags`) and per-model capabilities (`/api/show`, which reports a
+ * `capabilities: ["completion","tools","vision",…]` array). Returns a metadata
+ * map keyed by model id, or null when the endpoint is not Ollama.
+ */
+const fetchOllamaCapabilities = async (
+  baseUrl: string,
+  modelIds: string[]
+): Promise<Map<string, any> | null> => {
+  try {
+    const tagsRes = await fetch(`${baseUrl}/api/tags`);
+    if (!tagsRes.ok) return null;
+    const tags = await tagsRes.json();
+    if (!Array.isArray(tags?.models)) return null;
+
+    const metadata = new Map<string, any>();
+    // Probe capabilities for the models actually offered, capped for safety.
+    const targets = modelIds.length ? modelIds : tags.models.map((m: any) => m?.model || m?.name).filter(Boolean);
+    await Promise.all(
+      targets.slice(0, 50).map(async (id: string) => {
+        try {
+          const showRes = await fetch(`${baseUrl}/api/show`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: id })
+          });
+          if (!showRes.ok) return;
+          const show = await showRes.json();
+          if (show?.capabilities) metadata.set(id, { capabilities: show.capabilities, details: show.details });
+        } catch {
+          /* per-model show failures are non-fatal */
+        }
+      })
+    );
+    return metadata.size ? metadata : null;
+  } catch {
+    return null;
+  }
 };
 
 const resolveToolTargetPath = (targetPath: string, projectPath?: string) => {
@@ -310,48 +394,11 @@ const extractModelEntries = (payload: any): any[] => {
   return Array.isArray(list) ? list : [];
 };
 
-const coerceBoolean = (value: unknown): boolean | undefined => {
-  if (typeof value === 'boolean') return value;
-  if (typeof value === 'string') {
-    const normalized = value.trim().toLowerCase();
-    if (['true', '1', 'yes', 'supported', 'enabled'].includes(normalized)) return true;
-    if (['false', '0', 'no', 'unsupported', 'disabled'].includes(normalized)) return false;
-  }
-  return undefined;
-};
-
-const inferToolCallSupportFromModel = (modelId: string, modelData?: any): ToolCallSupport => {
-  const directFlags = [
-    modelData?.supports_tool_calls,
-    modelData?.supports_function_calling,
-    modelData?.supports_function_calls,
-    modelData?.tool_calling,
-    modelData?.function_calling,
-    modelData?.capabilities?.tool_calls,
-    modelData?.capabilities?.function_calling
-  ];
-
-  for (const flag of directFlags) {
-    const resolved = coerceBoolean(flag);
-    if (resolved !== undefined) return resolved;
-  }
-
-  const lowerModelId = modelId.toLowerCase();
-  if (
-    /(?:^|[\s:/_-])(vision|embedding|rerank|reranker|whisper|stt|tts)(?:$|[\s:/_-])/.test(lowerModelId)
-  ) {
-    return false;
-  }
-
-  if (
-    /(tool|function)[\s_-]?call/.test(lowerModelId) ||
-    /\b(?:gpt-4\.1|gpt-4o|gpt-4\.5|gpt-5|qwen(?:2\.5)?-coder|deepseek-coder|codestral|ministral|devstral|kimi-k2|glm-4|llama-3(?:\.\d+)?(?:-instruct)?|mistral(?:-small|-medium|-large)?|mixtral)\b/.test(lowerModelId)
-  ) {
-    return 'unknown';
-  }
-
-  return 'unknown';
-};
+// Thin wrapper around the shared capability catalog (src/services/
+// modelCapabilities.ts). Kept as a named helper so the rest of this file reads
+// the same as before; the catalog is the single source of truth.
+const inferToolCallSupportFromModel = (modelId: string, modelData?: any): ToolCallSupport =>
+  classifyModel(modelId, modelData).toolSupport;
 
 const sanitizeAssistantContent = (content: string): string => {
   if (!content) return '';
@@ -458,23 +505,23 @@ const getToolsForMode = (settings: AISettings) => {
   return AI_TOOLS;
 };
 
-// One-line usage reference per real tool, generated so it always matches the
-// actual schema names the executor accepts.
+// One-line usage reference per real tool. Each line names the EXACT argument
+// keys the executor expects, so models emit correct JSON arguments.
 const TOOL_USAGE: Record<string, string> = {
-  findFile: 'findFile(query) — locate a file when you do not know its exact path.',
-  readFile: 'readFile(path) — read a file before editing it.',
-  writeFile: 'writeFile(path, content) — create a NEW file or overwrite one. content MUST contain the full file text.',
-  appendToFile: 'appendToFile(path, content) — append text to the end of an existing file.',
-  replaceInFile: 'replaceInFile(path, search, replace) — replace exact existing text. search must match the current file content.',
-  listFiles: 'listFiles(path) — list the contents of a directory.',
-  searchFiles: 'searchFiles(pattern) — find files by glob pattern.',
-  searchWorkspace: 'searchWorkspace(query) — search file names and contents across the project.',
-  runCommand: 'runCommand(command) — run a shell/terminal command in the project.',
-  createDirectory: 'createDirectory(path) — create a directory.',
-  deleteFile: 'deleteFile(path) — delete a file.',
-  renameFile: 'renameFile(oldPath, newPath) — rename or move a file.',
-  getDiagnostics: 'getDiagnostics() — get current compiler/linter errors and warnings.',
-  spawnSubAgent: 'spawnSubAgent(task) — delegate an isolated sub-task to a helper agent.'
+  findFile: 'findFile — args: { "query": string }. Locate a file when you do not know its exact path.',
+  readFile: 'readFile — args: { "path": string, optional "startLine": number, "endLine": number }. Read a file. Omit the line range to read from the start (it auto-chunks large files and tells you how to continue).',
+  writeFile: 'writeFile — args: { "path": string, "content": string }. Create a NEW file or overwrite one. "content" MUST be the COMPLETE literal file text as a JSON string (never empty, never a variable/placeholder).',
+  appendToFile: 'appendToFile — args: { "path": string, "content": string }. Append literal text to the end of an existing file. Best tool to add something "at the bottom" of a file.',
+  replaceInFile: 'replaceInFile — args: { "path": string, "search": string, "replace": string }. Replace exact existing text; "search" must match the current file content verbatim.',
+  listFiles: 'listFiles — args: { "path": string }. List the contents of a directory.',
+  searchFiles: 'searchFiles — args: { "pattern": string }. Find files by glob pattern.',
+  searchWorkspace: 'searchWorkspace — args: { "query": string }. Search file names and contents across the project.',
+  runCommand: 'runCommand — args: { "command": string }. Run ONE shell/terminal command in the project.',
+  createDirectory: 'createDirectory — args: { "path": string }. Create a directory.',
+  deleteFile: 'deleteFile — args: { "path": string }. Delete a file.',
+  renameFile: 'renameFile — args: { "oldPath": string, "newPath": string }. Rename or move a file.',
+  getDiagnostics: 'getDiagnostics — args: {}. Get current compiler/linter errors and warnings.',
+  spawnSubAgent: 'spawnSubAgent — args: { "task": string }. Delegate an isolated sub-task to a helper agent.'
 };
 
 const buildToolReference = (settings: AISettings) => {
@@ -483,24 +530,50 @@ const buildToolReference = (settings: AISettings) => {
     .map(tool => TOOL_USAGE[tool.function.name])
     .filter(Boolean)
     .map(line => `- ${line}`);
-  return `Available tools (use ONLY these exact names — do not invent others):\n${lines.join('\n')}`;
+  return `AVAILABLE TOOLS (use ONLY these exact names and argument keys — never invent others):\n${lines.join('\n')}`;
 };
 
-const TOOL_PROTOCOL = [
-  'TOOL PROTOCOL (critical):',
-  '- To perform any action you MUST issue a real tool call. NEVER print a tool call as text, JSON, or inside a ```code block — the user cannot see it and it will NOT run.',
-  '- Use ONLY the exact tool names listed below. Do not invent names like "createFile" — to create a file use writeFile.',
-  '- To create a new file, call writeFile with BOTH "path" and the COMPLETE "content". Never call a tool with only a path and no content.',
-  '- Provide every required argument. Use absolute paths or paths relative to the workspace root.',
-  '- Take one concrete step at a time, wait for the tool result, then decide the next step.',
-  '- Never claim a file was created/changed or a command succeeded unless a tool call actually returned success.'
+// Protocol for models WITH native tool calling: call tools through the API's
+// tool mechanism, never as text.
+const NATIVE_TOOL_PROTOCOL = [
+  'HOW TO USE TOOLS (this model supports native tool calls — critical):',
+  '- To DO anything (read, write, search, run), emit a REAL tool call through the tool-calling mechanism. Do NOT describe, narrate, or plan the call in prose first — just make it.',
+  '- NEVER write a tool call as text, JSON, or inside a ```code block. NEVER write pseudo-code, lambdas, or expressions like `runCommand(x => readFile(...))`, `readFile(path)`, or lua/js/python that *describes* a call. Such text is NOT executed and produces nothing.',
+  '- Use ONLY the exact tool names and argument keys listed below. To create a file use writeFile (there is no "createFile").',
+  '- Arguments must be LITERAL values: put the actual file text directly in "content" as a JSON string (with \\n for newlines). NEVER pass a variable, placeholder or expression like {"content": chunk}, and never write code that builds the arguments.',
+  '- writeFile needs BOTH "path" and the COMPLETE "content". Never call it with only a path. If content is very large, make SEVERAL calls yourself (writeFile then appendToFile), each with real literal text — do not write a loop.',
+  '- Take ONE concrete step, wait for the tool result, then decide the next step.',
+  '- Never claim a file was read/created/changed or a command succeeded unless a tool call actually returned that result.',
+  '',
+  'EXAMPLE — user asks "was steht in der test.py?": do NOT explain how to read it. Immediately make a real readFile tool call with arguments {"path": "test.py"}, then answer using the returned content.'
 ].join('\n');
 
-const createRuntimeModePrompt = (settings: AISettings) => {
+// Protocol for models WITHOUT native tool calling: tools are invoked by writing
+// a single JSON block in EXACTLY this shape (parsed back into a real call).
+const PROMPT_FALLBACK_TOOL_PROTOCOL = [
+  'HOW TO USE TOOLS (this model has NO native tool calling — you invoke tools by writing JSON — critical):',
+  '- To call a tool, output a SINGLE fenced json block and nothing else in that message, in EXACTLY this shape:',
+  '```json',
+  '{"tool": "<toolName>", "arguments": { ... }}',
+  '```',
+  '- Use ONLY the exact tool names and argument keys listed below. To create a file use writeFile (there is no "createFile").',
+  '- Do NOT write code that *describes* a call (no lua/js/python, no arrow functions like `x => readFile(...)`, no `runCommand(...)` expressions, no concatenation helpers). Write ONLY the json block shown above with literal values.',
+  '- Arguments must be LITERAL: put the actual file text directly in "content" as a JSON string (use \\n for newlines). NEVER pass a variable/placeholder like {"content": chunk}. If content is very large, make SEVERAL json blocks across turns (writeFile then appendToFile), each with real text — do not write a loop.',
+  '- Emit the json block by itself, then STOP. The tool result is sent back to you in the next message; continue from there.',
+  '- Take ONE step at a time. writeFile needs BOTH "path" and the COMPLETE "content". Never claim success unless a tool result confirmed it.',
+  '',
+  'EXAMPLE — user asks "was steht in der test.py?": respond with EXACTLY this and nothing else:',
+  '```json',
+  '{"tool": "readFile", "arguments": {"path": "test.py"}}',
+  '```'
+].join('\n');
+
+const createRuntimeModePrompt = (settings: AISettings, nativeTools = true) => {
+  const TOOL_PROTOCOL = nativeTools ? NATIVE_TOOL_PROTOCOL : PROMPT_FALLBACK_TOOL_PROTOCOL;
   const toolGuidance = [
     'Workflow: readFile (in chunks) -> edit with replaceInFile -> getDiagnostics -> fix errors -> repeat until clean.',
     'Use searchWorkspace to find files by name or content. Use findFile when the exact path is unknown.',
-    'For new files: call writeFile with the full content. For large files, scaffold with writeFile then extend with appendToFile in chunks.',
+    'To add code to the end of a file, call appendToFile with the literal text. For new files, call writeFile with the full literal content. Only split very large content into SEVERAL separate calls (writeFile then appendToFile), each containing real literal text — never pass a variable or write a loop.',
     'After code changes, ALWAYS call getDiagnostics. If errors are found, read the affected lines and fix them with replaceInFile.',
     'For substantial tasks, keep a markdown checklist (- [ ] / - [x]) and update it as you progress.',
     'End completed tasks with: ## Ergebnis, ## Vorgehen, ## Validierung.'
@@ -575,13 +648,31 @@ const summarizeToolCall = (toolCall: ToolCall): string => {
   }
 };
 
+// Ensures tool-call arguments echoed back to the API are valid JSON. A model
+// that emits malformed args (e.g. `{"content": chunk}` with an unquoted
+// placeholder) would otherwise crash the NEXT request with "invalid tool call
+// arguments" and abort the whole turn. We coerce unparseable args to `{}` — the
+// tool result already explains the error so the model can retry correctly.
+const sanitizeToolArgsForApi = (raw: string): string => {
+  const s = (raw || '').trim();
+  if (!s) return '{}';
+  try { JSON.parse(s); return s; } catch { /* try to salvage below */ }
+  try {
+    const fixed = s.replace(/,\s*([}\]])/g, '$1');
+    JSON.parse(fixed);
+    return fixed;
+  } catch {
+    return '{}';
+  }
+};
+
 const buildAssistantToolMessage = (toolCalls: ToolCall[], content?: string | null) => ({
   role: 'assistant',
   content: content || null,
   tool_calls: toolCalls.map(tc => ({
     id: tc.id,
     type: 'function',
-    function: { name: tc.function.name, arguments: tc.function.arguments }
+    function: { name: tc.function.name, arguments: sanitizeToolArgsForApi(tc.function.arguments) }
   }))
 });
 
@@ -733,15 +824,30 @@ const serializeToolMessageForModel = (message: Message) => {
 
 const userRequestLikelyNeedsTools = (content: string, mode: AISettings['mode']) => {
   if (mode === 'qa') return false;
-  // Action verbs that clearly imply file mutations
-  const actionPattern = /\b(program|implement|create|write|save|edit|change|modify|update|fix|refactor|build|run|test|add|remove|delete|rename|move|install|deploy|optimize|improve|replace|insert|append|merge|setup|configure|erstell|schreib|programmier|aender|änder|fixe|teste|baue|hinzufüg|entfern|lösch|verschieb|installier|einricht|optimier|verbesse|fuer mich|mach|mache)\b/i;
-  // Exclude purely informational queries even if they contain action words
-  const infoPattern = /^(was |wie |warum |wann |wo |wer |erkl|beschreib|zeig|explain|describe|show|what |how |why |when |where |who |tell me|can you explain|can i|should i|is it|do i need)/i;
+  // Purely informational queries don't need mutating tools.
+  const infoPattern = /^(was |wie |warum |wann |wo |wer |welche|erkl|beschreib|zeig|explain|describe|show|what |how |why |when |where |who |tell me|can you explain|can i|should i|is it|do i need)/i;
   if (infoPattern.test(content.trim())) return false;
-  return actionPattern.test(content);
+  // In coder/autonomous mode, treat any non-informational request as likely
+  // needing tools. Brittle action-verb lists missed real edits (e.g. German
+  // "füge … ein", "ergänze", "passe an"), so we default to true here and let the
+  // specific correction conditions (code block present, claims a change, etc.)
+  // decide whether to actually nudge.
+  return true;
 };
 
 const KNOWN_TOOL_NAMES = new Set(AI_TOOLS.map(tool => tool.function.name));
+
+// Detects when an assistant message *describes* a tool call in prose/code
+// (e.g. `runCommand(x => readFile(...))`, `readFile(path)`, a ```block calling a
+// tool) instead of actually issuing one. Used to nudge the model to perform the
+// real call. Only meaningful when no real tool call was produced this turn.
+const describesToolCallWithoutIssuing = (content: string, allowedNames: Set<string>): boolean => {
+  if (!content) return false;
+  for (const name of allowedNames) {
+    if (new RegExp(`\\b${name}\\s*\\(`).test(content)) return true;
+  }
+  return false;
+};
 
 // Maps the tool names models commonly hallucinate / use from other agent
 // frameworks onto this app's real tool names. Lets weaker models succeed even
@@ -952,6 +1058,7 @@ interface AgentLoopState {
   performedMutationTool: boolean;
   mutationCorrectionSent: boolean;
   toolProtocolCorrectionSent: boolean;
+  describedToolCallCorrectionSent: boolean;
   lastNormalizedResponse?: string;
   repeatedResponseCount: number;
   executedTools: ExecutedToolRecord[];
@@ -997,11 +1104,18 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'connecting' | 'ready' | 'error'>('idle');
   const [toolStatus, setToolStatus] = useState<string | undefined>();
   const [toolCallSupported, setToolCallSupported] = useState<ToolCallSupport>('unknown');
+  const [modelClassifications, setModelClassifications] = useState<Record<string, ModelClassification>>({});
   const [pendingToolApprovals, setPendingToolApprovals] = useState<PendingToolApproval[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
   const basePromptRef = useRef<string>(DEFAULT_BASE_PROMPT);
   const projectPathRef = useRef(projectPath);
   const modelMetadataRef = useRef<Map<string, any>>(new Map());
+  // Live-probe verdicts persist across sessions, keyed by `${baseUrl}::${model}`,
+  // so we never re-probe a model we've already classified.
+  const toolSupportCacheRef = useRef<Map<string, ToolCallSupport>>(loadToolSupportCache());
+  // Mirror of `toolCallSupported` for the currently selected model, readable from
+  // inside performCompletion without adding it to that callback's deps.
+  const toolSupportRef = useRef<ToolCallSupport>('unknown');
   const pendingToolExecutionRef = useRef<Map<string, PendingToolExecutionState>>(new Map());
 
   const buildToolCallPreview = useCallback(
@@ -1203,18 +1317,50 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       if (!fetched.length) {
         throw new Error(lastErrorMessage || 'Keine Modelle gefunden');
       }
+
+      // Enrich with native Ollama capabilities when available — the most
+      // authoritative source for local tool/vision support.
+      const ollamaMeta = await fetchOllamaCapabilities(baseUrl, fetched);
+      if (ollamaMeta) {
+        ollamaMeta.forEach((meta, id) => {
+          const existing = fetchedMetadata.get(id) || {};
+          fetchedMetadata.set(id, { ...existing, ...meta });
+        });
+      }
       modelMetadataRef.current = fetchedMetadata;
+
+      // Classify every model once (catalog + heuristic + metadata), then let any
+      // cached live-probe verdict override an 'unknown'.
+      const classifications: Record<string, ModelClassification> = {};
+      for (const id of fetched) {
+        const classification = classifyModel(id, fetchedMetadata.get(id));
+        if (classification.toolSupport === 'unknown') {
+          const cached = toolSupportCacheRef.current.get(toolSupportCacheId(baseUrl, id));
+          if (cached === true || cached === false) {
+            classification.toolSupport = cached;
+            classification.reason = cached
+              ? 'Per Live-Test bestätigt – Tool-Support.'
+              : 'Per Live-Test bestätigt – kein Tool-Support.';
+          }
+        }
+        classifications[id] = classification;
+      }
+      setModelClassifications(classifications);
 
       setModels(fetched);
       setConnectionStatus('ready');
       setLastError(undefined);
       setToolCallSupported(prev => (settings.model ? prev : 'unknown'));
 
+      // Prefer keeping the current model; otherwise default to the first
+      // tool-capable model so the agent works out of the box.
       setSettings(prev => {
         if (prev.model && fetched.includes(prev.model)) {
           return prev;
         }
-        return { ...prev, model: fetched[0] };
+        const firstToolCapable = fetched.find(id => classifications[id]?.toolSupport === true);
+        const firstChat = fetched.find(id => (classifications[id]?.kind ?? 'chat') === 'chat');
+        return { ...prev, model: firstToolCapable || firstChat || fetched[0] };
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1231,25 +1377,52 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
     refreshModels();
   }, [refreshModels]);
 
+  // Centralizes a verdict: updates the live state, the ref read by the
+  // completion path, the per-model classification map, and the persisted cache.
+  const recordToolSupport = useCallback(
+    (model: string, baseUrl: string, verdict: ToolCallSupport, reason?: string) => {
+      setToolCallSupported(verdict);
+      toolSupportRef.current = verdict;
+      setModelClassifications(prev => {
+        const existing = prev[model];
+        if (existing && existing.toolSupport === verdict) return prev;
+        const base = existing ?? classifyModel(model, modelMetadataRef.current.get(model));
+        return { ...prev, [model]: { ...base, toolSupport: verdict, reason: reason ?? base.reason } };
+      });
+      if (verdict === true || verdict === false) {
+        toolSupportCacheRef.current.set(toolSupportCacheId(baseUrl, model), verdict);
+        saveToolSupportCache(toolSupportCacheRef.current);
+      }
+    },
+    []
+  );
+
   const checkToolCallSupport = useCallback(async (): Promise<ToolCallSupport> => {
     const selectedModel = settings.model?.trim();
+    const baseUrl = sanitizeBaseUrl(settings.baseUrl);
     if (!selectedModel) {
-      setToolCallSupported('unknown');
+      recordToolSupport('', baseUrl, 'unknown');
       return 'unknown';
     }
 
+    // 1) Persisted live-probe verdict wins (survives restarts).
+    const cached = toolSupportCacheRef.current.get(toolSupportCacheId(baseUrl, selectedModel));
+    if (cached === true || cached === false) {
+      recordToolSupport(selectedModel, baseUrl, cached);
+      return cached;
+    }
+
+    // 2) Catalog + metadata + heuristic.
     const inferred = inferToolCallSupportFromModel(
       selectedModel,
       modelMetadataRef.current.get(selectedModel)
     );
-
     if (inferred === true || inferred === false) {
-      setToolCallSupported(inferred);
+      recordToolSupport(selectedModel, baseUrl, inferred);
       return inferred;
     }
 
-    // Make a small test request to check if tool calls are actually supported
-    const baseUrl = sanitizeBaseUrl(settings.baseUrl);
+    // 3) Live probe as the final arbiter for 'unknown' models.
     try {
       const testController = new AbortController();
       const timeoutId = setTimeout(() => testController.abort(), 5000);
@@ -1294,7 +1467,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
         const lower = errorText.toLowerCase();
-        
+
         // Check for explicit tool-related errors
         if (
           lower.includes('tool') ||
@@ -1303,48 +1476,54 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
           lower.includes('does not support') ||
           lower.includes('not supported')
         ) {
-          setToolCallSupported(false);
+          recordToolSupport(selectedModel, baseUrl, false, 'Per Live-Test bestätigt – kein Tool-Support.');
           return false;
         }
-        
+
         // Other errors don't tell us about tool support
-        setToolCallSupported('unknown');
+        recordToolSupport(selectedModel, baseUrl, 'unknown');
         return 'unknown';
       }
 
       // If the request succeeded with tools parameter, the model supports tools
       const payload = await response.json();
-      
+
       // Check if response has tool_calls field (even if empty)
       const choice = payload?.choices?.[0];
       if (choice?.message && ('tool_calls' in choice.message)) {
-        setToolCallSupported(true);
+        recordToolSupport(selectedModel, baseUrl, true, 'Per Live-Test bestätigt – Tool-Support.');
         return true;
       }
 
       // If no error and request went through, assume support
-      setToolCallSupported(true);
+      recordToolSupport(selectedModel, baseUrl, true, 'Per Live-Test bestätigt – Tool-Support.');
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      
+
       // Timeout or network error - can't determine
       if (message.includes('abort') || message.includes('timeout')) {
-        setToolCallSupported('unknown');
+        recordToolSupport(selectedModel, baseUrl, 'unknown');
         return 'unknown';
       }
-      
+
       console.warn('Failed to verify tool calling support', error);
-      setToolCallSupported('unknown');
+      recordToolSupport(selectedModel, baseUrl, 'unknown');
       return 'unknown';
     }
-  }, [settings.apiKey, settings.baseUrl, settings.model]);
+  }, [settings.apiKey, settings.baseUrl, settings.model, recordToolSupport]);
 
   useEffect(() => {
     if (settings.model) {
       checkToolCallSupport();
     }
   }, [settings.model]);
+
+  // Keep the ref used inside performCompletion in lock-step with the state,
+  // regardless of which code path updated the verdict.
+  useEffect(() => {
+    toolSupportRef.current = toolCallSupported;
+  }, [toolCallSupported]);
 
   const getActiveConversation = useCallback(
     () => conversations.find(conv => conv.id === activeConversationId) ?? conversations[0],
@@ -1529,7 +1708,14 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
         messages: finalMessages
       };
 
-      if (useTools && settings.toolsEnabled) {
+      // Tools are "active" for this turn when the mode wants them. We only send
+      // the NATIVE tools/tool_choice params when the model isn't known to reject
+      // them — for models that explicitly lack tool support we fall back to the
+      // prompt-injected tool protocol (recovered from text below), which lets
+      // even weak models drive the agent loop.
+      const toolsActive = useTools && settings.toolsEnabled;
+      const useNativeTools = toolsActive && toolSupportRef.current !== false;
+      if (useNativeTools) {
         body.tools = getToolsForMode(settings);
         body.tool_choice = toolChoice;
       }
@@ -1561,6 +1747,24 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
           if (!response.ok) {
             const detail = await extractErrorMessage(response);
             const message = detail || `LM Studio antwortete mit Status ${response.status}`;
+
+            // A model we believed was tool-capable rejected the native tools
+            // params. Drop them, mark the model as no-native-tools (so the prompt
+            // protocol takes over) and retry instead of failing the turn.
+            if (body.tools && /tool|function[\s_-]?call|does not support|not supported|unsupported/i.test(message)) {
+              delete body.tools;
+              delete body.tool_choice;
+              toolSupportRef.current = false;
+              recordToolSupport(
+                settings.model,
+                sanitizeBaseUrl(settings.baseUrl),
+                false,
+                'Server lehnte native Tools ab – Prompt-Fallback aktiv.'
+              );
+              lastAttemptError = new Error(message);
+              continue;
+            }
+
             if (attempt < COMPLETION_MAX_RETRIES && shouldRetryCompletionRequest(response.status, message)) {
               lastAttemptError = new Error(message);
               await delay(Math.min(500 * Math.pow(2, attempt - 1), 5000));
@@ -1615,7 +1819,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
             arguments: tc.function?.arguments || '{}'
           }
         }));
-      } else if (useTools) {
+      } else if (toolsActive) {
         // Recover tool calls models emit as text/JSON instead of via the native
         // tool_calls field, then strip that JSON from the displayed prose.
         const pseudoToolCalls = extractPseudoToolCalls(rawContent);
@@ -1639,7 +1843,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
         usage: payload?.usage
       };
     },
-    [settings]
+    [settings, recordToolSupport]
   );
 
   const buildSystemMessages = useCallback(
@@ -1649,7 +1853,12 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       if (basePrompt) {
         systemMessages.push({ role: 'system', content: basePrompt });
       }
-      systemMessages.push({ role: 'system', content: createRuntimeModePrompt(settings) });
+      // Tell the model HOW to invoke tools based on whether the selected model
+      // actually does native tool calls. For non-native models the protocol
+      // explains the JSON-block format we parse back into real calls — without
+      // this they tend to emit pseudo-code instead of a usable call.
+      const nativeTools = settings.toolsEnabled && toolSupportRef.current !== false;
+      systemMessages.push({ role: 'system', content: createRuntimeModePrompt(settings, nativeTools) });
       if (projectPathRef.current) {
         systemMessages.push({
           role: 'system',
@@ -1807,23 +2016,9 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
               ];
               continue;
             }
-            const invalidReadCall = toolCalls.find(tc => {
-              if (tc.function.name !== 'readFile') return false;
-              const args = safeJsonParse(tc.function.arguments || '{}');
-              return args.startLine == null && args.endLine == null;
-            });
-            if (invalidReadCall) {
-              currentState.apiMessages = [
-                ...currentState.apiMessages,
-                buildAssistantToolMessage(toolCalls, result.content),
-                {
-                  role: 'user',
-                  content:
-                    'Do not read full files in one call. Use readFile with explicit startLine and endLine, then continue with the next range if needed.'
-                }
-              ];
-              continue;
-            }
+            // Note: readFile without an explicit line range is allowed — the
+            // executor auto-chunks large files and reports how to continue, so
+            // forcing a range here only confused weaker models.
             const blockedReplaceCall = toolCalls.find(tc => {
               if (tc.function.name !== 'replaceInFile') return false;
               const args = safeJsonParse(tc.function.arguments || '{}');
@@ -2226,6 +2421,33 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
               ];
               continue;
             }
+
+            // The model wrote something that *looks like* a tool call (e.g.
+            // `runCommand(x => readFile(...))` or a code block calling a tool) but
+            // didn't actually issue one — so nothing ran. Nudge it to perform the
+            // real call, using the format that matches the active model.
+            if (
+              settings.toolsEnabled &&
+              !currentState.describedToolCallCorrectionSent &&
+              describesToolCallWithoutIssuing(
+                result.content,
+                new Set(getToolsForMode(settings).map(tool => tool.function.name))
+              )
+            ) {
+              currentState.describedToolCallCorrectionSent = true;
+              const nativeTools = toolCallSupported !== false;
+              currentState.apiMessages = [
+                ...currentState.apiMessages,
+                { role: 'assistant', content: result.content },
+                {
+                  role: 'user',
+                  content: nativeTools
+                    ? 'You described a tool call in text/code but did NOT actually call any tool, so nothing ran and you have no result. Stop describing — issue a REAL tool call now (e.g. call readFile with {"path":"<file>"}), then answer from the returned result.'
+                    : 'You described a tool call in text/code but did not output a usable call, so nothing ran. To actually run a tool, reply with ONLY this json block and literal values (no pseudo-code, no arrow functions):\n```json\n{"tool": "readFile", "arguments": {"path": "<file>"}}\n```'
+                }
+              ];
+              continue;
+            }
           } else if (!result.content && !result.toolCalls?.length && !currentState.controller.signal.aborted) {
             currentState.consecutiveEmptyResponses = (currentState.consecutiveEmptyResponses ?? 0) + 1;
             if (currentState.consecutiveEmptyResponses >= 3) {
@@ -2260,7 +2482,9 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
                 ...currentState.apiMessages,
                 {
                   role: 'user',
-                  content: 'You have not modified any file yet. If you intend to change files, call the appropriate tool first. Otherwise answer without claiming a file change.'
+                  content: toolCallSupported !== false
+                    ? 'You have not modified any file yet. If you intend to change files, issue a real tool call (writeFile/appendToFile/replaceInFile) first. Otherwise answer without claiming a file change.'
+                    : 'You have not modified any file yet. If you intend to change files, output a json tool-call block (e.g. {"tool": "replaceInFile", "arguments": {...}}) first. Otherwise answer without claiming a file change.'
                 }
               ];
               continue;
@@ -2268,17 +2492,21 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
 
             if (
               settings.toolsEnabled &&
-              userRequestLikelyNeedsTools(initialUserContent, settings.mode) &&
+              settings.mode !== 'qa' &&
               !currentState.performedMutationTool &&
               !currentState.mutationCorrectionSent &&
               containsCodeBlockThatShouldBeWritten(result.content)
             ) {
               currentState.mutationCorrectionSent = true;
+              const nativeTools = toolCallSupported !== false;
               currentState.apiMessages = [
                 ...currentState.apiMessages,
+                { role: 'assistant', content: result.content },
                 {
                   role: 'user',
-                  content: 'Do not output the file as chat text. Use the correct tool call now and write the file directly.'
+                  content: nativeTools
+                    ? 'Outputting the code as a chat code block does NOT change the file — nothing was written. Apply it now with a real tool call: appendToFile to add to the end, replaceInFile for a targeted change, or writeFile for a full rewrite. Read the file first if you need its current content.'
+                    : 'Outputting the code as a chat code block does NOT change the file — nothing was written. To actually write it, reply with ONLY a json tool-call block and literal values, e.g.:\n```json\n{"tool": "appendToFile", "arguments": {"path": "<file>", "content": "<exact code to add>"}}\n```\nUse replaceInFile for a targeted change or writeFile for a full rewrite.'
                 }
               ];
               continue;
@@ -2297,7 +2525,9 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
                 { role: 'assistant', content: result.content },
                 {
                   role: 'user',
-                  content: 'Do not describe what you will do. Execute the action now using tool calls.'
+                  content: toolCallSupported !== false
+                    ? 'Do not describe what you will do. Execute the action now by issuing a real tool call.'
+                    : 'Do not describe what you will do. Execute the action now by outputting a json tool-call block (e.g. {"tool": "readFile", "arguments": {"path": "<file>"}}).'
                 }
               ];
               continue;
@@ -2324,8 +2554,18 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
             continue;
           }
 
+          // Final safety net: the run is about to end without any file mutation.
+          // Only nudge when the conversation actually shows mutation intent/claims
+          // — otherwise a read-only answer (e.g. listFiles, an explanation) would
+          // be wrongly flagged as an incomplete change.
+          const finalText = currentState.combinedContent || '';
+          const showsMutationIntent =
+            settings.mode !== 'qa' &&
+            (containsCodeBlockThatShouldBeWritten(finalText) ||
+              claimsFileMutationWithoutTool(finalText) ||
+              statesIntentWithoutActing(finalText));
           if (
-            userRequestLikelyNeedsTools(initialUserContent, settings.mode) &&
+            showsMutationIntent &&
             !currentState.performedMutationTool &&
             !currentState.completionWithoutMutationCorrectionSent
           ) {
@@ -2335,7 +2575,9 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
               {
                 role: 'user',
                 content:
-                  'You have not completed the requested file change yet. Do not claim the issue is fixed or resolved. Use a mutating tool now to apply the change, or explicitly state that no safe change was made.'
+                  toolCallSupported !== false
+                    ? 'You have not completed the requested file change yet. Do not claim the issue is fixed or resolved. Issue a real mutating tool call (writeFile/appendToFile/replaceInFile) now to apply the change, or explicitly state that no safe change was made.'
+                    : 'You have not completed the requested file change yet. Do not claim the issue is fixed or resolved. Output a json tool-call block now (e.g. {"tool": "appendToFile", "arguments": {"path": "<file>", "content": "<code>"}}) to apply the change, or explicitly state that no safe change was made.'
               }
             ];
             continue;
@@ -2636,6 +2878,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
           performedMutationTool: false,
           mutationCorrectionSent: false,
           toolProtocolCorrectionSent: false,
+          describedToolCallCorrectionSent: false,
           repeatedResponseCount: 0,
           executedTools: [],
           replaceReReadRequiredPaths: [],
@@ -2660,9 +2903,12 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
 
   const visionSupported = useMemo(() => {
     if (!settings.model) return false;
+    // Prefer the catalog/metadata-backed classification (knows Ollama `vision`
+    // capability), then fall back to a name heuristic for anything unclassified.
+    if (modelClassifications[settings.model]?.vision) return true;
     const lower = settings.model.toLowerCase();
     return /vision|gpt-4o|gpt-4\.1|gpt-4\.5|gpt-5|gemini|claude|pixtral|llava|cogvlm|qwen2?-vl|internvl|minicpm/.test(lower);
-  }, [settings.model]);
+  }, [settings.model, modelClassifications]);
 
   // ── Whisper Auto-Start ──
   useEffect(() => {
@@ -2794,6 +3040,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       toolStatus,
       toolCallSupported,
       checkToolCallSupport,
+      modelClassifications,
       visionSupported,
       pendingToolApprovals,
       approvePendingToolApproval,
@@ -2827,6 +3074,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       toolStatus,
       toolCallSupported,
       checkToolCallSupport,
+      modelClassifications,
       visionSupported,
       pendingToolApprovals,
       approvePendingToolApproval,

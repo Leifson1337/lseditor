@@ -298,6 +298,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     toolStatus,
     toolCallSupported,
     checkToolCallSupport,
+    modelClassifications,
     visionSupported,
     pendingToolApprovals,
     approvePendingToolApproval,
@@ -485,6 +486,27 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     () => pendingEdits.find(edit => edit.id === selectedEditId) ?? null,
     [pendingEdits, selectedEditId]
   );
+
+  // Group the model list for the picker:
+  //   • toolCapable — chat models with confirmed native tool support.
+  //   • fallback    — chat models without (confirmed) native tools; still usable
+  //     via the prompt-based tool protocol, so they stay selectable.
+  //   • incompatible — embedding/reranker/audio/image models that can never drive
+  //     the agent. Shown but disabled so the user knows why.
+  const groupedModels = useMemo(() => {
+    const toolCapable: string[] = [];
+    const fallback: string[] = [];
+    const incompatible: string[] = [];
+    for (const model of models) {
+      const cls = modelClassifications[model];
+      const kind = cls?.kind ?? 'chat';
+      const support = cls?.toolSupport ?? 'unknown';
+      if (kind !== 'chat') incompatible.push(model);
+      else if (support === true) toolCapable.push(model);
+      else fallback.push(model);
+    }
+    return { toolCapable, fallback, incompatible };
+  }, [models, modelClassifications]);
 
   const currentPlan = useMemo(() => {
     const latestChecklistMessage = [...messages]
@@ -1991,9 +2013,27 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                         disabled={!models.length}
                       >
                         {models.length === 0 && <option value="">No models</option>}
-                        {models.map(model => (
-                          <option key={model} value={model}>{model}</option>
-                        ))}
+                        {groupedModels.toolCapable.length > 0 && (
+                          <optgroup label="✓ Tool-fähig (empfohlen)">
+                            {groupedModels.toolCapable.map(model => (
+                              <option key={model} value={model}>{model}</option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {groupedModels.fallback.length > 0 && (
+                          <optgroup label="~ Ohne native Tools (Prompt-Fallback)">
+                            {groupedModels.fallback.map(model => (
+                              <option key={model} value={model}>{model}</option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {groupedModels.incompatible.length > 0 && (
+                          <optgroup label="✕ Nicht kompatibel (Embedding/Vision/Audio)">
+                            {groupedModels.incompatible.map(model => (
+                              <option key={model} value={model} disabled>{model} — kein Chat-Modell</option>
+                            ))}
+                          </optgroup>
+                        )}
                       </select>
                       <button
                         className="ai-chat-icon-button"
@@ -2009,8 +2049,11 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                       <span className="ai-settings-popup-hint">
                         Tool Support: {' '}
                         <span style={{ color: toolCallSupported === true ? '#34d399' : toolCallSupported === false ? '#f87171' : '#6b7280' }}>
-                          {toolCallSupported === true ? 'Supported' : toolCallSupported === false ? 'Not Supported' : 'Unknown'}
+                          {toolCallSupported === true ? 'Supported' : toolCallSupported === false ? 'Not Supported (Prompt-Fallback)' : 'Unknown'}
                         </span>
+                        {modelClassifications[settings.model]?.reason && (
+                          <span className="ai-settings-popup-hint-detail"> · {modelClassifications[settings.model].reason}</span>
+                        )}
                       </span>
                     </div>
                   </div>

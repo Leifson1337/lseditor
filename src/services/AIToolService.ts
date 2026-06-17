@@ -680,7 +680,7 @@ export async function executeToolCall(
         return {
           tool_call_id: toolCall.id,
           role: 'tool',
-          content: `Error: Malformed JSON in ${toolCall.function.name} arguments. The arguments must be valid JSON. Received: ${raw.slice(0, 200)}${raw.length > 200 ? '...' : ''}. Fix the JSON and retry the tool call.`
+          content: `Error: Malformed JSON in ${toolCall.function.name} arguments. The arguments must be valid JSON with LITERAL values — every value must be a real string/number, never a variable, placeholder or expression (e.g. "content": chunk is invalid; write the actual file text as a JSON string: "content": "line1\\nline2"). Do not write code that builds the arguments. Received: ${raw.slice(0, 200)}${raw.length > 200 ? '...' : ''}. Retry the tool call with valid JSON.`
         };
       }
     }
