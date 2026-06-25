@@ -1,7 +1,8 @@
 {
   "name": "lseditor",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A lightweight code editor with integrated terminal",
+  "author": "Leifson1337",
   "main": "dist/main.js",
   "scripts": {
     "start": "npm run build && electron .",
@@ -12,7 +13,8 @@
     "test": "jest",
     "lint": "eslint . --ext .ts,.tsx",
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",
-    "rebuild": "electron-rebuild -f -w node-pty"
+    "rebuild": "electron-rebuild -f -w node-pty",
+    "dist": "npm run build && electron-builder --win nsis --publish never"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.4.2",
@@ -102,6 +104,7 @@
     "bufferutil": "^4.0.9",
     "css-loader": "^6.7.3",
     "electron": "^22.3.27",
+    "electron-builder": "^24.13.3",
     "electron-process-manager": "^1.2.0",
     "eslint": "^8.38.0",
     "eslint-config-prettier": "^8.8.0",
@@ -132,14 +135,45 @@
   },
   "build": {
     "appId": "com.lseditor.app",
+    "productName": "LS Editor",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "config/**/*",
+      "logo.png",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "config",
+        "to": "config"
+      }
+    ],
+    "asar": true,
     "mac": {
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "icon": "logo.png"
     },
     "win": {
-      "target": "nsis"
+      "target": [
+        "nsis"
+      ],
+      "icon": "logo.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "LS Editor"
     },
     "linux": {
-      "target": "AppImage"
+      "target": "AppImage",
+      "icon": "logo.png",
+      "category": "Development"
     }
   }
 }

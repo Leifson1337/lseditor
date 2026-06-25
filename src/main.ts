@@ -39,6 +39,18 @@ const terminalSessions = new Map<string, TerminalSession>();
 const aiCommandProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 const fsWatchers = new Map<string, fs.FSWatcher>();
 
+// A single changelog entry. In DATA the `changelog` field may be:
+//   • a string (treated as the notes/body of one entry),
+//   • one object like this, or
+//   • an array of these objects (one per release).
+interface ChangelogEntry {
+  version?: string;
+  title?: string;
+  date?: string;
+  highlights?: string[];
+  notes?: string;
+}
+
 interface RemoteVersionResponse {
   program?: {
     name?: string;
@@ -54,12 +66,16 @@ interface RemoteVersionResponse {
       url?: string;
     };
   };
+  // Optional "What's new" content shown on the first launch after an update.
+  changelog?: string | ChangelogEntry | ChangelogEntry[];
 }
 
 const VERSION_ENDPOINT = 'https://raw.githubusercontent.com/Bauvater/lseditor-version/refs/heads/main/DATA';
 let cachedRemoteVersion: RemoteVersionResponse | null = null;
 let lastVersionFetch = 0;
 let aboutWindow: BrowserWindow | null = null;
+let whatsNewWindow: BrowserWindow | null = null;
+const APP_STATE_FILE = 'app-state.json';
 const DEFAULT_BASE_PROMPT_PATH = path.join(process.cwd(), 'config', 'base-prompt.md');
 const APP_ICON_FILENAME = 'logo.png';
 
@@ -70,6 +86,78 @@ if (process.platform === 'win32') {
     console.warn('Failed to set AppUserModelID:', error);
   }
 }
+
+// --- GPU / HARDWARE-ACCELERATION RESILIENCE ---------------------------------
+// Some machines cannot run a GPU-accelerated Chromium window out of the box:
+// older integrated GPUs (e.g. Intel UHD Graphics) that Chromium blocklists,
+// virtual machines, remote desktops, or systems without a discrete (Nvidia)
+// GPU. On those the GPU process can crash on launch and the window stays blank
+// or the app never shows. We make startup robust by:
+//   1. allowing a software (SwiftShader) fallback so WebGL never hard-fails,
+//   2. ignoring Chromium's GPU blocklist so capable-but-unlisted iGPUs work,
+//   3. persisting a "disable hardware acceleration" flag the first time the GPU
+//      process crashes and relaunching once, so the next start is fully
+//      software-rendered and therefore always usable.
+const GPU_PREFS_FILE = 'gpu-preferences.json';
+
+function getGpuPrefsPath(): string {
+  return path.join(app.getPath('userData'), GPU_PREFS_FILE);
+}
+
+function readGpuPrefs(): { disableHardwareAcceleration?: boolean } {
+  try {
+    return JSON.parse(fs.readFileSync(getGpuPrefsPath(), 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function writeGpuPrefs(prefs: { disableHardwareAcceleration?: boolean }): void {
+  try {
+    fs.mkdirSync(path.dirname(getGpuPrefsPath()), { recursive: true });
+    fs.writeFileSync(getGpuPrefsPath(), JSON.stringify(prefs));
+  } catch (error) {
+    console.warn('Failed to persist GPU preferences:', error);
+  }
+}
+
+// These switches and the disable call MUST be applied before app "ready".
+try {
+  // Let WebGL/WebGPU fall back to software rendering instead of failing outright.
+  app.commandLine.appendSwitch('enable-unsafe-swiftshader');
+  // Use the GPU even when Chromium's blocklist flags the driver (old Intel UHD).
+  app.commandLine.appendSwitch('ignore-gpu-blocklist');
+
+  const forceDisable = process.env.LSEDITOR_DISABLE_GPU === '1';
+  if (forceDisable || readGpuPrefs().disableHardwareAcceleration) {
+    app.disableHardwareAcceleration();
+  }
+} catch (error) {
+  console.warn('Failed to apply GPU startup switches:', error);
+}
+
+let gpuCrashHandled = false;
+// When the GPU process dies abnormally, drop to software rendering and relaunch
+// once so the editor is usable on this machine from then on.
+app.on('child-process-gone', (_event, details) => {
+  if (
+    details.type === 'GPU' &&
+    details.reason !== 'clean-exit' &&
+    details.reason !== 'killed'
+  ) {
+    console.warn('GPU process gone:', details.reason);
+    if (!gpuCrashHandled && !readGpuPrefs().disableHardwareAcceleration) {
+      gpuCrashHandled = true;
+      writeGpuPrefs({ disableHardwareAcceleration: true });
+      try {
+        app.relaunch();
+        app.exit(0);
+      } catch (error) {
+        console.warn('Failed to relaunch after GPU crash:', error);
+      }
+    }
+  }
+});
 
 // --- SECURITY UTILITIES ---
 
@@ -215,15 +303,29 @@ function runSafeCommand(
       }
 
       let child;
-      if (needsShell(trimmed)) {
-        // Route through shell for commands that need pipes, redirects, chaining etc.
-        const shellExe = process.platform === 'win32'
-          ? (process.env.COMSPEC || 'cmd.exe')
-          : (process.env.SHELL || '/bin/bash');
-        const shellFlag = process.platform === 'win32' ? '/c' : '-c';
-        child = spawnProcess(shellExe, [shellFlag, trimmed], {
+      if (process.platform === 'win32') {
+        // Run the WHOLE command line through cmd.exe via shell:true. Node invokes
+        // `cmd.exe /d /s /c "<command>"` with verbatim arguments, so the original
+        // quoting is preserved. This is the only reliable option on Windows:
+        //   • quoted paths with spaces ("C:\...\Test Projekt\f.py") stay intact
+        //     instead of being split on the space,
+        //   • .cmd/.bat shims (npm, npx, git, tsc, yarn, the "py"/"python" launcher)
+        //     resolve via PATHEXT instead of failing with ENOENT,
+        //   • pipes, redirects and && chaining work like a real terminal.
+        // Manually tokenizing + re-spawning (the old path) corrupted both quoted
+        // arguments and cmd's own quote handling, which is what broke commands
+        // like `python "C:\...\Test Projekt\gta6.py"`.
+        child = spawnProcess(trimmed, {
           cwd,
           windowsHide: true,
+          shell: true,
+          env: process.env
+        });
+      } else if (needsShell(trimmed)) {
+        // Route through the shell for commands that need pipes, redirects, chaining.
+        const shellExe = process.env.SHELL || '/bin/bash';
+        child = spawnProcess(shellExe, ['-c', trimmed], {
+          cwd,
           shell: false,
           env: process.env
         });
@@ -234,7 +336,6 @@ function runSafeCommand(
         }
         child = spawnProcess(file, args, {
           cwd,
-          windowsHide: true,
           shell: false,
           env: process.env
         });
@@ -418,6 +519,258 @@ function fetchRemoteVersion(): Promise<RemoteVersionResponse | null> {
   });
 }
 
+/**
+ * Compares two dotted version strings semantically.
+ * Returns > 0 if a is newer than b, < 0 if older, 0 if equal.
+ * Handles differing segment counts ("1.0" vs "1.0.0"), a leading "v",
+ * and ignores any pre-release suffix ("1.2.0-beta" → "1.2.0").
+ */
+function compareVersions(a: string, b: string): number {
+  const normalize = (v: string) =>
+    String(v ?? '')
+      .trim()
+      .replace(/^v/i, '')
+      .split(/[-+]/)[0]
+      .split('.')
+      .map(part => parseInt(part, 10) || 0);
+  const pa = normalize(a);
+  const pb = normalize(b);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const da = pa[i] ?? 0;
+    const db = pb[i] ?? 0;
+    if (da !== db) return da > db ? 1 : -1;
+  }
+  return 0;
+}
+
+/** Best-effort "releases" URL derived from the repository URL in the version feed. */
+function deriveReleasesUrl(repoUrl?: string): string {
+  const fallback = 'https://github.com/Leifson1337/lseditor/releases/latest';
+  if (!repoUrl) return fallback;
+  try {
+    const parsed = new URL(repoUrl);
+    const clean = `${parsed.origin}${parsed.pathname}`.replace(/\/$/, '').replace(/\.git$/i, '');
+    return `${clean}/releases/latest`;
+  } catch {
+    return fallback;
+  }
+}
+
+interface UpdateInfo {
+  currentVersion: string;
+  latestVersion: string;
+  updateAvailable: boolean;
+  releasesUrl: string;
+  repositoryUrl?: string;
+  error?: string;
+}
+
+/**
+ * Fetches the latest version from the LS Editor version repo (DATA feed) and
+ * compares it to the installed version. Used by both the startup notification
+ * and the manual "check for updates" IPC so the logic stays in one place.
+ */
+async function getUpdateInfo(): Promise<UpdateInfo> {
+  const currentVersion = (() => {
+    try { return app.getVersion(); } catch { return '0.0.0'; }
+  })();
+  const remote = await fetchRemoteVersion();
+  const latestVersion = remote?.program?.version || currentVersion;
+  const repositoryUrl = remote?.program?.repository?.url;
+  return {
+    currentVersion,
+    latestVersion,
+    updateAvailable: compareVersions(latestVersion, currentVersion) > 0,
+    releasesUrl: deriveReleasesUrl(repositoryUrl),
+    repositoryUrl
+  };
+}
+
+// ── Persisted app state (e.g. last-run version, used to detect updates) ──
+function getAppStatePath(): string {
+  return path.join(app.getPath('userData'), APP_STATE_FILE);
+}
+
+function readAppState(): { lastSeenVersion?: string } {
+  try {
+    return JSON.parse(fs.readFileSync(getAppStatePath(), 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function writeAppState(patch: { lastSeenVersion?: string }): void {
+  try {
+    const next = { ...readAppState(), ...patch };
+    fs.mkdirSync(path.dirname(getAppStatePath()), { recursive: true });
+    fs.writeFileSync(getAppStatePath(), JSON.stringify(next));
+  } catch (error) {
+    console.warn('Failed to persist app state:', error);
+  }
+}
+
+// Normalizes the flexible `changelog` field from DATA into a list of entries.
+function normalizeChangelog(changelog: RemoteVersionResponse['changelog']): ChangelogEntry[] {
+  if (!changelog) return [];
+  if (typeof changelog === 'string') {
+    const text = changelog.trim();
+    return text ? [{ notes: text }] : [];
+  }
+  if (Array.isArray(changelog)) {
+    return changelog.filter(entry => entry && typeof entry === 'object');
+  }
+  if (typeof changelog === 'object') {
+    return [changelog];
+  }
+  return [];
+}
+
+// Picks the changelog entries to show after an update: everything newer than the
+// previously-run version (so a user who skipped releases sees them all). If the
+// entries carry no version info, the whole changelog is shown.
+function selectChangelogForUpdate(
+  entries: ChangelogEntry[],
+  previousVersion: string | undefined,
+  currentVersion: string
+): ChangelogEntry[] {
+  if (!entries.length) return [];
+  const versioned = entries.filter(e => typeof e.version === 'string' && e.version.trim());
+  if (!versioned.length || !previousVersion) {
+    return entries;
+  }
+  const relevant = versioned.filter(
+    e =>
+      compareVersions(e.version as string, previousVersion) > 0 &&
+      compareVersions(e.version as string, currentVersion) <= 0
+  );
+  return relevant.length ? relevant : versioned.filter(e => compareVersions(e.version as string, previousVersion) > 0);
+}
+
+const escapeHtml = (value: string): string =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+async function openWhatsNewWindow(entries: ChangelogEntry[], headlineVersion: string): Promise<void> {
+  if (whatsNewWindow) {
+    whatsNewWindow.focus();
+    return;
+  }
+  if (!entries.length) return;
+
+  const logoDataUrl = getAppIconDataUrl();
+  const windowIcon = getAppIconImage();
+  const logoMarkup = logoDataUrl
+    ? `<div class="brand"><img src="${logoDataUrl}" alt="LS Editor" /></div>`
+    : `<div class="brand brand--ph">LS</div>`;
+
+  const entriesMarkup = entries
+    .map(entry => {
+      const heading = entry.title || (entry.version ? `Version ${entry.version}` : 'What’s new');
+      const dateBadge = entry.date ? `<span class="date">${escapeHtml(entry.date)}</span>` : '';
+      const versionBadge = entry.version ? `<span class="ver">v${escapeHtml(entry.version)}</span>` : '';
+      const highlights = Array.isArray(entry.highlights) && entry.highlights.length
+        ? `<ul class="highlights">${entry.highlights.map(h => `<li>${escapeHtml(String(h))}</li>`).join('')}</ul>`
+        : '';
+      const notes = entry.notes
+        ? `<div class="notes">${escapeHtml(entry.notes).replace(/\n/g, '<br/>')}</div>`
+        : '';
+      return `<section class="entry"><div class="entry-head"><h2>${escapeHtml(heading)}</h2>${versionBadge}${dateBadge}</div>${highlights}${notes}</section>`;
+    })
+    .join('');
+
+  const html = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8" /><style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; font-family: 'Segoe UI', system-ui, sans-serif;
+    background: radial-gradient(circle at top, rgba(59,130,246,0.28), rgba(8,11,20,0.96)), #080b14;
+    color: #eef2ff; display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 14px; padding: 22px 26px 14px; }
+  .brand { width: 52px; height: 52px; border-radius: 14px; overflow: hidden; flex: 0 0 auto;
+    background: linear-gradient(145deg, #4f6fff, #5b9bff); display: flex; align-items: center; justify-content: center; }
+  .brand img { width: 78%; height: 78%; object-fit: contain; }
+  .brand--ph { font-weight: 700; }
+  .head-text h1 { margin: 0; font-size: 20px; }
+  .head-text p { margin: 3px 0 0; font-size: 12.5px; color: #aab4d4; }
+  .scroll { flex: 1 1 auto; overflow: auto; padding: 8px 26px 16px; }
+  .entry { padding: 14px 0; border-top: 1px solid rgba(255,255,255,0.07); }
+  .entry:first-child { border-top: none; }
+  .entry-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .entry-head h2 { margin: 0; font-size: 15.5px; }
+  .ver { font-size: 11px; padding: 2px 9px; border-radius: 999px; background: rgba(96,165,250,0.18); color: #93c5fd; }
+  .date { font-size: 11px; color: #8b93b4; }
+  ul.highlights { margin: 10px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 7px; }
+  ul.highlights li { position: relative; padding-left: 22px; font-size: 13px; line-height: 1.5; color: #d7ddf5; }
+  ul.highlights li::before { content: ''; position: absolute; left: 4px; top: 7px; width: 7px; height: 7px;
+    border-radius: 50%; background: linear-gradient(145deg, #34d399, #60a5fa); }
+  .notes { margin-top: 10px; font-size: 12.5px; line-height: 1.55; color: #c3cbe8; }
+  footer { padding: 12px 26px 18px; display: flex; justify-content: flex-end; }
+  button { border: none; border-radius: 9px; padding: 9px 18px; font-size: 13px; font-weight: 600; cursor: pointer;
+    background: linear-gradient(180deg, #3b82f6, #2563eb); color: #fff; }
+  button:hover { filter: brightness(1.08); }
+</style></head><body>
+  <header>${logoMarkup}<div class="head-text"><h1>What’s new</h1><p>LS Editor ${escapeHtml(headlineVersion)}</p></div></header>
+  <div class="scroll">${entriesMarkup}</div>
+  <footer><button onclick="window.close()">Los geht’s</button></footer>
+</body></html>`;
+
+  whatsNewWindow = new BrowserWindow({
+    width: 560,
+    height: 560,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    autoHideMenuBar: true,
+    title: 'What’s new – LS Editor',
+    icon: windowIcon ?? resolveAppIconPath(),
+    modal: Boolean(mainWindow),
+    parent: mainWindow ?? undefined,
+    webPreferences: { nodeIntegration: false, contextIsolation: true }
+  });
+
+  whatsNewWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  whatsNewWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  whatsNewWindow.on('closed', () => { whatsNewWindow = null; });
+}
+
+// On the first launch after an update, show the remote changelog ("What's new").
+async function maybeShowWhatsNew(): Promise<void> {
+  let currentVersion = '0.0.0';
+  try { currentVersion = app.getVersion(); } catch { /* noop */ }
+
+  const state = readAppState();
+  const previousVersion = state.lastSeenVersion;
+
+  // Always remember the version we ran so the next update is detected correctly.
+  writeAppState({ lastSeenVersion: currentVersion });
+
+  // First ever run (no record) — don't surface a changelog, just record.
+  if (!previousVersion) return;
+  // Not an upgrade (same or downgrade) — nothing to show.
+  if (compareVersions(currentVersion, previousVersion) <= 0) return;
+
+  try {
+    const remote = await fetchRemoteVersion();
+    const entries = selectChangelogForUpdate(
+      normalizeChangelog(remote?.changelog),
+      previousVersion,
+      currentVersion
+    );
+    if (entries.length) {
+      await openWhatsNewWindow(entries, currentVersion);
+    }
+  } catch (error) {
+    console.warn('Failed to show changelog:', error);
+  }
+}
+
 async function openAboutWindow(): Promise<void> {
   if (aboutWindow) {
     aboutWindow.focus();
@@ -426,7 +779,9 @@ async function openAboutWindow(): Promise<void> {
 
   const remoteVersion = await fetchRemoteVersion();
   const programInfo = remoteVersion?.program ?? {};
-  const version = programInfo.version || app.getVersion();
+  // The installed version must come from the app itself — not the remote feed,
+  // otherwise the "current version" shown always equals the latest one.
+  const version = (() => { try { return app.getVersion(); } catch { return programInfo.version || '0.0.0'; } })();
   const description = programInfo.description || 'A lightweight editor with integrated terminal.';
   const repoUrl = programInfo.repository?.url || 'https://github.com/Leifson1337/lseditor';
   const licenseUrl = programInfo.license?.url || 'https://github.com/Leifson1337/lseditor/blob/master/LICENSE';
@@ -460,9 +815,9 @@ async function openAboutWindow(): Promise<void> {
     parent: mainWindow ?? undefined
   });
 
-  const latestVersion = programInfo.version || remoteVersion?.program?.version || version;
+  const latestVersion = programInfo.version || version;
   const lastCheckedLabel = lastVersionFetch ? new Date(lastVersionFetch).toLocaleString() : 'Nie';
-  const updateBadge = latestVersion && latestVersion !== version ? 'Update verfuegbar' : 'Aktuell';
+  const updateBadge = compareVersions(latestVersion, version) > 0 ? 'Update verfuegbar' : 'Aktuell';
 
   const html = `<!doctype html>
 <html lang="en">
@@ -1538,6 +1893,39 @@ ipcMain.handle('ollama:status', async event => {
   }
 });
 
+// Is Ollama Cloud usable from here? Cloud models run on Ollama's servers and
+// are proxied by the local daemon when the user is signed in. We report:
+//   running   — the local daemon is up (required to proxy cloud models),
+//   reachable — ollama.com is reachable (cloud needs internet),
+//   available — both of the above (the "if available" gate for the UI).
+// Whether the user is actually signed in can only be confirmed by trying to
+// pull/run a cloud model, so an auth error there drives the sign-in hint.
+ipcMain.handle('ollama:cloudStatus', async event => {
+  assertTrustedSender(event);
+  let running = false;
+  try {
+    const res = await ollamaRequest('GET', '/api/version', undefined, 2500);
+    running = res.status === 200;
+  } catch {
+    running = false;
+  }
+
+  const reachable = await new Promise<boolean>(resolve => {
+    try {
+      const req = https.get('https://ollama.com/', { timeout: 4000 }, res => {
+        res.resume();
+        resolve((res.statusCode || 0) < 500);
+      });
+      req.on('error', () => resolve(false));
+      req.on('timeout', () => { req.destroy(); resolve(false); });
+    } catch {
+      resolve(false);
+    }
+  });
+
+  return { running, reachable, available: running && reachable };
+});
+
 // List locally installed models.
 ipcMain.handle('ollama:list', async event => {
   assertTrustedSender(event);
@@ -1706,8 +2094,11 @@ ipcMain.handle('ollama:pull', async (event, modelName: unknown) => {
   // first segment with a dot, e.g. ollama.com/library/foo). If not, it's a bare
   // library name that we can re-route to the ollama.com registry on failure.
   const hasExplicitHost = /^[^/]+\.[^/]+\//.test(name);
+  // Cloud models (e.g. "gpt-oss:120b-cloud") are not served from the public
+  // "/library" registry, so the ollama.com library fallback must not apply.
+  const isCloud = /-cloud$/i.test(name);
   const fallbackName = `ollama.com/library/${name.replace(/^library\//, '')}`;
-  const canFallback = !hasExplicitHost;
+  const canFallback = !hasExplicitHost && !isCloud;
 
   // If we already know the default registry is blocked, skip straight to ollama.com.
   if (canFallback && ollamaDefaultRegistryBlocked) {
@@ -1758,6 +2149,41 @@ ipcMain.handle('app:getVersion', () => {
 
 ipcMain.handle('app:getUserDataPath', () => {
   return app.getPath('userData');
+});
+
+// Manually open the "What's new" changelog window (e.g. from a menu/About link).
+ipcMain.handle('app:showWhatsNew', async event => {
+  assertTrustedSender(event);
+  try {
+    let currentVersion = '0.0.0';
+    try { currentVersion = app.getVersion(); } catch { /* noop */ }
+    const remote = await fetchRemoteVersion();
+    const entries = normalizeChangelog(remote?.changelog);
+    if (!entries.length) return false;
+    await openWhatsNewWindow(entries, remote?.program?.version || currentVersion);
+    return true;
+  } catch (error) {
+    console.warn('Failed to open What\'s new window:', error);
+    return false;
+  }
+});
+
+// Manual "check for updates" — queries the version feed and returns the result
+// so the renderer can show an up-to-date / update-available state on demand.
+ipcMain.handle('app:checkForUpdates', async event => {
+  assertTrustedSender(event);
+  try {
+    return await getUpdateInfo();
+  } catch (error) {
+    const currentVersion = (() => { try { return app.getVersion(); } catch { return '0.0.0'; } })();
+    return {
+      currentVersion,
+      latestVersion: currentVersion,
+      updateAvailable: false,
+      releasesUrl: deriveReleasesUrl(),
+      error: error instanceof Error ? error.message : String(error)
+    } as UpdateInfo;
+  }
 });
 
 ipcMain.handle('workspace:setRoot', (event, workspacePath: unknown) => {
@@ -1812,6 +2238,26 @@ ipcMain.handle('dialog:inputBox', async (event, options) => {
     ? await dialog.showMessageBox(win, msgBoxOptions)
     : await dialog.showMessageBox(msgBoxOptions);
   return result.response === 0 ? (options?.value || '') : null;
+});
+
+// Generic message box (used e.g. for the "directory exists / overwrite?" prompt).
+// Returns { response } so the renderer can branch on the clicked button index.
+ipcMain.handle('dialog:showMessageBox', async (event, options) => {
+  assertTrustedSender(event);
+  const win = mainWindow;
+  const msgBoxOptions: MessageBoxOptions = {
+    type: options?.type || 'info',
+    title: options?.title || '',
+    message: options?.message || '',
+    detail: options?.detail,
+    buttons: Array.isArray(options?.buttons) && options.buttons.length ? options.buttons : ['OK'],
+    defaultId: typeof options?.defaultId === 'number' ? options.defaultId : 0,
+    cancelId: typeof options?.cancelId === 'number' ? options.cancelId : undefined
+  };
+  const result = win
+    ? await dialog.showMessageBox(win, msgBoxOptions)
+    : await dialog.showMessageBox(msgBoxOptions);
+  return { response: result.response, checkboxChecked: result.checkboxChecked };
 });
 
 ipcMain.handle('shell:openPath', async (_event, targetPath: unknown) => {
@@ -2247,30 +2693,54 @@ export {
 
 // Electron Lifecycle: Services und Fenster nach App-Start initialisieren
 app.whenReady().then(async () => {
-  await initializeServices();
+  // A failure to initialize optional services (e.g. AI) must never stop the
+  // editor itself from opening — log it and continue so the window still shows.
+  try {
+    await initializeServices();
+  } catch (error) {
+    console.error('Service initialization failed, continuing without it:', error);
+  }
   setupIpcHandlers();
   setupFsIpcHandlers();
   setupTerminalIpcHandlers();
   createSplashWindow();
   await createWindow();
 
-  // Check for updates
-  const remoteVersion = await fetchRemoteVersion();
-  if (remoteVersion && remoteVersion.program && remoteVersion.program.version) {
-    const currentVersion = app.getVersion();
-    if (remoteVersion.program.version > currentVersion) {
+  // Check for updates against the LS Editor version repo (DATA feed).
+  try {
+    const update = await getUpdateInfo();
+    if (update.updateAvailable) {
       const notification = new Notification({
         title: 'Update available',
-        body: `A new version (${remoteVersion.program.version}) is available.`,
+        body: `LS Editor ${update.latestVersion} is available (you have ${update.currentVersion}). Click to download.`,
       });
       notification.show();
       notification.on('click', () => {
-        if (remoteVersion.program?.repository?.url) {
-          shell.openExternal(remoteVersion.program.repository.url);
-        }
+        shell.openExternal(update.releasesUrl);
       });
+      // Let the renderer surface an in-app update banner as well.
+      if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+        mainWindow.webContents.send('app:updateAvailable', update);
+      }
     }
+  } catch (error) {
+    console.warn('Update check failed:', error);
   }
+
+  // First launch after an update → show the "What's new" changelog, once the
+  // main window is visible (so it doesn't pop over the splash screen).
+  const showWhatsNewWhenReady = () => {
+    if (!mainWindow) {
+      void maybeShowWhatsNew();
+      return;
+    }
+    if (mainWindow.isVisible()) {
+      void maybeShowWhatsNew();
+    } else {
+      mainWindow.once('show', () => { void maybeShowWhatsNew(); });
+    }
+  };
+  showWhatsNewWhenReady();
 });
 
 app.on('before-quit', () => {

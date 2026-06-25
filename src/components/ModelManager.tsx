@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { FiX, FiDownload, FiTrash2, FiCheckCircle, FiRefreshCw, FiSearch, FiCpu, FiExternalLink, FiZap, FiAlertTriangle } from 'react-icons/fi';
+import { FiX, FiDownload, FiTrash2, FiCheckCircle, FiRefreshCw, FiSearch, FiCpu, FiExternalLink, FiZap, FiAlertTriangle, FiCloud, FiCloudOff } from 'react-icons/fi';
 import { SiMeta, SiGoogle, SiAlibabacloud, SiMicrosoft } from 'react-icons/si';
 import { LuLoader2 } from 'react-icons/lu';
 import { useAI } from '../contexts/AIContext';
@@ -40,6 +40,15 @@ interface CatalogEntry {
   size: string;
   family: FamilyId;
   tags: string[];
+  // Cloud models run on Ollama's servers (proxied by the local daemon) and
+  // require a free Ollama sign-in rather than a local weight download.
+  cloud?: boolean;
+}
+
+interface CloudStatus {
+  running: boolean;
+  reachable: boolean;
+  available: boolean;
 }
 
 // Visual identity for each model family — brand icon where available, otherwise
@@ -95,6 +104,19 @@ const MODEL_CATALOG: CatalogEntry[] = [
   { name: 'starcoder2:3b', label: 'StarCoder2 3B', publisher: 'BigCode', description: 'Code completion model trained on permissive sources.', size: '1.7 GB', family: 'starcoder', tags: ['coding', 'fast'] }
 ];
 
+// Ollama Cloud models — huge frontier-class models that run on Ollama's
+// infrastructure instead of locally. They need a free Ollama account
+// (sign in once via `ollama signin` or at ollama.com), but no local download
+// and no powerful GPU. Selectable here only when cloud access is available.
+const CLOUD_CATALOG: CatalogEntry[] = [
+  { name: 'qwen3-coder:480b-cloud', label: 'Qwen3 Coder 480B', publisher: 'Alibaba', description: 'Frontier coding model running in Ollama Cloud — no local GPU needed.', size: 'Cloud', family: 'qwen', tags: ['cloud', 'coding', 'recommended'], cloud: true },
+  { name: 'gpt-oss:120b-cloud', label: 'GPT-OSS 120B', publisher: 'OpenAI', description: 'Large open-weight GPT model hosted in Ollama Cloud.', size: 'Cloud', family: 'generic', tags: ['cloud', 'chat'], cloud: true },
+  { name: 'gpt-oss:20b-cloud', label: 'GPT-OSS 20B', publisher: 'OpenAI', description: 'Faster open-weight GPT model hosted in Ollama Cloud.', size: 'Cloud', family: 'generic', tags: ['cloud', 'chat', 'fast'], cloud: true },
+  { name: 'deepseek-v3.1:671b-cloud', label: 'DeepSeek V3.1 671B', publisher: 'DeepSeek', description: 'Massive reasoning + coding model running in Ollama Cloud.', size: 'Cloud', family: 'deepseek', tags: ['cloud', 'coding', 'reasoning'], cloud: true }
+];
+
+const FULL_CATALOG: CatalogEntry[] = [...MODEL_CATALOG, ...CLOUD_CATALOG];
+
 const OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
 
 const formatBytes = (bytes?: number): string => {
@@ -132,10 +154,12 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ onClose }) => {
   const [pulls, setPulls] = useState<Record<string, PullProgress>>({});
   const [busyModel, setBusyModel] = useState<string | null>(null);
   const [errorText, setErrorText] = useState<string>('');
-  const [filter, setFilter] = useState<'all' | 'coding' | 'chat'>('all');
+  const [filter, setFilter] = useState<'all' | 'coding' | 'chat' | 'cloud'>('all');
+  const [cloudStatus, setCloudStatus] = useState<CloudStatus | null>(null);
 
   const ipc = (window as any).electron?.ipcRenderer;
   const usingOllama = settings.baseUrl?.includes('11434');
+  const cloudAvailable = !!cloudStatus?.available;
 
   const checkStatus = useCallback(async () => {
     setCheckingStatus(true);
@@ -148,6 +172,15 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ onClose }) => {
       return false;
     } finally {
       setCheckingStatus(false);
+    }
+  }, [ipc]);
+
+  const checkCloudStatus = useCallback(async () => {
+    try {
+      const result: CloudStatus = await ipc?.invoke('ollama:cloudStatus');
+      setCloudStatus(result || { running: false, reachable: false, available: false });
+    } catch {
+      setCloudStatus({ running: false, reachable: false, available: false });
     }
   }, [ipc]);
 
@@ -166,9 +199,12 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ onClose }) => {
   useEffect(() => {
     (async () => {
       const running = await checkStatus();
-      if (running) await loadInstalled();
+      if (running) {
+        await loadInstalled();
+        checkCloudStatus();
+      }
     })();
-  }, [checkStatus, loadInstalled]);
+  }, [checkStatus, loadInstalled, checkCloudStatus]);
 
   // Subscribe to pull progress events from the main process.
   useEffect(() => {
@@ -249,8 +285,12 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ onClose }) => {
   const actualInstalledName = useCallback((name: string) => installedByBare.get(bareName(name)) || name, [installedByBare]);
   const normalizedQuery = query.trim().toLowerCase();
 
-  const filteredCatalog = useMemo(() => MODEL_CATALOG.filter(entry => {
-    if (filter !== 'all' && !entry.tags.includes(filter)) return false;
+  const filteredCatalog = useMemo(() => FULL_CATALOG.filter(entry => {
+    if (filter === 'cloud') {
+      if (!entry.cloud) return false;
+    } else if (filter !== 'all' && !entry.tags.includes(filter)) {
+      return false;
+    }
     if (!normalizedQuery) return true;
     return (
       entry.name.toLowerCase().includes(normalizedQuery) ||
@@ -268,6 +308,11 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ onClose }) => {
   const isNetworkError = (msg?: string) =>
     !!msg && /manifest|connection|timed out|wsarecv|dial|refused|lookup|network|registry/i.test(msg);
 
+  const isAuthError = (msg?: string) =>
+    !!msg && /sign[ -]?in|signin|unauthor|\b401\b|\b403\b|authenticat|forbidden|account|api key/i.test(msg);
+
+  const cloudHint = 'Cloud models run on Ollama’s servers. Make sure Ollama is running, you are online, and signed in (run "ollama signin" once, or sign in at ollama.com).';
+
   const renderProgress = (modelName: string) => {
     const progress = pulls[modelName];
     if (!progress) return null;
@@ -283,7 +328,14 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ onClose }) => {
             <div>
               <div className="mm-pull-error-title">Download failed</div>
               <div className="mm-pull-error-msg">{progress.error}</div>
-              {isNetworkError(progress.error) && (
+              {isAuthError(progress.error) && (
+                <div className="mm-pull-error-hint">
+                  This looks like a cloud sign-in issue. Run <code>ollama signin</code> once (or sign in at{' '}
+                  <span className="mm-link" onClick={() => ipc?.invoke('shell:openExternal', 'https://ollama.com/signin')}>ollama.com <FiExternalLink size={11} /></span>),
+                  then try again.
+                </div>
+              )}
+              {!isAuthError(progress.error) && isNetworkError(progress.error) && (
                 <div className="mm-pull-error-hint">
                   Ollama couldn't reach its model registry. Check your internet connection, VPN, or
                   per-app firewall (e.g. NetLimiter) and allow <code>ollama.exe</code> to access the network.
@@ -315,7 +367,7 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ onClose }) => {
     );
   };
 
-  const renderActions = (name: string) => {
+  const renderActions = (name: string, entry?: CatalogEntry) => {
     const installedHere = isInstalled(name);
     const actual = actualInstalledName(name);
     const active = usingOllama && (settings.model === name || settings.model === actual);
@@ -323,6 +375,13 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ onClose }) => {
     if (active) return <span className="mm-active-pill"><FiCheckCircle size={13} /> In use</span>;
     if (installedHere) return <button className="mm-use-btn" onClick={() => handleUse(actual)}><FiZap size={13} /> Use</button>;
     if (isPulling) return <button className="mm-cancel-btn" onClick={() => handleCancel(name)}>Cancel</button>;
+    // Cloud models are only selectable when cloud access is available.
+    if (entry?.cloud && !cloudAvailable) {
+      return <span className="mm-active-pill mm-cloud-pill" title={cloudHint}><FiCloudOff size={13} /> Unavailable</span>;
+    }
+    if (entry?.cloud) {
+      return <button className="mm-download-btn" onClick={() => handlePull(name)} title={cloudHint}><FiCloud size={13} /> Add</button>;
+    }
     return <button className="mm-download-btn" onClick={() => handlePull(name)}><FiDownload size={13} /> Get</button>;
   };
 
@@ -378,9 +437,9 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ onClose }) => {
                 {query && <button className="mm-search-clear" onClick={() => setQuery('')}><FiX size={13} /></button>}
               </div>
               <div className="mm-filters">
-                {(['all', 'coding', 'chat'] as const).map(f => (
+                {(['all', 'coding', 'chat', 'cloud'] as const).map(f => (
                   <button key={f} className={`mm-filter ${filter === f ? 'active' : ''}`} onClick={() => setFilter(f)}>
-                    {f === 'all' ? 'All' : f === 'coding' ? 'Coding' : 'Chat'}
+                    {f === 'all' ? 'All' : f === 'coding' ? 'Coding' : f === 'chat' ? 'Chat' : 'Cloud'}
                   </button>
                 ))}
               </div>
@@ -418,6 +477,26 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ onClose }) => {
                   {normalizedQuery || filter !== 'all' ? `Results (${filteredCatalog.length})` : 'Available to download'}
                 </h3>
 
+                {filter === 'cloud' && (
+                  <div className={`mm-cloud-banner ${cloudAvailable ? 'ok' : 'off'}`}>
+                    {cloudAvailable ? <FiCloud size={14} /> : <FiCloudOff size={14} />}
+                    <span>
+                      {cloudAvailable
+                        ? 'Cloud models run on Ollama’s servers — no local GPU or download needed. A free Ollama sign-in is required the first time.'
+                        : 'Cloud is currently unavailable. Make sure Ollama is running and you are online, then '}
+                      {!cloudAvailable && (
+                        <span className="mm-link" onClick={() => { checkStatus(); checkCloudStatus(); }}>retry</span>
+                      )}
+                      {!cloudAvailable && '. Sign in once with '}
+                      {!cloudAvailable && <code>ollama signin</code>}
+                      {!cloudAvailable && ' or at '}
+                      {!cloudAvailable && (
+                        <span className="mm-link" onClick={() => ipc?.invoke('shell:openExternal', 'https://ollama.com/signin')}>ollama.com <FiExternalLink size={11} /></span>
+                      )}
+                    </span>
+                  </div>
+                )}
+
                 {filteredCatalog.length === 0 ? (
                   <div className="mm-empty">
                     {offerDirectPull ? (
@@ -449,7 +528,7 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ onClose }) => {
                         </div>
                         <div className="mm-card-footer">
                           <code className="mm-card-tagname">{entry.name}</code>
-                          {renderActions(entry.name)}
+                          {renderActions(entry.name, entry)}
                         </div>
                         {renderProgress(entry.name)}
                       </div>

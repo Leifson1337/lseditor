@@ -72,6 +72,11 @@ export interface AISettings {
   speechMicDeviceId: string;
   speechAlwaysReady: boolean;
   subAgentsEnabled: boolean;
+  // When enabled, the agent first drafts a step-by-step plan that the user must
+  // approve (or that auto-approves after planAutoApproveSeconds) before any work
+  // runs. Keeps the agent on-scope and ensures nothing is forgotten.
+  planningEnabled: boolean;
+  planAutoApproveSeconds: number;
 }
 
 export type SubAgentStatus = 'planning' | 'running' | 'done' | 'error';
@@ -108,6 +113,19 @@ export interface PendingToolApproval {
   toolCalls: ToolCallInfo[];
 }
 
+export interface PlanStep {
+  id: string;
+  text: string;
+}
+
+export interface PendingPlanApproval {
+  id: string;
+  conversationId: string;
+  title: string;
+  steps: PlanStep[];
+  autoApproveSeconds: number;
+}
+
 interface AIContextType {
   conversations: Conversation[];
   activeConversationId: string;
@@ -139,6 +157,9 @@ interface AIContextType {
   pendingToolApprovals: PendingToolApproval[];
   approvePendingToolApproval: (id: string) => Promise<void>;
   rejectPendingToolApproval: (id: string) => Promise<void>;
+  pendingPlanApproval: PendingPlanApproval | null;
+  approvePlan: (id: string, editedSteps?: PlanStep[]) => Promise<void>;
+  rejectPlan: (id: string) => void;
   subAgents: SubAgentInfo[];
   spawnSubAgents: (parentTask: string) => Promise<void>;
   clearSubAgents: () => void;
@@ -166,7 +187,9 @@ const defaultSettings: AISettings = {
   speechWhisperModel: '',
   speechMicDeviceId: '',
   speechAlwaysReady: false,
-  subAgentsEnabled: false
+  subAgentsEnabled: false,
+  planningEnabled: true,
+  planAutoApproveSeconds: 60
 };
 
 const MAX_AGENT_LOOPS = 30;
@@ -571,12 +594,16 @@ const PROMPT_FALLBACK_TOOL_PROTOCOL = [
 const createRuntimeModePrompt = (settings: AISettings, nativeTools = true) => {
   const TOOL_PROTOCOL = nativeTools ? NATIVE_TOOL_PROTOCOL : PROMPT_FALLBACK_TOOL_PROTOCOL;
   const toolGuidance = [
-    'Workflow: readFile (in chunks) -> edit with replaceInFile -> getDiagnostics -> fix errors -> repeat until clean.',
-    'Use searchWorkspace to find files by name or content. Use findFile when the exact path is unknown.',
-    'To add code to the end of a file, call appendToFile with the literal text. For new files, call writeFile with the full literal content. Only split very large content into SEVERAL separate calls (writeFile then appendToFile), each containing real literal text — never pass a variable or write a loop.',
-    'After code changes, ALWAYS call getDiagnostics. If errors are found, read the affected lines and fix them with replaceInFile.',
-    'For substantial tasks, keep a markdown checklist (- [ ] / - [x]) and update it as you progress.',
-    'End completed tasks with: ## Ergebnis, ## Vorgehen, ## Validierung.'
+    'EFFICIENCY (important): Match effort to the task and do EXACTLY what was asked — nothing more. Take the most direct path and STOP the moment the request is fulfilled. Fewer, well-chosen tool calls are better; every call costs the user time and tokens.',
+    'Do NOT re-verify trivially: a successful writeFile / replaceInFile / appendToFile result already confirms the change — do not readFile the same file again just to "check". Do not call listFiles or getDiagnostics unless the result actually informs your next step.',
+    'Do exactly what the content says. If asked to write `hallo` into a file, the file content is exactly `hallo`. Never reformat, quote, "fix", or make content "valid" for some language unless the user asked for that.',
+    'Only run/execute a program or command when the user explicitly asks you to run it, or when running is truly required to finish the task. Creating or editing a file does NOT require running it.',
+    'If a command or edit FAILS, read the error and change your approach before retrying. NEVER repeat an identical failing call hoping for a different result. After two failed attempts at the same thing, stop and report the blocker plainly.',
+    'Editing: readFile (in chunks) the relevant part before changing it; prefer replaceInFile for targeted edits, writeFile for new files / full rewrites, appendToFile to add literal text to the end. Split only very large content into SEVERAL calls with real literal text — never a variable or a loop.',
+    'When you change real SOURCE code, call getDiagnostics afterward and fix reported errors with replaceInFile. Skip getDiagnostics for trivial/non-code files (plain text, notes, one-liners) where it adds nothing.',
+    'Use searchWorkspace to find files by content; use findFile when the exact path is unknown.',
+    'For substantial multi-step tasks, keep a short markdown checklist (- [ ] / - [x]) and update it. Simple tasks need no checklist — just do them.',
+    'Finish with a SHORT confirmation. Use the ## Ergebnis / ## Vorgehen / ## Validierung sections ONLY for substantial multi-step tasks; for a small task one sentence is enough. Never pad the summary or claim validation you did not perform.'
   ].join('\n');
 
   const toolReference = buildToolReference(settings);
@@ -593,9 +620,9 @@ const createRuntimeModePrompt = (settings: AISettings, nativeTools = true) => {
 
   if (settings.mode === 'autonomous') {
     return [
-      'Mode: Autonomous. Work like a senior engineer: plan, implement, validate, iterate.',
-      'Create a checklist plan first. Execute step by step. After each step, validate with getDiagnostics and runCommand.',
-      'Keep improving until the checklist is done and getDiagnostics reports no errors. Only stop when work is verified complete.',
+      'Mode: Autonomous. Work like a senior engineer: plan, implement, validate — but stay proportional to the request.',
+      'For a multi-step task, make a short checklist and execute it step by step. For a simple task, just do it directly — no checklist, no ceremony.',
+      'Validate at a level the task warrants: run getDiagnostics after real source changes; only execute the program with runCommand if the user asked you to run it or if running is required to verify the specific thing requested. Do NOT invent extra verification, and do NOT keep iterating once the actual request is fulfilled — stop.',
       TOOL_PROTOCOL,
       toolReference,
       toolGuidance
@@ -604,8 +631,8 @@ const createRuntimeModePrompt = (settings: AISettings, nativeTools = true) => {
 
   return [
     'Mode: Coder. Read, write, create files and run commands to complete coding tasks.',
-    'Prefer tool calls over prose. Create a short checklist, execute it with tool calls, and stop when done.',
-    'Do not keep iterating beyond the plan unless the user asks for more.',
+    'Prefer tool calls over prose. For multi-step work make a short checklist; for a simple request just do it. STOP as soon as the request is fulfilled.',
+    'Do not iterate beyond what was asked, and do not run/execute the result unless the user asked you to.',
     TOOL_PROTOCOL,
     toolReference,
     toolGuidance
@@ -1046,6 +1073,60 @@ interface CompletionResult {
   };
 }
 
+// Parses the planning model output into a { title, steps } object. Accepts the
+// preferred JSON shape ({"title","steps":[...]}) and falls back to bullet /
+// numbered markdown lists so weaker models still produce a usable plan.
+function parsePlanOutput(text: string): { title: string; steps: string[] } | null {
+  const raw = (text || '').trim();
+  const unfenced = raw.replace(/```(?:json)?/gi, '').trim();
+
+  const start = unfenced.indexOf('{');
+  if (start >= 0) {
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (let i = start; i < unfenced.length; i += 1) {
+      const ch = unfenced[i];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === '\\') esc = true;
+        else if (ch === '"') inStr = false;
+      } else if (ch === '"') {
+        inStr = true;
+      } else if (ch === '{') {
+        depth += 1;
+      } else if (ch === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          try {
+            const obj = JSON.parse(unfenced.slice(start, i + 1));
+            const steps = Array.isArray(obj.steps)
+              ? obj.steps.map((s: unknown) => String(s).trim()).filter(Boolean)
+              : [];
+            if (steps.length) {
+              return { title: String(obj.title || 'Plan').trim() || 'Plan', steps: steps.slice(0, 12) };
+            }
+          } catch {
+            /* fall through to list parsing */
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  const steps = unfenced
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => line.replace(/^[-*]\s+/, '').replace(/^\d+[.)]\s+/, '').trim())
+    .filter(line => line && !/^(title|plan)\s*[:=]/i.test(line));
+  if (steps.length) {
+    return { title: 'Plan', steps: steps.slice(0, 12) };
+  }
+  return null;
+}
+
 interface AgentLoopState {
   conversationId: string;
   apiMessages: any[];
@@ -1106,6 +1187,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
   const [toolCallSupported, setToolCallSupported] = useState<ToolCallSupport>('unknown');
   const [modelClassifications, setModelClassifications] = useState<Record<string, ModelClassification>>({});
   const [pendingToolApprovals, setPendingToolApprovals] = useState<PendingToolApproval[]>([]);
+  const [pendingPlanApproval, setPendingPlanApproval] = useState<PendingPlanApproval | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const basePromptRef = useRef<string>(DEFAULT_BASE_PROMPT);
   const projectPathRef = useRef(projectPath);
@@ -1117,6 +1199,9 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
   // inside performCompletion without adding it to that callback's deps.
   const toolSupportRef = useRef<ToolCallSupport>('unknown');
   const pendingToolExecutionRef = useRef<Map<string, PendingToolExecutionState>>(new Map());
+  // Holds the prepared agent-loop state for a drafted plan until the user
+  // approves/rejects it (or it auto-approves).
+  const pendingPlanExecutionRef = useRef<Map<string, { state: AgentLoopState; rawContent: string; title: string; steps: PlanStep[] }>>(new Map());
 
   const buildToolCallPreview = useCallback(
     async (toolCall: ToolCall): Promise<ToolCallPreview | undefined> => {
@@ -1573,6 +1658,16 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
   }, [activeConversationId]);
 
   const cancelRequest = useCallback(() => {
+    // Discard any plan still awaiting approval so the run doesn't resume later.
+    if (pendingPlanExecutionRef.current.size > 0) {
+      pendingPlanExecutionRef.current.forEach(entry => {
+        try { entry.state.controller.abort(); } catch { /* noop */ }
+      });
+      pendingPlanExecutionRef.current.clear();
+      setPendingPlanApproval(null);
+      setToolStatus(undefined);
+      setIsThinking(false);
+    }
     if (abortControllerRef.current) {
       setIsCancelling(true);
       abortControllerRef.current.abort();
@@ -2814,10 +2909,99 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
     [runAgentLoop, updateToolMessage]
   );
 
+  // Asks the model for a short step-by-step plan (no tools, no code) so the user
+  // can approve the approach before any work runs.
+  const generatePlan = useCallback(
+    async (apiMessages: any[], signal: AbortSignal): Promise<{ title: string; steps: string[] } | null> => {
+      const planInstruction = {
+        role: 'system',
+        content: [
+          'PLANNING STEP. Before doing ANY work, draft a short, concrete step-by-step plan for the user to approve.',
+          'Output ONLY a single-line JSON object, no prose, no code fences, in EXACTLY this shape:',
+          '{"title": "<short task title>", "steps": ["<step 1>", "<step 2>"]}',
+          'Rules: 1-7 steps. Each step is one concrete action you will take (e.g. "Create gta6.py containing the text hallo"). Be proportional — a trivial task may have a single step. Do NOT write code, do NOT call tools, do NOT explain. Plan ONLY what the user actually asked for; never invent extra scope.'
+        ].join('\n')
+      };
+      const result = await performCompletion([...apiMessages, planInstruction], signal, false);
+      return parsePlanOutput(result.content || '');
+    },
+    [performCompletion]
+  );
+
+  const approvePlan = useCallback(
+    async (id: string, editedSteps?: PlanStep[]) => {
+      const entry = pendingPlanExecutionRef.current.get(id);
+      if (!entry) return;
+      pendingPlanExecutionRef.current.delete(id);
+      setPendingPlanApproval(null);
+
+      const steps = (editedSteps && editedSteps.length ? editedSteps : entry.steps)
+        .map(step => ({ ...step, text: step.text.trim() }))
+        .filter(step => step.text);
+
+      if (entry.state.controller.signal.aborted) {
+        setIsThinking(false);
+        return;
+      }
+
+      if (!steps.length) {
+        // Plan emptied out — just run the request without a plan injection.
+        setIsThinking(true);
+        await runAgentLoop(entry.state, entry.rawContent);
+        return;
+      }
+
+      setIsThinking(true);
+      setLastError(undefined);
+
+      // Keep the approved checklist visible in the transcript.
+      addMessageToConversation(entry.state.conversationId, {
+        id: createId(),
+        content: `### Approved plan\n${steps.map(step => `- [ ] ${step.text}`).join('\n')}`,
+        sender: 'ai',
+        timestamp: new Date()
+      });
+
+      const planInjection = {
+        role: 'user',
+        content: [
+          'APPROVED PLAN — follow it exactly:',
+          ...steps.map((step, index) => `${index + 1}. ${step.text}`),
+          '',
+          'Execute these steps IN ORDER using real tool calls. Stay strictly within the scope of this plan — do not add unrelated work. Complete EVERY step; never skip or forget one. Keep a checklist (- [ ] / - [x]) and update it as each step is finished. Before each action, confirm it belongs to a plan step. When all steps are done (and any code changes verified), stop and give a short summary.'
+        ].join('\n')
+      };
+
+      await runAgentLoop(
+        { ...entry.state, apiMessages: [...entry.state.apiMessages, planInjection] },
+        entry.rawContent
+      );
+    },
+    [runAgentLoop, addMessageToConversation]
+  );
+
+  const rejectPlan = useCallback((id: string) => {
+    const entry = pendingPlanExecutionRef.current.get(id);
+    pendingPlanExecutionRef.current.delete(id);
+    setPendingPlanApproval(null);
+    if (entry) {
+      try { entry.state.controller.abort(); } catch { /* noop */ }
+      addMessageToConversation(entry.state.conversationId, {
+        id: createId(),
+        content: 'Plan rejected. Adjust your request (or the steps) and send again.',
+        sender: 'system',
+        timestamp: new Date()
+      });
+    }
+    abortControllerRef.current = null;
+    setIsThinking(false);
+    setToolStatus(undefined);
+  }, [addMessageToConversation]);
+
   const sendMessage = useCallback(
     async (content: string, options?: SendMessageOptions) => {
       const displayContent = (options?.displayContent ?? content).trim();
-      if (!displayContent || !settings.model || isThinking) {
+      if (!displayContent || !settings.model || isThinking || pendingPlanExecutionRef.current.size > 0) {
         return undefined;
       }
 
@@ -2865,30 +3049,74 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       const controller = new AbortController();
       abortControllerRef.current = controller;
 
-      return runAgentLoop(
-        {
-          conversationId,
-          apiMessages: [...systemMessages, ...messagePayload],
-          controller,
-          requestId: createId(),
-          combinedContent: '',
-          combinedReasoning: [],
-          stopReason: undefined,
-          loops: 0,
-          performedMutationTool: false,
-          mutationCorrectionSent: false,
-          toolProtocolCorrectionSent: false,
-          describedToolCallCorrectionSent: false,
-          repeatedResponseCount: 0,
-          executedTools: [],
-          replaceReReadRequiredPaths: [],
-          nonMutatingToolRounds: 0,
-          completionWithoutMutationCorrectionSent: false,
-          autoFixRounds: 0,
-          consecutiveEmptyResponses: 0
-        },
-        rawContent
-      );
+      const baseState: AgentLoopState = {
+        conversationId,
+        apiMessages: [...systemMessages, ...messagePayload],
+        controller,
+        requestId: createId(),
+        combinedContent: '',
+        combinedReasoning: [],
+        stopReason: undefined,
+        loops: 0,
+        performedMutationTool: false,
+        mutationCorrectionSent: false,
+        toolProtocolCorrectionSent: false,
+        describedToolCallCorrectionSent: false,
+        repeatedResponseCount: 0,
+        executedTools: [],
+        replaceReReadRequiredPaths: [],
+        nonMutatingToolRounds: 0,
+        completionWithoutMutationCorrectionSent: false,
+        autoFixRounds: 0,
+        consecutiveEmptyResponses: 0
+      };
+
+      // Plan-first gate: for work modes, draft a plan and pause for the user's
+      // approval (auto-approved after a countdown) before running anything.
+      const shouldPlan =
+        settings.planningEnabled &&
+        settings.mode !== 'qa' &&
+        settings.toolsEnabled &&
+        sender === 'user';
+
+      if (shouldPlan) {
+        setToolStatus('Planning…');
+        let plan: { title: string; steps: string[] } | null = null;
+        try {
+          plan = await generatePlan(baseState.apiMessages, controller.signal);
+        } catch (error) {
+          console.warn('Planning step failed, running without a plan:', error);
+        }
+        if (controller.signal.aborted) {
+          setIsThinking(false);
+          setToolStatus(undefined);
+          return baseState.combinedContent;
+        }
+        if (plan && plan.steps.length) {
+          const planId = createId();
+          const steps: PlanStep[] = plan.steps.map(text => ({ id: createId(), text }));
+          pendingPlanExecutionRef.current.set(planId, {
+            state: baseState,
+            rawContent,
+            title: plan.title,
+            steps
+          });
+          setPendingPlanApproval({
+            id: planId,
+            conversationId,
+            title: plan.title,
+            steps,
+            autoApproveSeconds: Math.max(5, Math.round(settings.planAutoApproveSeconds || 60))
+          });
+          setIsThinking(false);
+          setToolStatus(undefined);
+          return baseState.combinedContent;
+        }
+        // No usable plan — fall through and run directly.
+        setToolStatus(undefined);
+      }
+
+      return runAgentLoop(baseState, rawContent);
     },
     [
       buildSystemMessages,
@@ -2897,7 +3125,12 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       isThinking,
       mapMessages,
       runAgentLoop,
-      settings.model
+      generatePlan,
+      settings.model,
+      settings.planningEnabled,
+      settings.planAutoApproveSeconds,
+      settings.mode,
+      settings.toolsEnabled
     ]
   );
 
@@ -3045,6 +3278,9 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       pendingToolApprovals,
       approvePendingToolApproval,
       rejectPendingToolApproval,
+      pendingPlanApproval,
+      approvePlan,
+      rejectPlan,
       subAgents,
       spawnSubAgents,
       clearSubAgents,
@@ -3079,6 +3315,9 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       pendingToolApprovals,
       approvePendingToolApproval,
       rejectPendingToolApproval,
+      pendingPlanApproval,
+      approvePlan,
+      rejectPlan,
       subAgents,
       spawnSubAgents,
       clearSubAgents,

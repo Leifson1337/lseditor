@@ -80,6 +80,9 @@ const App: React.FC = () => {
   const [terminalPort, setTerminalPort] = useState<number>(3001);
   // State to show/hide the terminal panel
   const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(false);
+  // Update-check state (drives the Help ▸ Check for Updates menu item)
+  const [isCheckingUpdates, setIsCheckingUpdates] = useState<boolean>(false);
+  const [updateAvailable, setUpdateAvailable] = useState<boolean>(false);
   // State for the terminal manager instance
   const [terminalManager, setTerminalManager] = useState<TerminalManager | null>(null);
   // State to signal app initialization
@@ -253,6 +256,50 @@ const App: React.FC = () => {
         await window.electron?.ipcRenderer?.invoke('app:openAbout');
       } catch (error) {
         console.error('Failed to open about window', error);
+      }
+      return;
+    }
+    if (actionId === 'checkUpdates') {
+      const ipc = window.electron?.ipcRenderer;
+      if (!ipc) return;
+      setIsCheckingUpdates(true);
+      try {
+        const info = await ipc.invoke('app:checkForUpdates');
+        setUpdateAvailable(!!info?.updateAvailable);
+        if (info?.error) {
+          await ipc.invoke('dialog:showMessageBox', {
+            type: 'warning',
+            title: 'Check for Updates',
+            message: 'Could not check for updates.',
+            detail: 'Please check your internet connection and try again.',
+            buttons: ['OK']
+          });
+        } else if (info?.updateAvailable) {
+          const res = await ipc.invoke('dialog:showMessageBox', {
+            type: 'info',
+            title: 'Update available',
+            message: `LS Editor ${info.latestVersion} is available.`,
+            detail: `You are running ${info.currentVersion}. Open the download page?`,
+            buttons: ['Download', 'Later'],
+            defaultId: 0,
+            cancelId: 1
+          });
+          if (res?.response === 0 && info.releasesUrl) {
+            await ipc.invoke('shell:openExternal', info.releasesUrl);
+          }
+        } else {
+          await ipc.invoke('dialog:showMessageBox', {
+            type: 'info',
+            title: 'Check for Updates',
+            message: 'You are up to date.',
+            detail: `LS Editor ${info?.currentVersion ?? ''} is the latest version.`,
+            buttons: ['OK']
+          });
+        }
+      } catch (error) {
+        console.error('Failed to check for updates', error);
+      } finally {
+        setIsCheckingUpdates(false);
       }
       return;
     }
@@ -583,6 +630,8 @@ const App: React.FC = () => {
               onFileAction={handleFileAction}
               onEditAction={handleEditAction}
               onMenuAction={handleGenericMenuAction}
+              updateAvailable={updateAvailable}
+              isCheckingUpdates={isCheckingUpdates}
               statusBar={{
                 activeFile,
                 terminalPort,

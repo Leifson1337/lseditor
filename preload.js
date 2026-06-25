@@ -14,12 +14,13 @@ const ALLOWED_INVOKE_CHANNELS = [
   'ai:getBasePrompt', 'ai:chat', 'ai:refactor',
   'get-code-completion', 'explain-code', 'refactor-code', 'editor:findInFiles',
   'exec', 'exec:kill', 'terminal:create', 'terminal:kill', 'terminal:resize', 'terminal:dispose',
-  'dialog:showOpenDialog', 'dialog:openDirectory', 'dialog:inputBox',
+  'dialog:showOpenDialog', 'dialog:openDirectory', 'dialog:inputBox', 'dialog:showMessageBox',
   'app:getVersion', 'app:openAbout', 'app:newWindow', 'app:openFile', 'app:openFolder', 'app:exit', 'app:getUserDataPath', 'app:getPath',
+  'app:checkForUpdates', 'app:showWhatsNew',
   'shell:openPath', 'shell:openExternal', 'edit:undo', 'edit:redo', 'edit:cut', 'edit:copy', 'edit:paste', 'edit:find', 'edit:replace',
   'view:toggleFullScreen', 'view:reload', 'terminal:new', 'terminal:runActiveFile', 'file:newTextFile',
   'fs:readFileBase64',
-  'ollama:status', 'ollama:list', 'ollama:pull', 'ollama:cancelPull', 'ollama:remove'
+  'ollama:status', 'ollama:cloudStatus', 'ollama:list', 'ollama:pull', 'ollama:cancelPull', 'ollama:remove'
 ];
 
 const ALLOWED_SEND_CHANNELS = [
@@ -31,7 +32,13 @@ const ALLOWED_ON_CHANNELS = [
   'terminal:data', 'terminal:exit', 'terminal:error', 'terminal:output',
   'editor:openFile', 'editor:menu', 'sidebar:switch', 'create-new-text-file',
   'folder:open', 'file:open', 'editor:findInFilesResults', 'explorer:refresh',
-  'fs:watchEvent', 'ollama:pullProgress'
+  'fs:watchEvent', 'ollama:pullProgress',
+  // Window state notifications from main → renderer (titlebar/menubar use these
+  // to keep the maximize/restore button in sync). Without them the listeners
+  // were blocked and the button state never updated.
+  'window:maximized', 'window:unmaximized',
+  // Update availability pushed from the startup version check.
+  'app:updateAvailable'
 ];
 
 contextBridge.exposeInMainWorld('electron', {

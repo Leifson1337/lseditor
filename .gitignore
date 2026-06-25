@@ -5,4 +5,20 @@ dist/
 *.exe
 .claude/settings.local.json
 /.claude
+# Keep examples local, but track the committable showcase (scripts + final media).
+/examples/*
+!/examples/showcase/
+# Intermediate render frames are large/disposable — don't commit them.
+/examples/showcase/frames/
+
+# Build / release output (created by release.bat / electron-builder)
+release/
+build/output/
+*.nsis
+*.blockmap
+*.AppImage
+*.dmg
+*.zip
+/docs
+release.bat
 /examples

@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import path from 'path';
-import { FiRefreshCw, FiSend, FiPlus, FiSettings, FiCopy, FiCheck, FiAlertTriangle, FiX, FiMessageSquare, FiCode, FiFileText, FiTerminal, FiPaperclip, FiZap, FiShield, FiMic, FiMicOff, FiCpu } from 'react-icons/fi';
+import { FiRefreshCw, FiSend, FiPlus, FiSettings, FiCopy, FiCheck, FiAlertTriangle, FiX, FiMessageSquare, FiCode, FiFileText, FiTerminal, FiPaperclip, FiZap, FiShield, FiMic, FiMicOff, FiCpu, FiPlay, FiTrash2, FiList } from 'react-icons/fi';
 import { LuLoader2 } from 'react-icons/lu';
 import { ModelManager } from './ModelManager';
+import type { PlanStep, PendingPlanApproval } from '../contexts/AIContext';
 import { VoiceInputService, MicDevice } from '../services/VoiceInputService';
 import { diffLines } from 'diff';
 import '../styles/AIChatPanel.css';
@@ -196,6 +197,21 @@ const extractChecklistItems = (content?: string): PlanItem[] => {
     }));
 };
 
+// A message that is ONLY a checklist (optionally under a heading) is already
+// represented by the "Working plan" card at the top of the chat, so its raw
+// bubble is suppressed to avoid showing the same plan twice.
+const isPureChecklistMessage = (content?: string): boolean => {
+  if (!content) return false;
+  const lines = content
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .filter(line => !/^#{1,6}\s/.test(line) && line !== '---'); // drop heading / rule
+  if (!lines.length) return false;
+  const checklistLines = lines.filter(line => /^[-*]\s+\[( |x|X)\]\s+/.test(line));
+  return checklistLines.length > 0 && checklistLines.length === lines.length;
+};
+
 const splitStopReason = (content?: string): MessageStopState => {
   const raw = content || '';
   const match = raw.match(/\n\n---\n\*(.+?)\*\s*$/s);
@@ -274,6 +290,127 @@ const escapeHtmlForMarkdown = (content: string) =>
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 
+// ─── Plan review card ───
+// Rendered inline in the chat flow (NOT a modal popup): a clearly-laid-out,
+// editable step list with a slim auto-approve progress bar. Any edit pauses the
+// countdown so the user can take their time ("wenn er nichts macht wird
+// approved"). Approving runs the plan; rejecting discards it.
+const autoSizeTextarea = (el: HTMLTextAreaElement | null) => {
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = `${el.scrollHeight}px`;
+};
+
+const PlanReviewCard: React.FC<{
+  plan: PendingPlanApproval;
+  onApprove: (id: string, steps: PlanStep[]) => void;
+  onReject: (id: string) => void;
+}> = ({ plan, onApprove, onReject }) => {
+  const [steps, setSteps] = useState<PlanStep[]>(plan.steps);
+  const [secondsLeft, setSecondsLeft] = useState(plan.autoApproveSeconds);
+  const [autoActive, setAutoActive] = useState(true);
+  const total = plan.autoApproveSeconds;
+
+  // Reset local state whenever a new plan is shown.
+  useEffect(() => {
+    setSteps(plan.steps);
+    setSecondsLeft(plan.autoApproveSeconds);
+    setAutoActive(true);
+  }, [plan.id, plan.steps, plan.autoApproveSeconds]);
+
+  // Tick the countdown; auto-approve at zero (only while not paused).
+  useEffect(() => {
+    if (!autoActive) return;
+    if (secondsLeft <= 0) {
+      onApprove(plan.id, steps);
+      return;
+    }
+    const timer = setTimeout(() => setSecondsLeft(prev => prev - 1), 1000);
+    return () => clearTimeout(timer);
+    // steps/onApprove intentionally read from the latest render via re-runs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoActive, secondsLeft, plan.id]);
+
+  const pauseAuto = useCallback(() => setAutoActive(false), []);
+  const updateStep = (id: string, text: string) => {
+    pauseAuto();
+    setSteps(prev => prev.map(step => (step.id === id ? { ...step, text } : step)));
+  };
+  const removeStep = (id: string) => {
+    pauseAuto();
+    setSteps(prev => prev.filter(step => step.id !== id));
+  };
+  const addStep = () => {
+    pauseAuto();
+    setSteps(prev => [...prev, { id: `step-${prev.length}-${Math.round(prev.length * 7 + 3)}`, text: '' }]);
+  };
+
+  const fraction = total > 0 ? Math.max(0, Math.min(1, secondsLeft / total)) : 0;
+
+  return (
+    <div className="ai-chat-plan-review">
+      {/* slim auto-approve progress bar */}
+      <div className="ai-chat-plan-review-timerbar">
+        <div
+          className={`ai-chat-plan-review-timerfill ${autoActive ? '' : 'paused'}`}
+          style={{ width: `${fraction * 100}%` }}
+        />
+      </div>
+
+      <div className="ai-chat-plan-review-head">
+        <div className="ai-chat-plan-review-title">
+          <FiList size={15} />
+          <span>Review plan</span>
+        </div>
+        <span className={`ai-chat-plan-review-timer ${autoActive ? '' : 'paused'}`}>
+          {autoActive ? `Auto-approve in ${secondsLeft}s` : 'Paused — edit done'}
+        </span>
+      </div>
+
+      {plan.title && <div className="ai-chat-plan-review-subtitle">{plan.title}</div>}
+
+      <div className="ai-chat-plan-review-steps">
+        {steps.map((step, index) => (
+          <div key={step.id} className="ai-chat-plan-review-step">
+            <span className="ai-chat-plan-review-num">{index + 1}</span>
+            <textarea
+              className="ai-chat-plan-review-input"
+              rows={1}
+              ref={autoSizeTextarea}
+              value={step.text}
+              onChange={event => { updateStep(step.id, event.target.value); autoSizeTextarea(event.target); }}
+              onFocus={pauseAuto}
+              placeholder="Describe this step…"
+            />
+            <button className="ai-chat-plan-review-remove" title="Remove step" onClick={() => removeStep(step.id)}>
+              <FiTrash2 size={13} />
+            </button>
+          </div>
+        ))}
+        <button className="ai-chat-plan-review-add" onClick={addStep}>
+          <FiPlus size={13} /> Add step
+        </button>
+      </div>
+
+      <div className="ai-chat-plan-review-foot">
+        <span className="ai-chat-plan-review-hint">
+          {autoActive
+            ? 'Runs automatically when the timer ends — edit a step to pause.'
+            : 'Review and approve when ready.'}
+        </span>
+        <div className="ai-chat-plan-review-actions">
+          <button type="button" className="reject" onClick={() => onReject(plan.id)}>
+            <FiX size={14} /> Reject
+          </button>
+          <button type="button" className="accept" onClick={() => onApprove(plan.id, steps)}>
+            <FiPlay size={14} /> Approve &amp; run
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ─── Component ───
 
 const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, activeFilePath, openFiles }) => {
@@ -303,6 +440,9 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     pendingToolApprovals,
     approvePendingToolApproval,
     rejectPendingToolApproval,
+    pendingPlanApproval,
+    approvePlan,
+    rejectPlan,
     subAgents,
     spawnSubAgents,
     clearSubAgents,
@@ -1442,6 +1582,16 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
               Boolean(stopReason) &&
               index === messages.length - 1;
 
+            // Don't render a bubble that is purely a checklist — the "Working
+            // plan" card above already represents it (avoids showing it twice).
+            if (
+              message.sender !== 'user' &&
+              (!message.toolCalls || message.toolCalls.length === 0) &&
+              isPureChecklistMessage(body)
+            ) {
+              return null;
+            }
+
             return (
             <div key={message.id} className={`ai-chat-message ${message.sender}`}>
               <div className="ai-chat-message-meta">
@@ -1491,6 +1641,15 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
               </div>}
             </div>
           )})
+        )}
+
+        {/* Plan review (inline, shown before any work runs) */}
+        {pendingPlanApproval && pendingPlanApproval.conversationId === activeConversationId && (
+          <PlanReviewCard
+            plan={pendingPlanApproval}
+            onApprove={approvePlan}
+            onReject={rejectPlan}
+          />
         )}
 
         {/* Thinking indicator */}
@@ -1836,6 +1995,41 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                         {autoContextFiles.map(file => (
                           <span key={file} className="ai-chat-context-chip" title={file}>{file}</span>
                         ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="ai-settings-popup-section">
+                    <div className="ai-settings-popup-label">
+                      <FiList size={12} /> Plan first
+                    </div>
+                    <button
+                      type="button"
+                      className={`ai-chat-toggle ${settings.planningEnabled ? 'active' : ''}`}
+                      onClick={() => updateSettings({ planningEnabled: !settings.planningEnabled })}
+                    >
+                      {settings.planningEnabled ? 'Enabled' : 'Disabled'}
+                    </button>
+                    <span className="ai-settings-popup-hint">
+                      {settings.planningEnabled
+                        ? 'Drafts a step plan you approve before any work runs'
+                        : 'Runs immediately without a plan'}
+                    </span>
+                    {settings.planningEnabled && (
+                      <div className="ai-settings-popup-row">
+                        <span className="ai-settings-popup-hint">Auto-approve after</span>
+                        <input
+                          type="number"
+                          min={5}
+                          max={600}
+                          value={settings.planAutoApproveSeconds}
+                          onChange={event => {
+                            const next = parseInt(event.target.value, 10);
+                            updateSettings({ planAutoApproveSeconds: Number.isFinite(next) ? Math.min(600, Math.max(5, next)) : 60 });
+                          }}
+                          className="ai-chat-number-input"
+                        />
+                        <span className="ai-settings-popup-hint">seconds</span>
                       </div>
                     )}
                   </div>
