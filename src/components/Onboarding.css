@@ -1,0 +1,76 @@
+.ob-overlay {
+  position: fixed; inset: 0; z-index: 2000; display: flex; align-items: center; justify-content: center;
+  padding: 20px; background: rgba(4, 7, 14, 0.72); backdrop-filter: blur(3px);
+}
+.ob-modal {
+  width: min(96%, 780px); max-height: 92vh; overflow-y: auto;
+  background:
+    radial-gradient(900px 360px at 90% -20%, rgba(59,130,246,0.18), transparent 60%),
+    var(--bg-secondary, #161a24);
+  color: var(--text-primary, #e9edf5);
+  border: 1px solid var(--border-color, #29303f); border-radius: 18px;
+  box-shadow: 0 30px 90px rgba(0,0,0,0.6); padding: 26px;
+  animation: ob-in 0.25s ease;
+}
+@keyframes ob-in { from { opacity: 0; transform: translateY(12px) scale(0.99); } to { opacity: 1; transform: none; } }
+
+.ob-hero { display: flex; align-items: center; gap: 16px; margin-bottom: 18px; }
+.ob-logo {
+  flex: 0 0 auto; width: 48px; height: 48px; border-radius: 14px;
+  background: linear-gradient(145deg, #60a5fa, #3b82f6); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+}
+.ob-hero h1 { margin: 0; font-size: 22px; }
+.ob-hero p { margin: 4px 0 0; font-size: 13px; color: var(--text-secondary, #9aa4b8); line-height: 1.5; }
+
+.ob-hw {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 12px 14px; margin-bottom: 18px; border-radius: 12px;
+  background: var(--bg-primary, #0f131c); border: 1px solid var(--border-color, #232a38);
+}
+.ob-hw-item { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; }
+.ob-hw-item svg { color: var(--accent-secondary, #60a5fa); }
+.ob-hw-rec { flex: 1 1 220px; font-size: 12.5px; color: var(--text-secondary, #9aa4b8); }
+
+.ob-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+.ob-card {
+  display: flex; flex-direction: column; gap: 8px; padding: 16px;
+  border-radius: 14px; border: 1px solid var(--border-color, #29303f);
+  background: var(--bg-primary, #0f131c);
+}
+.ob-card.ok { border-color: rgba(52, 211, 153, 0.5); }
+.ob-card-head { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 14.5px; }
+.ob-card-icon { width: 28px; height: 28px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+.ob-card-icon.local { background: rgba(52,211,153,0.14); color: #34d399; }
+.ob-card-icon.cloud { background: rgba(96,165,250,0.16); color: #60a5fa; }
+.ob-card-tag { margin-left: auto; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: #34d399; background: rgba(52,211,153,0.12); padding: 2px 8px; border-radius: 999px; }
+.ob-card-tag.cloud { color: #60a5fa; background: rgba(96,165,250,0.14); }
+.ob-card p { margin: 0; font-size: 12.5px; color: var(--text-secondary, #9aa4b8); line-height: 1.45; flex: 1; }
+.ob-card-status { font-size: 12px; min-height: 18px; }
+.ob-card-status .ok { display: inline-flex; align-items: center; gap: 5px; color: #34d399; font-weight: 600; }
+.ob-card-status .muted { color: var(--text-secondary, #7c869b); }
+.ob-card-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 2px; }
+
+.ob-btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 8px 13px; font-size: 12.5px; font-weight: 600;
+  border: 1px solid var(--border-color, #2a3344); border-radius: 9px; cursor: pointer;
+  background: var(--bg-secondary, #1b212d); color: var(--text-primary, #e9edf5);
+}
+.ob-btn:hover { border-color: #3b82f6; }
+.ob-btn:disabled { opacity: 0.55; cursor: default; }
+.ob-btn.primary { border: none; background: linear-gradient(180deg, #3b82f6, #2563eb); color: #fff; }
+.ob-btn.primary:hover { filter: brightness(1.1); }
+.ob-btn.ghost { background: transparent; }
+
+.ob-note {
+  margin-top: 14px; padding: 9px 12px; border-radius: 9px; font-size: 12.5px;
+  background: rgba(96,165,250,0.1); color: #bfdbfe; border: 1px solid rgba(96,165,250,0.22);
+}
+.ob-foot { display: flex; justify-content: flex-end; margin-top: 18px; }
+.ob-skip { background: none; border: none; color: var(--text-secondary, #8b93a7); font-size: 12.5px; cursor: pointer; }
+.ob-skip:hover { color: var(--text-primary, #fff); text-decoration: underline; }
+
+@media (max-width: 560px) {
+  .ob-modal { padding: 18px; }
+  .ob-hero h1 { font-size: 19px; }
+}

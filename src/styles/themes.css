@@ -1,0 +1,140 @@
+/* Theme palettes.
+   Each block overrides the shared palette variables. The selector
+   `:root[data-theme="..."]` has higher specificity than the plain `:root`
+   defaults in styles.css / App.css / Layout.css, so it wins regardless of
+   import order. ThemeContext sets `data-theme` on <html>. */
+
+/* ---------- Dark (default / VS Code Dark) ---------- */
+:root[data-theme="dark"] {
+  --bg-primary: #1e1e1e; --bg-secondary: #252526; --bg-tertiary: #2d2d2d; --bg-hover: #2a2d2e;
+  --background-color: #1e1e1e; --sidebar-bg: #252526; --panel-bg: #252526;
+  --editor-bg: #1e1e1e; --gutter-bg: #252526; --gutter-text: #858585;
+  --accent-blue: #007acc; --accent-primary: #007acc; --accent-secondary: #3794ff;
+  --accent-green: #4ec9b0; --accent-purple: #c586c0;
+  --text-primary: #d4d4d4; --text-secondary: #858585; --text-disabled: #6b6b6b;
+  --text-color: #d4d4d4; --text-muted: #858585; --button-text: #d4d4d4;
+  --border-primary: #3c3c3c; --border-hover: #505050; --border-color: #3c3c3c; --gutter-border: #3c3c3c;
+  --button-bg: #3c3c3c; --button-hover-bg: #505050;
+  --status-bar-bg: #007acc; --selection-bg: #264f78; --cursor-color: #ffffff;
+  --tooltip-bg: #333333; --tooltip-text: #ffffff; --autocomplete-hover: #444444;
+  --error-color: #f14c4c; --success-color: #4ec9b0; --warning-color: #dcdcaa;
+}
+
+/* ---------- Light (VS Code Light) ---------- */
+:root[data-theme="light"] {
+  --bg-primary: #ffffff; --bg-secondary: #f3f3f3; --bg-tertiary: #ececec; --bg-hover: #e8e8e8;
+  --background-color: #ffffff; --sidebar-bg: #f3f3f3; --panel-bg: #f3f3f3;
+  --editor-bg: #ffffff; --gutter-bg: #f3f3f3; --gutter-text: #6e6e6e;
+  --accent-blue: #005fb8; --accent-primary: #005fb8; --accent-secondary: #0078d4;
+  --accent-green: #098658; --accent-purple: #af00db;
+  --text-primary: #18191c; --text-secondary: #545b66; --text-disabled: #8b919c;
+  --text-color: #18191c; --text-muted: #545b66; --button-text: #18191c;
+  --border-primary: #d4d4d4; --border-hover: #b8b8b8; --border-color: #e0e0e0; --gutter-border: #e0e0e0;
+  --button-bg: #e4e4e4; --button-hover-bg: #d0d0d0;
+  --status-bar-bg: #005fb8; --selection-bg: #add6ff; --cursor-color: #000000;
+  --tooltip-bg: #f8f8f8; --tooltip-text: #1f1f1f; --autocomplete-hover: #e8e8e8;
+  --error-color: #e51400; --success-color: #098658; --warning-color: #bf8803;
+}
+
+/* ---------- Midnight (deep navy) ---------- */
+:root[data-theme="midnight"] {
+  --bg-primary: #0b1021; --bg-secondary: #11162a; --bg-tertiary: #161c34; --bg-hover: #1b2240;
+  --background-color: #0b1021; --sidebar-bg: #0d1325; --panel-bg: #11162a;
+  --editor-bg: #0b1021; --gutter-bg: #0d1325; --gutter-text: #5a6388;
+  --accent-blue: #5b8cff; --accent-primary: #5b8cff; --accent-secondary: #7aa2ff;
+  --accent-green: #34d399; --accent-purple: #b794f6;
+  --text-primary: #e6ebff; --text-secondary: #8a93b8; --text-disabled: #5a6388;
+  --text-color: #e6ebff; --text-muted: #8a93b8; --button-text: #e6ebff;
+  --border-primary: #232a44; --border-hover: #313a5c; --border-color: #232a44; --gutter-border: #232a44;
+  --button-bg: #1b2240; --button-hover-bg: #28304f;
+  --status-bar-bg: #1b2a6b; --selection-bg: #20366b; --cursor-color: #cdd6ff;
+  --tooltip-bg: #161c34; --tooltip-text: #e6ebff; --autocomplete-hover: #1b2240;
+  --error-color: #ff6b6b; --success-color: #34d399; --warning-color: #fbbf24;
+}
+
+/* ---------- Dracula ---------- */
+:root[data-theme="dracula"] {
+  --bg-primary: #282a36; --bg-secondary: #21222c; --bg-tertiary: #343746; --bg-hover: #2f3140;
+  --background-color: #282a36; --sidebar-bg: #21222c; --panel-bg: #21222c;
+  --editor-bg: #282a36; --gutter-bg: #21222c; --gutter-text: #6272a4;
+  --accent-blue: #8be9fd; --accent-primary: #bd93f9; --accent-secondary: #ff79c6;
+  --accent-green: #50fa7b; --accent-purple: #bd93f9;
+  --text-primary: #f8f8f2; --text-secondary: #6272a4; --text-disabled: #6272a4;
+  --text-color: #f8f8f2; --text-muted: #6272a4; --button-text: #f8f8f2;
+  --border-primary: #3b3d4f; --border-hover: #4b4e63; --border-color: #3b3d4f; --gutter-border: #3b3d4f;
+  --button-bg: #343746; --button-hover-bg: #44475a;
+  --status-bar-bg: #44475a; --selection-bg: #44475a; --cursor-color: #f8f8f2;
+  --tooltip-bg: #21222c; --tooltip-text: #f8f8f2; --autocomplete-hover: #343746;
+  --error-color: #ff5555; --success-color: #50fa7b; --warning-color: #f1fa8c;
+}
+
+/* ---------- Solarized Dark ---------- */
+:root[data-theme="solarized-dark"] {
+  --bg-primary: #002b36; --bg-secondary: #073642; --bg-tertiary: #0a4453; --bg-hover: #094553;
+  --background-color: #002b36; --sidebar-bg: #073642; --panel-bg: #073642;
+  --editor-bg: #002b36; --gutter-bg: #073642; --gutter-text: #586e75;
+  --accent-blue: #268bd2; --accent-primary: #268bd2; --accent-secondary: #2aa198;
+  --accent-green: #859900; --accent-purple: #6c71c4;
+  --text-primary: #93a1a1; --text-secondary: #586e75; --text-disabled: #586e75;
+  --text-color: #93a1a1; --text-muted: #586e75; --button-text: #93a1a1;
+  --border-primary: #073642; --border-hover: #0a4453; --border-color: #0a4453; --gutter-border: #073642;
+  --button-bg: #073642; --button-hover-bg: #0a4453;
+  --status-bar-bg: #268bd2; --selection-bg: #073642; --cursor-color: #93a1a1;
+  --tooltip-bg: #073642; --tooltip-text: #93a1a1; --autocomplete-hover: #0a4453;
+  --error-color: #dc322f; --success-color: #859900; --warning-color: #b58900;
+}
+
+/* ---------- Nord ---------- */
+:root[data-theme="nord"] {
+  --bg-primary: #2e3440; --bg-secondary: #3b4252; --bg-tertiary: #434c5e; --bg-hover: #3b4252;
+  --background-color: #2e3440; --sidebar-bg: #2e3440; --panel-bg: #3b4252;
+  --editor-bg: #2e3440; --gutter-bg: #2e3440; --gutter-text: #7b8394;
+  --accent-blue: #88c0d0; --accent-primary: #88c0d0; --accent-secondary: #81a1c1;
+  --accent-green: #a3be8c; --accent-purple: #b48ead;
+  --text-primary: #eceff4; --text-secondary: #9aa3b5; --text-disabled: #7b8394;
+  --text-color: #eceff4; --text-muted: #9aa3b5; --button-text: #eceff4;
+  --border-primary: #434c5e; --border-hover: #4c566a; --border-color: #434c5e; --gutter-border: #434c5e;
+  --button-bg: #434c5e; --button-hover-bg: #4c566a;
+  --status-bar-bg: #5e81ac; --selection-bg: #434c5e; --cursor-color: #eceff4;
+  --tooltip-bg: #3b4252; --tooltip-text: #eceff4; --autocomplete-hover: #434c5e;
+  --error-color: #bf616a; --success-color: #a3be8c; --warning-color: #ebcb8b;
+}
+
+/* ---------- Crimson (red on near-black, with a soft gradient) ---------- */
+:root[data-theme="crimson"] {
+  --bg-primary: #0d0d0f; --bg-secondary: #141417; --bg-tertiary: #1b1b1f; --bg-hover: #221f24;
+  --background-color: #0d0d0f; --sidebar-bg: #0f0f12; --panel-bg: #141417;
+  --editor-bg: #0d0d0f; --gutter-bg: #0f0f12; --gutter-text: #6e5557;
+  --accent-blue: #ff4d4d; --accent-primary: #e11d2a; --accent-secondary: #ff4d4d;
+  --accent-green: #4ec9b0; --accent-purple: #ff6b81;
+  --text-primary: #f4e9ea; --text-secondary: #b58d8f; --text-disabled: #6e5557;
+  --text-color: #f4e9ea; --text-muted: #b58d8f; --button-text: #f4e9ea;
+  --border-primary: #3a1f22; --border-hover: #5a2b30; --border-color: #3a1f22; --gutter-border: #3a1f22;
+  --button-bg: #2a1416; --button-hover-bg: #3a1f22;
+  --status-bar-bg: #e11d2a; --selection-bg: #5a1f25; --cursor-color: #ff4d4d;
+  --tooltip-bg: #1b1b1f; --tooltip-text: #f4e9ea; --autocomplete-hover: #2a1416;
+  --error-color: #ff5555; --success-color: #4ec9b0; --warning-color: #ffcc66;
+}
+html[data-theme="crimson"],
+html[data-theme="crimson"] body {
+  background-image:
+    radial-gradient(1200px 600px at 80% -10%, rgba(225, 29, 42, 0.18), transparent 60%),
+    radial-gradient(900px 500px at 0% 110%, rgba(120, 12, 20, 0.22), transparent 55%);
+  background-attachment: fixed;
+}
+
+/* ---------- High Contrast ---------- */
+:root[data-theme="high-contrast"] {
+  --bg-primary: #000000; --bg-secondary: #0a0a0a; --bg-tertiary: #111111; --bg-hover: #1a1a1a;
+  --background-color: #000000; --sidebar-bg: #000000; --panel-bg: #0a0a0a;
+  --editor-bg: #000000; --gutter-bg: #000000; --gutter-text: #c0c0c0;
+  --accent-blue: #3794ff; --accent-primary: #3794ff; --accent-secondary: #6cb6ff;
+  --accent-green: #00e676; --accent-purple: #d18cff;
+  --text-primary: #ffffff; --text-secondary: #d0d0d0; --text-disabled: #9a9a9a;
+  --text-color: #ffffff; --text-muted: #c0c0c0; --button-text: #ffffff;
+  --border-primary: #6fc3df; --border-hover: #ffffff; --border-color: #6fc3df; --gutter-border: #6fc3df;
+  --button-bg: #1a1a1a; --button-hover-bg: #2a2a2a;
+  --status-bar-bg: #000000; --selection-bg: #1f6feb; --cursor-color: #ffffff;
+  --tooltip-bg: #000000; --tooltip-text: #ffffff; --autocomplete-hover: #2a2a2a;
+  --error-color: #ff5555; --success-color: #00e676; --warning-color: #ffe000;
+}

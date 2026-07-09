@@ -3,10 +3,13 @@
  * Tools allow the AI to read/write files, run commands, search, etc.
  */
 
+import { robustReplace } from './editReplace';
+import { rankFiles, findSymbolReferences, IndexedFile } from './codebaseIndex';
+
 const ipc = () => (window as any).electron?.ipcRenderer;
 
 const AI_TOOL_IGNORES = ['node_modules', '.git', 'dist', 'build', 'out', 'coverage'];
-const DEFAULT_READFILE_CHUNK_LINES = 120;
+const DEFAULT_READFILE_CHUNK_LINES = 800;
 
 export interface EditorDiagnostic {
   file: string;
@@ -34,6 +37,19 @@ export function getErrorDiagnostics(): EditorDiagnostic[] {
   return _currentDiagnostics.filter(d => d.severity === 'error');
 }
 
+// Live todo/progress list maintained by the model via the updateTodoList tool.
+// The chat UI registers a listener so updates render immediately.
+export interface TodoItem {
+  text: string;
+  status: 'pending' | 'in_progress' | 'done';
+}
+
+let _todoUpdateListener: ((items: TodoItem[]) => void) | null = null;
+
+export function setTodoUpdateListener(listener: ((items: TodoItem[]) => void) | null): void {
+  _todoUpdateListener = listener;
+}
+
 export interface ToolDefinition {
   type: 'function';
   function: {
@@ -41,7 +57,7 @@ export interface ToolDefinition {
     description: string;
     parameters: {
       type: 'object';
-      properties: Record<string, { type: string; description: string; enum?: string[] }>;
+      properties: Record<string, { type: string; description: string; enum?: string[]; items?: any }>;
       required: string[];
     };
   };
@@ -74,6 +90,7 @@ interface SearchWorkspaceArgs {
   filePattern?: string;
   caseSensitive?: boolean;
   maxResults?: number;
+  contextLines?: number;
 }
 
 export const AI_TOOLS: ToolDefinition[] = [
@@ -96,7 +113,7 @@ export const AI_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'readFile',
-      description: 'Read the contents of a file. For large files, use startLine/endLine to read specific sections and avoid token waste. Lines are 1-indexed. If omitted, reads the entire file.',
+      description: 'Read the contents of a file. Reads up to 800 lines at once by default — read a generous window, do NOT make many tiny 20-30 line reads. For very large files use startLine/endLine to page through in big chunks. Lines are 1-indexed. Call readFile in parallel when you need several files.',
       parameters: {
         type: 'object',
         properties: {
@@ -202,7 +219,8 @@ export const AI_TOOLS: ToolDefinition[] = [
           },
           filePattern: { type: 'string', description: 'Optional glob-style file filter such as "*.ts" or "*.md".' },
           caseSensitive: { type: 'boolean', description: 'Whether matching should be case-sensitive. Defaults to false.' },
-          maxResults: { type: 'number', description: 'Maximum number of matches to return. Defaults to 50 and is capped at 200.' }
+          maxResults: { type: 'number', description: 'Maximum number of matches to return. Defaults to 50 and is capped at 200.' },
+          contextLines: { type: 'number', description: 'Lines of surrounding source to include around each content match (0-5, default 0). Use 2-3 to see matches in context and avoid a follow-up readFile.' }
         },
         required: ['path', 'query']
       }
@@ -277,6 +295,105 @@ export const AI_TOOLS: ToolDefinition[] = [
           path: { type: 'string', description: 'Optional file path to filter diagnostics for. If omitted, returns diagnostics for all open files.' }
         },
         required: []
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'applyPatch',
+      description: 'Apply several edits across one or more files in a single atomic call. Each edit is a { path, search, replace } like replaceInFile. Either all edits apply or none do (on any failure nothing is written). Prefer this over many separate replaceInFile calls for a multi-file change.',
+      parameters: {
+        type: 'object',
+        properties: {
+          edits: {
+            type: 'array',
+            description: 'List of edits to apply atomically.',
+            items: {
+              type: 'object',
+              properties: {
+                path: { type: 'string', description: 'File path to edit.' },
+                search: { type: 'string', description: 'Exact existing text to find (whitespace-tolerant matching is applied).' },
+                replace: { type: 'string', description: 'Replacement text.' },
+                allOccurrences: { type: 'boolean', description: 'Replace all matches in that file instead of the first.' }
+              },
+              required: ['path', 'search', 'replace']
+            }
+          }
+        },
+        required: ['edits']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'searchCodebase',
+      description: 'Semantically-ranked search over the whole project. Give a natural-language description or symbol and get the most RELEVANT files with snippets, ranked by relevance (BM25 + filename boost). Use this FIRST to locate where a feature/bug lives when you do not know the file — better than plain text search.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'What you are looking for — a description, feature name, or symbol.' },
+          path: { type: 'string', description: 'Directory to search under. Defaults to the project root.' },
+          maxResults: { type: 'number', description: 'How many ranked files to return (default 8, max 20).' }
+        },
+        required: ['query']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'findReferences',
+      description: 'Find every whole-word reference to a symbol (function, variable, class, type) across the project, with surrounding context. Use to see where something is defined and used before changing it.',
+      parameters: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', description: 'Exact symbol name to find, e.g. "getUserName".' },
+          path: { type: 'string', description: 'Directory to search under. Defaults to the project root.' },
+          maxResults: { type: 'number', description: 'Maximum references to return (default 60, max 200).' }
+        },
+        required: ['symbol']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'webFetch',
+      description: 'Fetch a web page or API URL and return its readable text content (HTML is stripped to text). Use this to read up-to-date library docs, API references, or a URL the user provided. Only use http(s) URLs.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'Absolute http(s) URL to fetch.' },
+          maxChars: { type: 'number', description: 'Maximum characters of text to return (default 20000, max 60000).' }
+        },
+        required: ['url']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'updateTodoList',
+      description: 'Maintain a visible todo/progress list for multi-step tasks. Send the FULL updated list every time something changes: when you plan the steps, when you start a step (in_progress), and when you finish one (done). Keep exactly one item in_progress at a time. Skip this tool for trivial single-step requests.',
+      parameters: {
+        type: 'object',
+        properties: {
+          items: {
+            type: 'array',
+            description: 'The complete, updated todo list (full replacement, not a diff).',
+            items: {
+              type: 'object',
+              properties: {
+                text: { type: 'string', description: 'Short description of the step' },
+                status: { type: 'string', enum: ['pending', 'in_progress', 'done'], description: 'Current status of the step' }
+              },
+              required: ['text', 'status']
+            }
+          }
+        },
+        required: ['items']
       }
     }
   },
@@ -399,58 +516,6 @@ function matchesFileGlob(filePath: string, fileGlob?: string): boolean {
   return matcher.test(normalizedPath) || matcher.test(basenameOf(normalizedPath));
 }
 
-function splitLinesPreserveNewlines(content: string): string[] {
-  return String(content || '').match(/[^\n]*\n|[^\n]+$/g) || [];
-}
-
-function getLeadingWhitespace(value: string): string {
-  const match = String(value || '').match(/^\s*/);
-  return match?.[0] || '';
-}
-
-function replaceSingleLineByTrimmedMatch(content: string, search: string, replace: string) {
-  const normalizedSearch = search.replace(/\r/g, '').trim();
-  if (!normalizedSearch || normalizedSearch.includes('\n')) {
-    return null;
-  }
-
-  const lines = splitLinesPreserveNewlines(content);
-  const matches = lines
-    .map((line, index) => ({
-      index,
-      line,
-      trimmed: line.replace(/\r?\n$/, '').trim()
-    }))
-    .filter(entry => entry.trimmed === normalizedSearch);
-
-  if (matches.length !== 1) {
-    return null;
-  }
-
-  const match = matches[0];
-  const originalLine = match.line;
-  const lineEndingMatch = originalLine.match(/\r?\n$/);
-  const lineEnding = lineEndingMatch?.[0] || '';
-  const replaceWithoutEnding = replace.replace(/\r?\n$/, '');
-  const replacementLine = `${getLeadingWhitespace(originalLine)}${replaceWithoutEnding.trimStart()}${lineEnding}`;
-
-  if (replacementLine === originalLine) {
-    return {
-      updatedContent: content,
-      replacements: 0,
-      mode: 'line-trimmed' as const
-    };
-  }
-
-  const updatedLines = [...lines];
-  updatedLines[match.index] = replacementLine;
-  return {
-    updatedContent: updatedLines.join(''),
-    replacements: 1,
-    mode: 'line-trimmed' as const
-  };
-}
-
 function scorePathCandidate(requested: string, candidate: string): number {
   const requestedParts = normalizeForMatch(requested).split('/').filter(Boolean);
   const candidateParts = normalizeForMatch(candidate).split('/').filter(Boolean);
@@ -538,6 +603,7 @@ async function executeWorkspaceSearch(
     caseSensitive = false
   } = args;
   const maxResults = Math.max(1, Math.min(200, Math.floor(Number(args.maxResults) || 50)));
+  const contextLines = Math.max(0, Math.min(5, Math.floor(Number(args.contextLines) ?? 0)));
   const { directoryPath, adjustedFrom } = await resolveDirectoryPath(renderer, inputPath, projectPath);
   const workspaceError = ensureToolPathWithinProject(directoryPath, projectPath);
   if (workspaceError) {
@@ -582,7 +648,20 @@ async function executeWorkspaceSearch(
           const line = lines[index];
           regex.lastIndex = 0;
           if (regex.test(line)) {
-            results.push(`${relative}:${index + 1}: ${line.trim().slice(0, 240)}`);
+            if (contextLines > 0) {
+              // Emit the hit with ±contextLines of surrounding source so the
+              // model can act without a follow-up readFile round-trip.
+              const from = Math.max(0, index - contextLines);
+              const to = Math.min(lines.length - 1, index + contextLines);
+              const block: string[] = [`${relative}:${index + 1}:`];
+              for (let ci = from; ci <= to; ci += 1) {
+                const marker = ci === index ? '>' : ' ';
+                block.push(`${marker} ${String(ci + 1).padStart(5, ' ')}| ${lines[ci].slice(0, 240)}`);
+              }
+              results.push(block.join('\n'));
+            } else {
+              results.push(`${relative}:${index + 1}: ${line.trim().slice(0, 240)}`);
+            }
             if (results.length >= maxResults) break;
           }
         }
@@ -594,6 +673,55 @@ async function executeWorkspaceSearch(
 
   const prefix = adjustedFrom ? `[Adjusted search path from ${adjustedFrom} to ${directoryPath}]\n` : '';
   return `${prefix}${results.length ? results.join('\n') : 'No matches found'}`;
+}
+
+// Source extensions worth indexing for codebase search / references. Keeps the
+// index focused on code and avoids reading giant binary/asset files.
+const INDEXABLE_EXTENSIONS = new Set([
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts',
+  '.py', '.rb', '.go', '.rs', '.java', '.kt', '.c', '.h', '.cpp', '.hpp', '.cc',
+  '.cs', '.php', '.swift', '.scala', '.sh', '.bash', '.ps1',
+  '.json', '.yaml', '.yml', '.toml', '.md', '.txt', '.css', '.scss', '.less',
+  '.html', '.vue', '.svelte', '.sql', '.graphql', '.proto'
+]);
+
+const MAX_INDEX_FILES = 1500;
+const MAX_INDEX_FILE_BYTES = 200000;
+
+// Read a bounded set of source files under a directory for in-memory indexing.
+async function collectWorkspaceFiles(
+  renderer: { invoke: (channel: string, ...args: any[]) => Promise<any> },
+  directoryPath: string
+): Promise<IndexedFile[]> {
+  const files = await renderer.invoke('fs:listFilesRecursive', directoryPath, { ignore: AI_TOOL_IGNORES });
+  if (!Array.isArray(files) || files.length === 0) return [];
+  const candidates = files
+    .filter((f: string) => INDEXABLE_EXTENSIONS.has((f.match(/\.[^.\\/:]+$/) || [''])[0].toLowerCase()))
+    .slice(0, MAX_INDEX_FILES);
+
+  const indexed: IndexedFile[] = [];
+  // Read in modest batches to avoid flooding IPC.
+  const BATCH = 40;
+  for (let i = 0; i < candidates.length; i += BATCH) {
+    const batch = candidates.slice(i, i + BATCH);
+    const contents = await Promise.all(
+      batch.map(async (file: string) => {
+        try {
+          const content = await renderer.invoke('fs:readFile', file);
+          if (typeof content !== 'string' || content.length > MAX_INDEX_FILE_BYTES) return null;
+          return { file, content };
+        } catch {
+          return null;
+        }
+      })
+    );
+    for (const c of contents) {
+      if (!c) continue;
+      const relative = normalizePath(c.file.replace(directoryPath, '').replace(/^[\\/]/, ''));
+      indexed.push({ path: relative || c.file, content: c.content });
+    }
+  }
+  return indexed;
 }
 
 async function resolveDirectoryPath(
@@ -690,6 +818,36 @@ export async function executeToolCall(
     let result: string;
 
     switch (toolCall.function.name) {
+      case 'updateTodoList': {
+        const rawItems = Array.isArray(args.items) ? args.items : null;
+        if (!rawItems || rawItems.length === 0) {
+          result = 'Error: updateTodoList requires a non-empty "items" array with the FULL current list, e.g. {"items": [{"text": "Read config", "status": "done"}, {"text": "Fix bug", "status": "in_progress"}]}.';
+          break;
+        }
+        const items: TodoItem[] = [];
+        for (const raw of rawItems.slice(0, 30)) {
+          const text =
+            typeof raw === 'string'
+              ? raw.trim()
+              : typeof raw?.text === 'string'
+                ? raw.text.trim()
+                : '';
+          if (!text) continue;
+          const status: TodoItem['status'] =
+            raw?.status === 'done' || raw?.status === 'in_progress' ? raw.status : 'pending';
+          items.push({ text: text.slice(0, 200), status });
+        }
+        if (items.length === 0) {
+          result = 'Error: updateTodoList received no valid items. Each item needs a non-empty "text" and a "status" of pending, in_progress, or done.';
+          break;
+        }
+        _todoUpdateListener?.(items);
+        const doneCount = items.filter(item => item.status === 'done').length;
+        const active = items.find(item => item.status === 'in_progress');
+        result = `Todo list updated: ${doneCount}/${items.length} done${active ? `, in progress: ${active.text}` : ''}.`;
+        break;
+      }
+
       case 'findFile': {
         const inputPath = resolvePath(args.path, projectPath);
         const workspaceError = ensureToolPathWithinProject(inputPath, projectPath);
@@ -839,39 +997,25 @@ export async function executeToolCall(
         }
 
         const replaceAll = Boolean(args.allOccurrences);
-        let updatedContent = content;
-        let replacements = 0;
-        let replacementMode: 'exact' | 'line-trimmed' = 'exact';
 
-        if (content.includes(search)) {
-          if (replaceAll) {
-            updatedContent = content.split(search).join(replace);
-            replacements = content.split(search).length - 1;
-          } else {
-            updatedContent = content.replace(search, () => {
-              replacements += 1;
-              return replace;
-            });
-          }
-        } else {
-          const fallback = !replaceAll
-            ? replaceSingleLineByTrimmedMatch(content, search, replace)
-            : null;
-          if (!fallback) {
-            // Give the AI helpful context about why the search failed
-            const totalLines = content.split('\n').length;
-            const searchPreview = search.length > 80 ? search.slice(0, 80) + '...' : search;
-            const searchLines = search.split('\n').length;
-            result = `Error: Search text not found in ${resolvedPath} (file has ${totalLines} lines). Your search string (${searchLines} line(s)): "${searchPreview}" does not match any part of the file. The file content may have changed. Re-read the file with readFile to see the current content, then retry with the correct search text.`;
-            break;
-          }
-          updatedContent = fallback.updatedContent;
-          replacements = fallback.replacements;
-          replacementMode = fallback.mode;
+        // Robust cascading match (exact → line-trimmed → block-anchor →
+        // whitespace/indentation/escape-normalized → context-aware → …). This
+        // rescues the common case where the model's search text is off by
+        // whitespace or indentation, instead of failing the edit outright.
+        const outcome = robustReplace(content, search, replace, replaceAll);
+        if (!outcome.ok || outcome.content === undefined) {
+          const totalLines = content.split('\n').length;
+          const searchPreview = search.length > 80 ? search.slice(0, 80) + '...' : search;
+          const searchLines = search.split('\n').length;
+          result = `Error editing ${resolvedPath} (file has ${totalLines} lines). ${outcome.error} Search (${searchLines} line(s)): "${searchPreview}"`;
+          break;
         }
+        const updatedContent = outcome.content;
+        const replacements = outcome.replacements ?? 0;
+        const replacementMode = outcome.strategy ?? 'exact';
 
         if (updatedContent === content) {
-          result = `Error: No changes applied in ${resolvedPath}: the replacement produced identical content. The search text was found but replacing it resulted in the same file. Make sure your replace text is actually different from the search text. Read the file again to verify the current content.`;
+          result = `Error: No changes applied in ${resolvedPath}: the replacement produced identical content. Make sure your replace text is actually different from the search text.`;
           break;
         }
 
@@ -882,7 +1026,7 @@ export async function executeToolCall(
         }
         notifyFileChanged(resolvedPath);
         const prefix = guessed ? `[Resolved from ${args.path} to ${resolvedPath}] ` : '';
-        const modeSuffix = replacementMode === 'line-trimmed' ? ', trimmed line match' : '';
+        const modeSuffix = replacementMode !== 'exact' ? `, matched via ${replacementMode}` : '';
         result = `${prefix}Updated ${resolvedPath} (${replacements} replacement${replacements === 1 ? '' : 's'}${modeSuffix})`;
         break;
       }
@@ -1040,6 +1184,126 @@ export async function executeToolCall(
           );
           result = `Found ${filtered.length} diagnostic(s):\n${lines.join('\n')}`;
         }
+        break;
+      }
+
+      case 'applyPatch': {
+        const edits = Array.isArray(args.edits) ? args.edits : null;
+        if (!edits || edits.length === 0) {
+          result = 'Error: applyPatch requires a non-empty "edits" array of { path, search, replace }.';
+          break;
+        }
+        // Phase 1: resolve + compute every edit WITHOUT writing. Abort on any
+        // failure. Multiple edits to the SAME file stack on a shared working
+        // copy so an earlier edit is not lost by a later one.
+        const working = new Map<string, string>();
+        const perFileReplacements = new Map<string, number>();
+        const editOrder: string[] = [];
+        let patchError = '';
+        for (let i = 0; i < edits.length; i += 1) {
+          const edit = edits[i] || {};
+          const rawPath = String(edit.path || '');
+          if (!rawPath) { patchError = `edit #${i + 1} is missing "path".`; break; }
+          const { resolvedPath } = await resolveExistingPath(renderer, rawPath, projectPath);
+          const workspaceError = ensureToolPathWithinProject(resolvedPath, projectPath);
+          if (workspaceError) { patchError = `edit #${i + 1} (${rawPath}): ${workspaceError}`; break; }
+          if (!working.has(resolvedPath)) {
+            const fileContent = await renderer.invoke('fs:readFile', resolvedPath);
+            if (typeof fileContent !== 'string') { patchError = `edit #${i + 1}: file not found: ${resolvedPath}.`; break; }
+            working.set(resolvedPath, fileContent);
+            perFileReplacements.set(resolvedPath, 0);
+            editOrder.push(resolvedPath);
+          }
+          const search = String(edit.search ?? '');
+          const replace = String(edit.replace ?? '');
+          const outcome = robustReplace(working.get(resolvedPath)!, search, replace, Boolean(edit.allOccurrences));
+          if (!outcome.ok || outcome.content === undefined) {
+            patchError = `edit #${i + 1} (${rawPath}): ${outcome.error}`;
+            break;
+          }
+          working.set(resolvedPath, outcome.content);
+          perFileReplacements.set(resolvedPath, (perFileReplacements.get(resolvedPath) || 0) + (outcome.replacements ?? 0));
+        }
+        if (patchError) {
+          result = `Error applying patch — nothing was written. ${patchError} Fix that edit and resend the full patch.`;
+          break;
+        }
+        // Phase 2: all edits computed — write each file once.
+        const planned = editOrder.map(resolvedPath => ({
+          resolvedPath,
+          updated: working.get(resolvedPath)!,
+          replacements: perFileReplacements.get(resolvedPath) || 0
+        }));
+        const written: string[] = [];
+        let writeError = '';
+        for (const p of planned) {
+          const ok = await renderer.invoke('fs:writeFile', p.resolvedPath, p.updated);
+          if (!ok) {
+            writeError = `Error: patch partially failed while writing ${p.resolvedPath}. Files written before this point: ${written.join(', ') || 'none'}. Re-read affected files before retrying.`;
+            break;
+          }
+          notifyFileChanged(p.resolvedPath);
+          written.push(p.resolvedPath);
+        }
+        if (writeError) {
+          result = writeError;
+        } else {
+          window.dispatchEvent(new Event('explorer:refresh'));
+          result = `Patch applied: ${written.length} file(s) updated.\n${written.map((w, i) => `- ${w} (${planned[i].replacements} replacement${planned[i].replacements === 1 ? '' : 's'})`).join('\n')}`;
+        }
+        break;
+      }
+
+      case 'searchCodebase': {
+        const query = String(args.query || '').trim();
+        if (!query) { result = 'Error: searchCodebase requires a "query".'; break; }
+        const limit = Math.max(1, Math.min(20, Math.floor(Number(args.maxResults) || 8)));
+        const { directoryPath, adjustedFrom } = await resolveDirectoryPath(renderer, args.path, projectPath);
+        const wsError = ensureToolPathWithinProject(directoryPath, projectPath);
+        if (wsError) { result = wsError; break; }
+        const indexed = await collectWorkspaceFiles(renderer, directoryPath);
+        if (indexed.length === 0) { result = 'No indexable source files found under the search path.'; break; }
+        const ranked = rankFiles(indexed, query, limit);
+        if (ranked.length === 0) {
+          result = `No relevant files found for: ${query}`;
+          break;
+        }
+        const prefix = adjustedFrom ? `[Adjusted search path from ${adjustedFrom} to ${directoryPath}]\n` : '';
+        result = `${prefix}Top ${ranked.length} relevant file(s) for "${query}" (of ${indexed.length} indexed):\n\n` +
+          ranked.map(r => `### ${r.path}  (score ${r.score.toFixed(1)})\n${r.snippet}`).join('\n\n');
+        break;
+      }
+
+      case 'findReferences': {
+        const symbol = String(args.symbol || '').trim();
+        if (!symbol) { result = 'Error: findReferences requires a "symbol".'; break; }
+        const maxHits = Math.max(1, Math.min(200, Math.floor(Number(args.maxResults) || 60)));
+        const { directoryPath, adjustedFrom } = await resolveDirectoryPath(renderer, args.path, projectPath);
+        const wsError = ensureToolPathWithinProject(directoryPath, projectPath);
+        if (wsError) { result = wsError; break; }
+        const indexed = await collectWorkspaceFiles(renderer, directoryPath);
+        const hits = findSymbolReferences(indexed, symbol, 1, maxHits);
+        const prefix = adjustedFrom ? `[Adjusted search path from ${adjustedFrom} to ${directoryPath}]\n` : '';
+        result = hits.length
+          ? `${prefix}${hits.length} reference(s) to "${symbol}":\n\n${hits.join('\n\n')}`
+          : `No references to "${symbol}" found under ${directoryPath}.`;
+        break;
+      }
+
+      case 'webFetch': {
+        const url = String(args.url || '');
+        if (!/^https?:\/\//i.test(url.trim())) {
+          result = 'Error: webFetch requires an absolute http(s) URL.';
+          break;
+        }
+        const fetchResult = await renderer.invoke('ai:webFetch', url, {
+          maxChars: typeof args.maxChars === 'number' ? args.maxChars : undefined
+        });
+        if (!fetchResult || fetchResult.ok === false) {
+          result = `Error fetching ${url}: ${fetchResult?.error || 'unknown error'}${fetchResult?.status ? ` (HTTP ${fetchResult.status})` : ''}`;
+          break;
+        }
+        result = `[Fetched ${url}${fetchResult.status ? ` — HTTP ${fetchResult.status}` : ''}]\n${fetchResult.text || '(empty response)'}`;
         break;
       }
 

@@ -13,6 +13,7 @@ import App from './components/App';
 import ErrorBoundary from './components/ErrorBoundary';
 import './styles/styles.css';
 import './styles/App.css';
+import './styles/themes.css';
 import '@codingame/monaco-vscode-api/monaco';
 import { initializeVSCodeWorkbench } from './services/VSCodeWorkbenchBridge';
 // import '@codingame/monaco-vscode-api/default-extensions/theme-defaults';
@@ -26,8 +27,14 @@ initializeVSCodeWorkbench().then(() => {
   console.error('Failed to initialize VS Code API:', err);
 });
 
-// Setze das Theme auf dark
-document.documentElement.setAttribute('data-theme', 'dark');
+// Apply the persisted theme as early as possible to avoid a flash of the
+// default before React mounts (ThemeProvider keeps it in sync afterwards).
+try {
+  const storedTheme = window.localStorage.getItem('lseditor.theme');
+  document.documentElement.setAttribute('data-theme', storedTheme || 'dark');
+} catch {
+  document.documentElement.setAttribute('data-theme', 'dark');
+}
 
 /**
  * Create the root element and render the React app.

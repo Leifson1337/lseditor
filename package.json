@@ -13,7 +13,7 @@
     "test": "jest",
     "lint": "eslint . --ext .ts,.tsx",
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",
-    "rebuild": "electron-rebuild -f -w node-pty",
+    "rebuild": "electron-rebuild -f -w @homebridge/node-pty-prebuilt-multiarch",
     "dist": "npm run build && electron-builder --win nsis --publish never"
   },
   "dependencies": {
@@ -36,6 +36,7 @@
     "@codingame/monaco-vscode-theme-service-override": "^24.2.0",
     "@codingame/monaco-vscode-view-common-service-override": "24.2.0",
     "@codingame/monaco-vscode-views-service-override": "24.2.0",
+    "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
     "@monaco-editor/react": "^4.7.0",
     "@types/bcrypt": "^5.0.2",
     "@types/react-syntax-highlighter": "^15.5.13",
@@ -143,7 +144,8 @@
       "dist/**/*",
       "config/**/*",
       "logo.png",
-      "package.json"
+      "package.json",
+      "node_modules/@homebridge/node-pty-prebuilt-multiarch/**"
     ],
     "extraResources": [
       {
@@ -152,6 +154,9 @@
       }
     ],
     "asar": true,
+    "asarUnpack": [
+      "node_modules/@homebridge/node-pty-prebuilt-multiarch/**"
+    ],
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "logo.png"

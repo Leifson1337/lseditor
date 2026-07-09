@@ -11,7 +11,7 @@ interface SettingsIconProps {
 // SettingsIcon renders a gear icon that opens a dropdown for settings
 const SettingsIcon: React.FC<SettingsIconProps> = ({ onClick }) => {
   const [isOpen, setIsOpen] = useState(false);
-  const { theme, toggleTheme } = useTheme();
+  const { theme, themes, setTheme } = useTheme();
   const {
     settings: aiSettings,
     updateSettings: updateAISettings,
@@ -93,9 +93,12 @@ const SettingsIcon: React.FC<SettingsIconProps> = ({ onClick }) => {
               <h4>Editor</h4>
               <div className="setting-item">
                 <label>Theme</label>
-                <select value={theme} onChange={toggleTheme}>
-                  <option value="dark">Dark</option>
-                  <option value="light">Light</option>
+                <select value={theme} onChange={event => setTheme(event.target.value as typeof theme)}>
+                  {themes.map(option => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
               </div>
               <div className="setting-item">

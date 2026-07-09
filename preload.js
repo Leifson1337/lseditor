@@ -11,16 +11,21 @@ const ALLOWED_INVOKE_CHANNELS = [
   'fs:stat', 'fs:readFileBinary', 'fs:writeFileBinary', 'fs:watch', 'fs:unwatch', 'fs:copy',
   'getDirectoryEntries', 'extension:search', 'extension:install', 'extension:uninstall', 'extension:list',
   'window:minimize', 'window:maximize', 'window:unmaximize', 'window:close', 'window:isMaximized',
-  'ai:getBasePrompt', 'ai:chat', 'ai:refactor',
+  'ai:getBasePrompt', 'ai:chat', 'ai:refactor', 'ai:webFetch',
   'get-code-completion', 'explain-code', 'refactor-code', 'editor:findInFiles',
   'exec', 'exec:kill', 'terminal:create', 'terminal:kill', 'terminal:resize', 'terminal:dispose',
   'dialog:showOpenDialog', 'dialog:openDirectory', 'dialog:inputBox', 'dialog:showMessageBox',
   'app:getVersion', 'app:openAbout', 'app:newWindow', 'app:openFile', 'app:openFolder', 'app:exit', 'app:getUserDataPath', 'app:getPath',
-  'app:checkForUpdates', 'app:showWhatsNew',
+  'app:checkForUpdates', 'app:showWhatsNew', 'app:openKeyboardShortcuts', 'app:getHardwareInfo',
   'shell:openPath', 'shell:openExternal', 'edit:undo', 'edit:redo', 'edit:cut', 'edit:copy', 'edit:paste', 'edit:find', 'edit:replace',
   'view:toggleFullScreen', 'view:reload', 'terminal:new', 'terminal:runActiveFile', 'file:newTextFile',
   'fs:readFileBase64',
-  'ollama:status', 'ollama:cloudStatus', 'ollama:list', 'ollama:pull', 'ollama:cancelPull', 'ollama:remove'
+  'ollama:status', 'ollama:cloudStatus', 'ollama:start', 'ollama:list', 'ollama:pull', 'ollama:cancelPull', 'ollama:remove',
+  'git:isRepo', 'git:status', 'git:stage', 'git:unstage', 'git:stageAll', 'git:unstageAll',
+  'git:discard', 'git:commit', 'git:checkout', 'git:createBranch', 'git:push', 'git:pull',
+  'git:fetch', 'git:init', 'git:branches', 'git:diff', 'git:log',
+  'github:status', 'github:setToken', 'github:clearToken', 'github:repoFromRemote',
+  'github:pulls', 'github:createPull', 'github:clone'
 ];
 
 const ALLOWED_SEND_CHANNELS = [

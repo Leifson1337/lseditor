@@ -48,6 +48,13 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({ projectPath, onClose
     [activeTab, onClose]
   );
 
+  // Switch tabs without destroying the other terminals; trigger a resize so the
+  // now-visible terminal re-fits its container.
+  const switchTab = useCallback((id: number) => {
+    setActiveTab(id);
+    setTimeout(() => window.dispatchEvent(new Event('resize')), 30);
+  }, []);
+
   useEffect(() => {
     if (!tabs.some(tab => tab.id === activeTab) && tabs.length) {
       setActiveTab(tabs[0].id);
@@ -72,7 +79,7 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({ projectPath, onClose
           <div
             key={tab.id}
             className={`terminal-tab ${activeTab === tab.id ? 'active' : ''}`}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => switchTab(tab.id)}
           >
             {tab.title}
             <button
@@ -93,11 +100,17 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({ projectPath, onClose
         </button>
       </div>
       <div className="terminal-content">
-        {tabs.map(tab =>
-          activeTab === tab.id ? (
-            <TerminalPanel key={tab.id} projectPath={projectPath} onClose={() => closeTab(tab.id)} />
-          ) : null
-        )}
+        {/* Keep every terminal mounted (just hide inactive ones) so switching
+            tabs never kills a running session. */}
+        {tabs.map(tab => (
+          <div
+            key={tab.id}
+            className="terminal-pane"
+            style={{ display: activeTab === tab.id ? 'block' : 'none', height: '100%', width: '100%' }}
+          >
+            <TerminalPanel projectPath={projectPath} onClose={() => closeTab(tab.id)} />
+          </div>
+        ))}
       </div>
     </div>
   );

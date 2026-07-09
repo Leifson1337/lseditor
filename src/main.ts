@@ -6,7 +6,7 @@
  * managing the main window, handling IPC, and integrating with OS-level features.
  */
 
-import { app, BrowserWindow, dialog, ipcMain, MessageBoxOptions, nativeImage, shell, Notification } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, MessageBoxOptions, nativeImage, shell, Notification, safeStorage, session } from 'electron';
 import * as path from 'path';
 import { AIService } from './services/AIService';
 import { UIService } from './services/UIService';
@@ -19,6 +19,8 @@ import { spawn as spawnProcess, ChildProcessWithoutNullStreams } from 'child_pro
 import { randomUUID } from 'crypto';
 import * as https from 'https';
 import * as http from 'http';
+import * as os from 'os';
+import { simpleGit } from 'simple-git';
 
 // Main window and service instances
 let mainWindow: BrowserWindow | null = null;
@@ -29,10 +31,50 @@ let aiService: AIService;
 let uiService: UIService | undefined = undefined;
 const allowedWorkspaceRoots = new Set<string>();
 
+interface PtyLike {
+  write(data: string): void;
+  resize(columns: number, rows: number): void;
+  kill(): void;
+  onData(listener: (data: string) => void): void;
+  onExit(listener: (event: { exitCode: number; signal: number }) => void): void;
+}
+
 interface TerminalSession {
   id: string;
-  process: ChildProcessWithoutNullStreams;
   webContents: Electron.WebContents;
+  // 'pty' = real ConPTY/pty (interactive, tab-completion, correct echo);
+  // 'basic' = child_process pipe fallback when no native pty is available.
+  mode: 'pty' | 'basic';
+  pty?: PtyLike;
+  process?: ChildProcessWithoutNullStreams;
+}
+
+// Lazily load a native pseudo-terminal backend. Prefer the Homebridge prebuilt
+// (ships Electron binaries), then the plain prebuilt. If none is available
+// (e.g. the native module wasn't built/fetched), we fall back to a basic pipe
+// terminal so the app still works — just without full interactivity.
+let ptyBackend: { spawn: (file: string, args: string[], opts: any) => PtyLike } | null | undefined;
+function loadPtyBackend(): { spawn: (file: string, args: string[], opts: any) => PtyLike } | null {
+  if (ptyBackend !== undefined) return ptyBackend;
+  try {
+    const mod = require('@homebridge/node-pty-prebuilt-multiarch');
+    if (mod && typeof mod.spawn === 'function') {
+      ptyBackend = mod;
+      console.log('[terminal] PTY backend: @homebridge/node-pty-prebuilt-multiarch');
+      return mod;
+    }
+  } catch { /* try next */ }
+  try {
+    const mod = require('node-pty-prebuilt-multiarch');
+    if (mod && typeof mod.spawn === 'function') {
+      ptyBackend = mod;
+      console.log('[terminal] PTY backend: node-pty-prebuilt-multiarch');
+      return mod;
+    }
+  } catch { /* none */ }
+  console.warn('[terminal] No native PTY available — using basic pipe terminal. Run "npm run rebuild" for a fully interactive terminal.');
+  ptyBackend = null;
+  return ptyBackend;
 }
 
 const terminalSessions = new Map<string, TerminalSession>();
@@ -86,6 +128,34 @@ if (process.platform === 'win32') {
     console.warn('Failed to set AppUserModelID:', error);
   }
 }
+
+// --- STABILITY: SINGLE INSTANCE ---------------------------------------------
+// Running two copies against the same workspace/userData causes file races and
+// duplicate watchers. Keep a single instance; focus the existing window when a
+// second launch is attempted.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      if (!mainWindow.isVisible()) mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+}
+
+// --- STABILITY: NEVER LET A STRAY ERROR KILL THE MAIN PROCESS ----------------
+// An unhandled exception/rejection in the main process would otherwise tear down
+// the whole app (and all windows). Log it and keep running — individual IPC
+// handlers already return errors to the renderer where it matters.
+process.on('uncaughtException', error => {
+  console.error('Uncaught exception in main process:', error);
+});
+process.on('unhandledRejection', reason => {
+  console.error('Unhandled promise rejection in main process:', reason);
+});
 
 // --- GPU / HARDWARE-ACCELERATION RESILIENCE ---------------------------------
 // Some machines cannot run a GPU-accelerated Chromium window out of the box:
@@ -290,11 +360,15 @@ function needsShell(command: string): boolean {
   return SHELL_META_CHARS.test(command);
 }
 
+// Watchdog: kill AI-run commands that never return (dev servers, interactive
+// prompts, pagers) so a single hung command can't block the whole agent loop.
+const AI_COMMAND_TIMEOUT_MS = 180000;
+
 function runSafeCommand(
   command: string,
   cwd: string,
-  options?: { requestId?: string }
-): Promise<{ stdout: string; stderr: string; code: number; error?: string }> {
+  options?: { requestId?: string; timeoutMs?: number }
+): Promise<{ stdout: string; stderr: string; code: number; error?: string; timedOut?: boolean }> {
   return new Promise((resolve, reject) => {
     try {
       const trimmed = command.trim();
@@ -347,6 +421,33 @@ function runSafeCommand(
 
       let stdout = '';
       let stderr = '';
+      let settled = false;
+      let timedOut = false;
+
+      const timeoutMs = Math.max(1000, options?.timeoutMs ?? AI_COMMAND_TIMEOUT_MS);
+      const watchdog = setTimeout(() => {
+        timedOut = true;
+        try {
+          // Best-effort kill of the whole process tree on Windows, else the child.
+          if (process.platform === 'win32' && child.pid) {
+            spawnProcess('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+          } else {
+            child.kill('SIGKILL');
+          }
+        } catch {
+          /* ignore */
+        }
+      }, timeoutMs);
+
+      const finish = (payload: { stdout: string; stderr: string; code: number; error?: string; timedOut?: boolean }) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(watchdog);
+        if (requestId) {
+          aiCommandProcesses.delete(requestId);
+        }
+        resolve(payload);
+      };
 
       child.stdout.on('data', chunk => {
         stdout += chunk.toString();
@@ -355,18 +456,20 @@ function runSafeCommand(
         stderr += chunk.toString();
       });
       child.on('error', error => {
-        resolve({
-          stdout,
-          stderr,
-          code: 1,
-          error: error.message
-        });
+        finish({ stdout, stderr, code: 1, error: error.message });
       });
       child.on('close', code => {
-        if (requestId) {
-          aiCommandProcesses.delete(requestId);
+        if (timedOut) {
+          finish({
+            stdout,
+            stderr,
+            code: 124,
+            error: `Command timed out after ${Math.round(timeoutMs / 1000)}s and was killed. If this is a long-running or interactive process (e.g. a dev server or watcher), run it differently or in the background.`,
+            timedOut: true
+          });
+          return;
         }
-        resolve({
+        finish({
           stdout,
           stderr,
           code: typeof code === 'number' ? code : 0,
@@ -771,6 +874,110 @@ async function maybeShowWhatsNew(): Promise<void> {
   }
 }
 
+let keyboardShortcutsWindow: BrowserWindow | null = null;
+
+async function openKeyboardShortcutsWindow(): Promise<void> {
+  if (keyboardShortcutsWindow) {
+    keyboardShortcutsWindow.focus();
+    return;
+  }
+
+  const groups: Array<{ title: string; items: Array<[string, string]> }> = [
+    { title: 'General', items: [
+      ['Command Palette', 'Ctrl + Shift + P'],
+      ['Search', 'Ctrl + Shift + F'],
+      ['Reload Window', 'Ctrl + R'],
+      ['Toggle Full Screen', 'F11']
+    ]},
+    { title: 'File', items: [
+      ['Save', 'Ctrl + S'],
+      ['Save As…', 'Ctrl + Shift + S'],
+      ['Save All', 'Ctrl + Alt + S'],
+      ['Close Editor', 'Ctrl + F4']
+    ]},
+    { title: 'Editing', items: [
+      ['Undo', 'Ctrl + Z'],
+      ['Redo', 'Ctrl + Y'],
+      ['Cut / Copy / Paste', 'Ctrl + X / C / V'],
+      ['Find', 'Ctrl + F'],
+      ['Replace', 'Ctrl + H'],
+      ['Find in Files', 'Ctrl + Shift + F'],
+      ['Replace in Files', 'Ctrl + Shift + H'],
+      ['Toggle Line Comment', 'Ctrl + /'],
+      ['Toggle Block Comment', 'Ctrl + Shift + /']
+    ]},
+    { title: 'Selection & Multi-cursor', items: [
+      ['Select All', 'Ctrl + A'],
+      ['Move Line Up / Down', 'Alt + ↑ / ↓'],
+      ['Copy Line Up / Down', 'Shift + Alt + ↑ / ↓'],
+      ['Add Cursor Above / Below', 'Ctrl + Alt + ↑ / ↓'],
+      ['Add Next Occurrence', 'Ctrl + D'],
+      ['Select All Occurrences', 'Ctrl + Shift + L'],
+      ['Duplicate Selection', 'Ctrl + Shift + D']
+    ]},
+    { title: 'Navigation', items: [
+      ['Back / Forward', 'Alt + ← / →'],
+      ['Go to Line/Column…', 'Ctrl + G'],
+      ['Go to Definition', 'F12'],
+      ['Go to Bracket', 'Ctrl + Shift + \\']
+    ]}
+  ];
+
+  const groupsMarkup = groups.map(group => `
+    <section class="group">
+      <h2>${escapeHtml(group.title)}</h2>
+      <table>${group.items.map(([label, keys]) => `
+        <tr><td class="label">${escapeHtml(label)}</td><td class="keys">${keys
+          .split(' ')
+          .map(part => /^[/+]$/.test(part) ? `<span class="sep">${escapeHtml(part)}</span>` : `<kbd>${escapeHtml(part)}</kbd>`)
+          .join(' ')}</td></tr>`).join('')}
+      </table>
+    </section>`).join('');
+
+  const windowIcon = getAppIconImage();
+  const html = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8" /><style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif;
+    background: radial-gradient(circle at top, rgba(59,130,246,0.22), rgba(8,11,20,0.96)), #080b14;
+    color: #eef2ff; }
+  header { padding: 20px 26px 8px; }
+  header h1 { margin: 0; font-size: 19px; }
+  header p { margin: 4px 0 0; font-size: 12.5px; color: #aab4d4; }
+  .scroll { padding: 8px 26px 22px; columns: 2; column-gap: 28px; }
+  @media (max-width: 620px) { .scroll { columns: 1; } }
+  .group { break-inside: avoid; margin-bottom: 16px; }
+  .group h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #8ab4ff; margin: 0 0 6px; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 5px 0; font-size: 13px; vertical-align: middle; }
+  td.label { color: #d7ddf5; }
+  td.keys { text-align: right; white-space: nowrap; }
+  kbd { display: inline-block; padding: 1px 7px; border-radius: 5px; font-family: inherit; font-size: 11.5px;
+    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.14); box-shadow: 0 1px 0 rgba(0,0,0,0.4); }
+  .sep { color: #7d82b2; margin: 0 1px; }
+</style></head><body>
+  <header><h1>Keyboard Shortcuts</h1><p>LS Editor — most editor shortcuts also follow standard VS Code bindings.</p></header>
+  <div class="scroll">${groupsMarkup}</div>
+</body></html>`;
+
+  keyboardShortcutsWindow = new BrowserWindow({
+    width: 720,
+    height: 600,
+    resizable: true,
+    minimizable: false,
+    maximizable: false,
+    autoHideMenuBar: true,
+    title: 'Keyboard Shortcuts',
+    icon: windowIcon ?? resolveAppIconPath(),
+    modal: Boolean(mainWindow),
+    parent: mainWindow ?? undefined,
+    webPreferences: { nodeIntegration: false, contextIsolation: true }
+  });
+  keyboardShortcutsWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  keyboardShortcutsWindow.on('closed', () => { keyboardShortcutsWindow = null; });
+}
+
 async function openAboutWindow(): Promise<void> {
   if (aboutWindow) {
     aboutWindow.focus();
@@ -1110,7 +1317,7 @@ ipcMain.handle('ai:getBasePrompt', async () => {
   }
 });
 
-ipcMain.handle('exec', async (event, command: unknown, options?: { cwd?: string; requestId?: string }) => {
+ipcMain.handle('exec', async (event, command: unknown, options?: { cwd?: string; requestId?: string; timeoutMs?: number }) => {
   assertTrustedSender(event);
 
   if (typeof command !== 'string' || command.trim().length === 0) {
@@ -1123,11 +1330,60 @@ ipcMain.handle('exec', async (event, command: unknown, options?: { cwd?: string;
 
   return new Promise((resolve, reject) => {
     try {
-      runSafeCommand(command, cwd, { requestId: options?.requestId }).then(resolve).catch(reject);
+      runSafeCommand(command, cwd, { requestId: options?.requestId, timeoutMs: options?.timeoutMs }).then(resolve).catch(reject);
     } catch (error) {
       reject(error instanceof Error ? error : new Error(String(error)));
     }
   });
+});
+
+ipcMain.handle('ai:webFetch', async (event, url: unknown, options?: { maxChars?: number }) => {
+  assertTrustedSender(event);
+  if (typeof url !== 'string' || !/^https?:\/\//i.test(url.trim())) {
+    return { ok: false, error: 'Invalid URL. Provide an absolute http(s) URL.' };
+  }
+  const maxChars = Math.max(500, Math.min(60000, Math.floor(options?.maxChars ?? 20000)));
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch(url.trim(), {
+      signal: controller.signal,
+      redirect: 'follow',
+      headers: { 'User-Agent': 'LSEditor-AI/1.0', Accept: 'text/html,application/json,text/plain,*/*' }
+    });
+    const contentType = response.headers.get('content-type') || '';
+    const raw = await response.text();
+    let text = raw;
+    if (/html/i.test(contentType)) {
+      // Strip scripts/styles/tags to plain text — enough for the model to read.
+      text = raw
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<!--[\s\S]*?-->/g, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;/gi, "'")
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n\s*\n\s*\n+/g, '\n\n')
+        .trim();
+    }
+    const truncated = text.length > maxChars;
+    return {
+      ok: response.ok,
+      status: response.status,
+      contentType,
+      text: truncated ? `${text.slice(0, maxChars)}\n\n... (truncated, ${text.length - maxChars} more characters)` : text
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, error: controller.signal.aborted ? 'Request timed out after 25s.' : message };
+  } finally {
+    clearTimeout(timeout);
+  }
 });
 
 ipcMain.handle('exec:kill', async (event, requestId: unknown) => {
@@ -1349,6 +1605,46 @@ async function createWindow() {
   // Listen for window unmaximize event and notify renderer
   mainWindow.on('unmaximize', () => {
     if (mainWindow) mainWindow.webContents.send('window:unmaximized');
+  });
+
+  // STABILITY: recover from a renderer crash instead of leaving a dead/blank
+  // window. Reload up to a few times, then tell the user to restart.
+  let rendererReloads = 0;
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('Renderer process gone:', details.reason);
+    if (details.reason === 'clean-exit' || details.reason === 'killed') return;
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (rendererReloads < 3) {
+      rendererReloads += 1;
+      try { mainWindow.webContents.reload(); } catch { /* noop */ }
+    } else {
+      dialog
+        .showMessageBox(mainWindow, {
+          type: 'error',
+          title: 'LS Editor',
+          message: 'The editor view crashed and could not recover.',
+          detail: 'Please restart the application.',
+          buttons: ['OK']
+        })
+        .catch(() => {});
+    }
+  });
+  mainWindow.webContents.on('unresponsive', () => {
+    console.warn('Renderer became unresponsive.');
+  });
+  mainWindow.webContents.on('responsive', () => {
+    console.info('Renderer responsive again.');
+  });
+
+  // A failed page load (rare, e.g. asar issue) shouldn't leave a hidden window —
+  // surface it so the app isn't stuck invisible.
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    if (errorCode === -3) return; // aborted (e.g. redirect) — ignore
+    console.error('Window failed to load:', errorCode, errorDescription, validatedURL);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setSkipTaskbar(false);
+      mainWindow.show();
+    }
   });
 
   // Load the index.html file into the window
@@ -1926,6 +2222,36 @@ ipcMain.handle('ollama:cloudStatus', async event => {
   return { running, reachable, available: running && reachable };
 });
 
+// Best-effort start of the local Ollama daemon (`ollama serve`) if the binary
+// is on PATH. Used by the onboarding "Start Ollama" action.
+ipcMain.handle('ollama:start', async event => {
+  assertTrustedSender(event);
+  try {
+    // Already running?
+    const pre = await ollamaRequest('GET', '/api/version', undefined, 1500).catch(() => null);
+    if (pre && pre.status === 200) return { ok: true, alreadyRunning: true };
+
+    const child = spawnProcess('ollama', ['serve'], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+      shell: process.platform === 'win32'
+    });
+    child.on('error', () => { /* binary not found — handled by status check below */ });
+    child.unref();
+
+    // Poll for the daemon to come up.
+    for (let i = 0; i < 8; i++) {
+      await new Promise(r => setTimeout(r, 600));
+      const res = await ollamaRequest('GET', '/api/version', undefined, 1500).catch(() => null);
+      if (res && res.status === 200) return { ok: true };
+    }
+    return { ok: false, error: 'Ollama did not become reachable. Is it installed?' };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
 // List locally installed models.
 ipcMain.handle('ollama:list', async event => {
   assertTrustedSender(event);
@@ -2149,6 +2475,36 @@ ipcMain.handle('app:getVersion', () => {
 
 ipcMain.handle('app:getUserDataPath', () => {
   return app.getPath('userData');
+});
+
+// Lightweight hardware snapshot for the onboarding/recommendation flow.
+ipcMain.handle('app:getHardwareInfo', event => {
+  assertTrustedSender(event);
+  try {
+    const cpus = os.cpus() || [];
+    return {
+      totalMemGb: Math.round((os.totalmem() / 1024 ** 3) * 10) / 10,
+      freeMemGb: Math.round((os.freemem() / 1024 ** 3) * 10) / 10,
+      cpuCount: cpus.length,
+      cpuModel: (cpus[0]?.model || 'Unknown').trim(),
+      platform: process.platform,
+      arch: process.arch
+    };
+  } catch (error) {
+    return { totalMemGb: 0, freeMemGb: 0, cpuCount: 0, cpuModel: 'Unknown', platform: process.platform, arch: process.arch };
+  }
+});
+
+// Help ▸ Keyboard Shortcuts
+ipcMain.handle('app:openKeyboardShortcuts', async event => {
+  assertTrustedSender(event);
+  try {
+    await openKeyboardShortcutsWindow();
+    return true;
+  } catch (error) {
+    console.error('Failed to open keyboard shortcuts window:', error);
+    return false;
+  }
 });
 
 // Manually open the "What's new" changelog window (e.g. from a menu/About link).
@@ -2544,6 +2900,58 @@ function setupTerminalIpcHandlers() {
     const cwd = resolveWorkingDirectory(options.cwd);
     const shell = resolveShellExecutable(options.shell);
     const env = typeof options.env === 'object' && options.env !== null ? options.env : undefined;
+
+    const cols = typeof options.cols === 'number' && options.cols > 0 ? Math.floor(options.cols) : 80;
+    const rows = typeof options.rows === 'number' && options.rows > 0 ? Math.floor(options.rows) : 24;
+
+    // --- Preferred path: real PTY (interactive, tab-completion, correct echo) --
+    const pty = loadPtyBackend();
+    if (pty) {
+      try {
+        const ptyProcess = pty.spawn(shell, [], {
+          name: 'xterm-256color',
+          cols,
+          rows,
+          cwd,
+          env: { ...process.env, ...(env ?? {}) }
+        });
+
+        const sessionId = randomUUID();
+        const session: TerminalSession = {
+          id: sessionId,
+          webContents: event.sender,
+          mode: 'pty',
+          pty: ptyProcess
+        };
+        terminalSessions.set(sessionId, session);
+
+        ptyProcess.onData(data => {
+          if (!session.webContents.isDestroyed()) {
+            session.webContents.send('terminal:data', { sessionId, data });
+          }
+        });
+
+        ptyProcess.onExit(({ exitCode, signal }) => {
+          if (!session.webContents.isDestroyed()) {
+            session.webContents.send('terminal:exit', { sessionId, exitCode, signal: signal ?? 0 });
+          }
+          terminalSessions.delete(sessionId);
+        });
+
+        session.webContents.once('destroyed', () => {
+          if (terminalSessions.delete(sessionId)) {
+            try { ptyProcess.kill(); } catch { /* noop */ }
+          }
+        });
+
+        return { sessionId, mode: 'pty' };
+      } catch (error) {
+        // PTY spawn failed at runtime — fall through to the basic pipe terminal.
+        console.warn('[terminal] PTY spawn failed, falling back to basic terminal:', error);
+      }
+    }
+
+    // --- Fallback: basic child_process pipe terminal --------------------------
     const { command, args } = buildShellCommand(shell);
 
     try {
@@ -2560,6 +2968,7 @@ function setupTerminalIpcHandlers() {
       const sessionId = randomUUID();
       const session: TerminalSession = {
         id: sessionId,
+        mode: 'basic',
         process: child,
         webContents: event.sender
       };
@@ -2609,7 +3018,7 @@ function setupTerminalIpcHandlers() {
         }
       }
 
-      return { sessionId };
+      return { sessionId, mode: 'basic' };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       sendTerminalError(event.sender, null, `Terminal konnte nicht gestartet werden: ${message}`);
@@ -2636,7 +3045,9 @@ function setupTerminalIpcHandlers() {
     }
 
     try {
-      if (session.process.stdin.writable) {
+      if (session.mode === 'pty' && session.pty) {
+        session.pty.write(data);
+      } else if (session.process?.stdin.writable) {
         session.process.stdin.write(data);
       }
     } catch (error) {
@@ -2660,6 +3071,12 @@ function setupTerminalIpcHandlers() {
     if (!session || session.webContents.id !== event.sender.id) {
       return;
     }
+
+    const cols = Number(payload?.cols);
+    const rows = Number(payload?.rows);
+    if (session.mode === 'pty' && session.pty && cols > 0 && rows > 0) {
+      try { session.pty.resize(Math.floor(cols), Math.floor(rows)); } catch { /* noop */ }
+    }
   });
 
   ipcMain.handle('terminal:dispose', async (event, payload) => {
@@ -2677,7 +3094,8 @@ function setupTerminalIpcHandlers() {
     terminalSessions.delete(sessionId);
 
     try {
-      session.process.kill();
+      if (session.mode === 'pty') session.pty?.kill();
+      else session.process?.kill();
     } catch (error) {
       console.warn('Failed to kill terminal session:', error);
     }
@@ -2685,6 +3103,357 @@ function setupTerminalIpcHandlers() {
     return true;
   });
 }
+// ─────────────────────────────────────────────────────────────────────────────
+// Git integration. simple-git runs the real `git` binary, so it must live in the
+// main process. All handlers validate the working directory against the allowed
+// workspace roots and return { ok, error } for mutating operations.
+// ─────────────────────────────────────────────────────────────────────────────
+function getGit(cwd: unknown) {
+  if (typeof cwd !== 'string' || !cwd.trim()) throw new Error('Invalid repository path');
+  const normalized = validatePath(cwd);
+  return simpleGit({ baseDir: normalized, maxConcurrentProcesses: 3 });
+}
+
+// Map a git status char to a human-friendly change type.
+const gitChangeType = (code: string): string => {
+  switch (code) {
+    case 'M': return 'modified';
+    case 'A': return 'added';
+    case '?': return 'added';
+    case 'D': return 'deleted';
+    case 'R': return 'renamed';
+    case 'C': return 'copied';
+    case 'U': return 'conflicted';
+    default: return 'modified';
+  }
+};
+
+function setupGitIpcHandlers() {
+  ipcMain.handle('git:isRepo', async (event, cwd) => {
+    assertTrustedSender(event);
+    try { return await getGit(cwd).checkIsRepo(); } catch { return false; }
+  });
+
+  ipcMain.handle('git:status', async (event, cwd) => {
+    assertTrustedSender(event);
+    try {
+      const git = getGit(cwd);
+      if (!(await git.checkIsRepo())) return { isRepo: false };
+      const s = await git.status();
+      const staged: Array<{ path: string; type: string }> = [];
+      const unstaged: Array<{ path: string; type: string }> = [];
+      for (const f of s.files) {
+        if (f.index && f.index !== ' ' && f.index !== '?') {
+          staged.push({ path: f.path, type: gitChangeType(f.index) });
+        }
+        if (f.working_dir && f.working_dir !== ' ') {
+          unstaged.push({ path: f.path, type: gitChangeType(f.working_dir) });
+        }
+      }
+      return {
+        isRepo: true,
+        current: s.current,
+        tracking: s.tracking,
+        ahead: s.ahead,
+        behind: s.behind,
+        staged,
+        unstaged,
+        conflicted: s.conflicted
+      };
+    } catch (error) {
+      return { isRepo: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  const mutating = (channel: string, run: (git: ReturnType<typeof getGit>, ...args: any[]) => Promise<any>) => {
+    ipcMain.handle(channel, async (event, cwd, ...args) => {
+      assertTrustedSender(event);
+      try {
+        const result = await run(getGit(cwd), ...args);
+        return { ok: true, result };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+  };
+
+  mutating('git:stage', (git, files: string[]) => git.add(files));
+  mutating('git:unstage', (git, files: string[]) => git.reset(['--', ...files]));
+  mutating('git:stageAll', git => git.add('.'));
+  mutating('git:unstageAll', git => git.reset(['HEAD']));
+  mutating('git:discard', (git, files: string[]) => git.checkout(['--', ...files]));
+  mutating('git:checkout', (git, branch: string) => git.checkout(branch));
+  mutating('git:createBranch', (git, name: string) => git.checkoutLocalBranch(name));
+  mutating('git:push', git => git.push());
+  mutating('git:pull', git => git.pull());
+  mutating('git:fetch', git => git.fetch());
+  mutating('git:init', git => git.init());
+
+  // Commit needs a git identity; a freshly-initialised repo often has none, which
+  // makes `git commit` fail. Set a local fallback identity if missing so commits work.
+  ipcMain.handle('git:commit', async (event, cwd, message: string) => {
+    assertTrustedSender(event);
+    try {
+      const git = getGit(cwd);
+      try {
+        const name = (await git.getConfig('user.name')).value;
+        const email = (await git.getConfig('user.email')).value;
+        if (!name) await git.addConfig('user.name', 'LS Editor');
+        if (!email) await git.addConfig('user.email', 'lseditor@localhost');
+      } catch { /* best effort */ }
+      const result = await git.commit(message);
+      return { ok: true, result };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  ipcMain.handle('git:branches', async (event, cwd) => {
+    assertTrustedSender(event);
+    try {
+      const info = await getGit(cwd).branchLocal();
+      return { current: info.current, all: info.all };
+    } catch (error) {
+      return { current: '', all: [], error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  ipcMain.handle('git:diff', async (event, cwd, file: string, staged: boolean) => {
+    assertTrustedSender(event);
+    try {
+      const base = validatePath(cwd);
+      const git = getGit(cwd);
+      const args = staged ? ['--staged', '--', file] : ['--', file];
+      let raw = await git.diff(args);
+      // Untracked/new files have no diff against the index — synthesize one from
+      // the file content so clicking them shows the added lines (this is why a
+      // freshly-initialised repo showed every file as a change with no diff).
+      if ((!raw || !raw.trim()) && !staged) {
+        const status = await git.status();
+        if (status.not_added.includes(file) || status.created.includes(file)) {
+          try {
+            const content = await fs.promises.readFile(path.join(base, file), 'utf-8');
+            const lines = content.split('\n');
+            raw = `diff --git a/${file} b/${file}\nnew file\n--- /dev/null\n+++ b/${file}\n@@ -0,0 +1,${lines.length} @@\n` +
+              lines.map(l => `+${l}`).join('\n');
+          } catch {
+            raw = '(new file — binary or no text preview available)';
+          }
+        }
+      }
+      return raw;
+    } catch (error) {
+      return '';
+    }
+  });
+
+  ipcMain.handle('git:log', async (event, cwd, limit: number) => {
+    assertTrustedSender(event);
+    try {
+      const log = await getGit(cwd).log({ maxCount: typeof limit === 'number' && limit > 0 ? limit : 30 });
+      return log.all.map(c => ({
+        hash: c.hash,
+        shortHash: c.hash.slice(0, 7),
+        message: c.message,
+        author: c.author_name,
+        date: c.date
+      }));
+    } catch (error) {
+      return [];
+    }
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GitHub integration (Personal Access Token). The token is stored encrypted via
+// Electron safeStorage when available and never handed back to the renderer —
+// only auth state and API results cross the IPC boundary.
+// ─────────────────────────────────────────────────────────────────────────────
+const GITHUB_API_HOST = 'api.github.com';
+const GITHUB_TOKEN_FILE = 'github-auth.bin';
+
+function githubTokenPath(): string {
+  return path.join(app.getPath('userData'), GITHUB_TOKEN_FILE);
+}
+
+function saveGithubToken(token: string): void {
+  const buffer = safeStorage.isEncryptionAvailable()
+    ? safeStorage.encryptString(token)
+    : Buffer.from(token, 'utf-8');
+  fs.mkdirSync(path.dirname(githubTokenPath()), { recursive: true });
+  fs.writeFileSync(githubTokenPath(), buffer);
+}
+
+function readGithubToken(): string | null {
+  try {
+    const buffer = fs.readFileSync(githubTokenPath());
+    if (safeStorage.isEncryptionAvailable()) {
+      try { return safeStorage.decryptString(buffer); } catch { return buffer.toString('utf-8'); }
+    }
+    return buffer.toString('utf-8');
+  } catch {
+    return null;
+  }
+}
+
+function clearGithubToken(): void {
+  try { fs.unlinkSync(githubTokenPath()); } catch { /* noop */ }
+}
+
+function githubRequest(method: string, apiPath: string, body?: unknown): Promise<{ status: number; data: string }> {
+  const token = readGithubToken();
+  return new Promise((resolve, reject) => {
+    const payload = body !== undefined ? Buffer.from(JSON.stringify(body)) : undefined;
+    const req = https.request(
+      {
+        hostname: GITHUB_API_HOST,
+        path: apiPath,
+        method,
+        headers: {
+          'User-Agent': 'LSEditor',
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': payload.length } : {})
+        }
+      },
+      res => {
+        const chunks: Buffer[] = [];
+        res.on('data', chunk => chunks.push(chunk));
+        res.on('end', () => resolve({ status: res.statusCode || 0, data: Buffer.concat(chunks).toString('utf-8') }));
+      }
+    );
+    req.on('error', reject);
+    req.setTimeout(15000, () => req.destroy(new Error('GitHub request timed out')));
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+const parseGithubRepo = (url: string): { owner: string; repo: string } | null => {
+  const match = String(url).match(/github\.com[/:]([^/]+)\/([^/.\s]+)(?:\.git)?/i);
+  return match ? { owner: match[1], repo: match[2] } : null;
+};
+
+const githubErrorMessage = (data: string, status: number): string => {
+  try {
+    const parsed = JSON.parse(data);
+    if (parsed?.message) {
+      const details = Array.isArray(parsed.errors) ? parsed.errors.map((e: any) => e.message).filter(Boolean).join('; ') : '';
+      return details ? `${parsed.message}: ${details}` : parsed.message;
+    }
+  } catch { /* fall through */ }
+  return `HTTP ${status}`;
+};
+
+function setupGithubIpcHandlers() {
+  ipcMain.handle('github:status', async event => {
+    assertTrustedSender(event);
+    if (!readGithubToken()) return { authenticated: false };
+    try {
+      const res = await githubRequest('GET', '/user');
+      if (res.status === 200) {
+        const user = JSON.parse(res.data);
+        return { authenticated: true, login: user.login, name: user.name, avatarUrl: user.avatar_url };
+      }
+      return { authenticated: false, error: githubErrorMessage(res.data, res.status) };
+    } catch (error) {
+      return { authenticated: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  ipcMain.handle('github:setToken', async (event, token) => {
+    assertTrustedSender(event);
+    if (typeof token !== 'string' || !token.trim()) return { ok: false, error: 'Empty token' };
+    try {
+      saveGithubToken(token.trim());
+      const res = await githubRequest('GET', '/user');
+      if (res.status === 200) {
+        return { ok: true, login: JSON.parse(res.data).login };
+      }
+      clearGithubToken();
+      return { ok: false, error: githubErrorMessage(res.data, res.status) };
+    } catch (error) {
+      clearGithubToken();
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  ipcMain.handle('github:clearToken', async event => {
+    assertTrustedSender(event);
+    clearGithubToken();
+    return { ok: true };
+  });
+
+  ipcMain.handle('github:repoFromRemote', async (event, cwd) => {
+    assertTrustedSender(event);
+    try {
+      const remotes = await getGit(cwd).getRemotes(true);
+      const origin = remotes.find(r => r.name === 'origin') || remotes[0];
+      const url = origin?.refs?.fetch || origin?.refs?.push || '';
+      const parsed = url ? parseGithubRepo(url) : null;
+      return parsed ? { ...parsed, url } : null;
+    } catch {
+      return null;
+    }
+  });
+
+  ipcMain.handle('github:pulls', async (event, owner: string, repo: string) => {
+    assertTrustedSender(event);
+    try {
+      const res = await githubRequest('GET', `/repos/${owner}/${repo}/pulls?state=open&per_page=30`);
+      if (res.status !== 200) return { ok: false, error: githubErrorMessage(res.data, res.status) };
+      const arr = JSON.parse(res.data);
+      return {
+        ok: true,
+        pulls: arr.map((p: any) => ({
+          number: p.number,
+          title: p.title,
+          author: p.user?.login,
+          head: p.head?.ref,
+          base: p.base?.ref,
+          url: p.html_url,
+          draft: p.draft
+        }))
+      };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  ipcMain.handle('github:createPull', async (event, owner: string, repo: string, payload: any) => {
+    assertTrustedSender(event);
+    try {
+      const res = await githubRequest('POST', `/repos/${owner}/${repo}/pulls`, {
+        title: payload?.title,
+        head: payload?.head,
+        base: payload?.base,
+        body: payload?.body || ''
+      });
+      if (res.status === 201) {
+        const pr = JSON.parse(res.data);
+        return { ok: true, url: pr.html_url, number: pr.number };
+      }
+      return { ok: false, error: githubErrorMessage(res.data, res.status) };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  ipcMain.handle('github:clone', async (event, url: string, targetDir: string) => {
+    assertTrustedSender(event);
+    try {
+      const dir = validatePath(targetDir);
+      await fs.promises.mkdir(dir, { recursive: true });
+      await simpleGit().clone(String(url), dir);
+      registerAllowedRoot(dir);
+      return { ok: true, dir };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+}
+
 // Export services for use in other parts of the application
 export {
   aiService,
@@ -2693,6 +3462,19 @@ export {
 
 // Electron Lifecycle: Services und Fenster nach App-Start initialisieren
 app.whenReady().then(async () => {
+  // `--reset` starts the editor as if freshly installed: wipe all renderer
+  // storage (localStorage → onboarding flag, AI settings/profiles, chats,
+  // theme, caches) BEFORE the window loads, so first-run onboarding shows.
+  if (process.argv.includes('--reset')) {
+    try {
+      await session.defaultSession.clearStorageData();
+      await session.defaultSession.clearCache();
+      console.log('[reset] Renderer storage cleared — starting with first-run state.');
+    } catch (error) {
+      console.error('[reset] Failed to clear storage:', error);
+    }
+  }
+
   // A failure to initialize optional services (e.g. AI) must never stop the
   // editor itself from opening — log it and continue so the window still shows.
   try {
@@ -2703,6 +3485,8 @@ app.whenReady().then(async () => {
   setupIpcHandlers();
   setupFsIpcHandlers();
   setupTerminalIpcHandlers();
+  setupGitIpcHandlers();
+  setupGithubIpcHandlers();
   createSplashWindow();
   await createWindow();
 
@@ -2750,7 +3534,8 @@ app.on('before-quit', () => {
   }
   terminalSessions.forEach(session => {
     try {
-      session.process.kill();
+      if (session.mode === 'pty') session.pty?.kill();
+      else session.process?.kill();
     } catch (error) {
       console.warn('Failed to kill terminal session during shutdown:', error);
     }
@@ -2760,6 +3545,20 @@ app.on('before-quit', () => {
     try { watcher.close(); } catch {}
   });
   fsWatchers.clear();
+});
+
+// STABILITY: standard lifecycle — quit when all windows close (except macOS),
+// and re-create a window when the app is activated with none open (macOS dock).
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    app.quit();
+  }
+});
+
+app.on('activate', () => {
+  if (BrowserWindow.getAllWindows().length === 0) {
+    createWindow().catch(error => console.error('Failed to re-create window on activate:', error));
+  }
 });
 
 /**

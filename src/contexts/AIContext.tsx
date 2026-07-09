@@ -8,7 +8,7 @@ import React, {
   useState
 } from 'react';
 import path from 'path';
-import { AI_TOOLS, executeToolCall, ToolCall, ToolResult, EditorDiagnostic, setCurrentDiagnostics, getErrorDiagnostics } from '../services/AIToolService';
+import { AI_TOOLS, executeToolCall, ToolCall, ToolResult, EditorDiagnostic, setCurrentDiagnostics, getErrorDiagnostics, TodoItem, setTodoUpdateListener } from '../services/AIToolService';
 import { isAbsoluteFilePath, joinPathPreserveAbsolute } from '../utils/pathUtils';
 import WhisperAutoStartService, { WhisperAutoStartState } from '../services/WhisperAutoStartService';
 import { classifyModel, ModelClassification } from '../services/modelCapabilities';
@@ -55,10 +55,24 @@ interface Conversation {
   messages: Message[];
 }
 
+// An AI connection profile — lets the user keep several setups (e.g. "Local 1"
+// using Ollama/LM Studio and "Cloud 1" using an OpenAI-compatible provider) and
+// switch between them in one click.
+export interface AIProfile {
+  id: string;
+  name: string;
+  kind: 'local' | 'cloud';
+  baseUrl: string;
+  model: string;
+  apiKey?: string;
+}
+
 export interface AISettings {
   provider: 'lmstudio';
   baseUrl: string;
   model: string;
+  profiles: AIProfile[];
+  activeProfileId: string;
   temperature: number;
   topP: number;
   maxTokens: number;
@@ -77,6 +91,9 @@ export interface AISettings {
   // runs. Keeps the agent on-scope and ensures nothing is forgotten.
   planningEnabled: boolean;
   planAutoApproveSeconds: number;
+  // Detail level sent with images to vision models. 'low' is cheap/fast, 'high'
+  // resolves small text/diagrams, 'auto' lets the model decide.
+  visionDetail: 'low' | 'high' | 'auto';
 }
 
 export type SubAgentStatus = 'planning' | 'running' | 'done' | 'error';
@@ -160,9 +177,18 @@ interface AIContextType {
   pendingPlanApproval: PendingPlanApproval | null;
   approvePlan: (id: string, editedSteps?: PlanStep[]) => Promise<void>;
   rejectPlan: (id: string) => void;
+  saveProfile: (profile: AIProfile) => void;
+  deleteProfile: (id: string) => void;
+  selectProfile: (id: string) => void;
   subAgents: SubAgentInfo[];
   spawnSubAgents: (parentTask: string) => Promise<void>;
   clearSubAgents: () => void;
+  /** Live partial text of the in-flight completion (streamed). */
+  streamingDraft: StreamingDraft | null;
+  /** Live todo list the agent maintains via the updateTodoList tool. */
+  agentTodos: TodoItem[];
+  /** Token usage of the most recent turn (summed across all loop rounds). */
+  lastTurnTokens?: { prompt: number; completion: number; total: number };
   contextUsagePercent: number;
   lastCompactionSaved?: number;
   activeFilePath?: string;
@@ -172,13 +198,28 @@ interface AIContextType {
 const AIContext = createContext<AIContextType | undefined>(undefined);
 
 const SETTINGS_KEY = 'lseditor.ai.settings';
+const DEFAULT_LOCAL_PROFILE_ID = 'local-1';
+const defaultProfiles: AIProfile[] = [
+  { id: DEFAULT_LOCAL_PROFILE_ID, name: 'Local 1', kind: 'local', baseUrl: 'http://localhost:1234', model: '', apiKey: '' }
+];
+// Coding wants precise, low-variance output. 0.7 (a chat default) makes edits
+// and tool arguments sloppy; 0.2 keeps the model on-target. maxTokens is a
+// COMPLETION cap — 4096 truncates real edits mid-file, so default to 8192.
+const DEFAULT_TEMPERATURE = 0.2;
+const DEFAULT_MAX_TOKENS = 8192;
+// The previous shipped defaults; migrated forward when still untouched.
+const LEGACY_DEFAULT_TEMPERATURE = 0.7;
+const LEGACY_DEFAULT_MAX_TOKENS = 4096;
+
 const defaultSettings: AISettings = {
   provider: 'lmstudio',
   baseUrl: 'http://localhost:1234',
   model: '',
-  temperature: 0.7,
+  profiles: defaultProfiles,
+  activeProfileId: DEFAULT_LOCAL_PROFILE_ID,
+  temperature: DEFAULT_TEMPERATURE,
   topP: 1,
-  maxTokens: 4096,
+  maxTokens: DEFAULT_MAX_TOKENS,
   toolsEnabled: true,
   mode: 'coder',
   yoloMode: false,
@@ -189,7 +230,8 @@ const defaultSettings: AISettings = {
   speechAlwaysReady: false,
   subAgentsEnabled: false,
   planningEnabled: true,
-  planAutoApproveSeconds: 60
+  planAutoApproveSeconds: 60,
+  visionDetail: 'auto'
 };
 
 const MAX_AGENT_LOOPS = 30;
@@ -199,6 +241,29 @@ const COMPLETION_REQUEST_TIMEOUT_MS = 120000;
 const COMPLETION_MAX_RETRIES = 4;
 const DIAGNOSTIC_SETTLE_MS = 1200;
 const MAX_AUTO_FIX_ROUNDS = 3;
+// Assumed model context window for the usage meter / auto-compaction trigger.
+// Local models (LM Studio/Ollama) typically run 8k-32k; 16k is a conservative
+// middle ground. NOT the same as settings.maxTokens (max completion length).
+const ASSUMED_CONTEXT_WINDOW_TOKENS = 16384;
+
+// Best-effort context-window estimate from the model id, so the usage meter and
+// auto-compaction trigger are sane for large-context cloud models instead of
+// firing at "85% full" after a few messages. Falls back to the local default.
+const guessContextWindow = (model: string): number => {
+  const id = (model || '').toLowerCase();
+  if (!id) return ASSUMED_CONTEXT_WINDOW_TOKENS;
+  if (id.includes('gemini')) return 200000; // 1M+ real, capped for meter sanity
+  if (id.includes('claude')) return 200000;
+  if (id.includes('gpt-5') || id.includes('gpt-4.1') || id.includes('gpt-4o') || /\bo[1-4]\b/.test(id)) return 128000;
+  if (id.includes('gpt-4')) return 120000;
+  if (id.includes('128k')) return 128000;
+  if (id.includes('32k')) return 32768;
+  if (id.includes('1m')) return 200000;
+  if (id.includes('qwen') || id.includes('llama') || id.includes('deepseek') || id.includes('mistral') || id.includes('glm') || id.includes('kimi')) {
+    return 32768; // most modern local coding models ship 32k
+  }
+  return ASSUMED_CONTEXT_WINDOW_TOKENS;
+};
 
 // File extensions that Monaco can validate natively (TS/JS)
 const MONACO_VALIDATED_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts']);
@@ -302,6 +367,30 @@ Follow its format EXACTLY — it differs depending on the active model. Always:
 - Do not reveal internal reasoning or emit fake function-call/protocol syntax in prose.
 - End substantial completed tasks with: ## Ergebnis, ## Vorgehen, ## Validierung`;
 
+// Some models reject a custom sampling temperature/top_p and only run at their
+// own fixed setting: OpenAI reasoning models (o1/o3/o4, gpt-5) and Anthropic
+// Claude. Sending temperature to them errors or silently degrades output, so
+// we omit it and let the provider use its default.
+const modelIgnoresTemperature = (model: string): boolean => {
+  const id = (model || '').toLowerCase();
+  if (/(^|[\/:_-])o[1-4]($|[\/:_.-])/.test(id)) return true; // o1 / o3 / o4 …
+  if (id.includes('gpt-5') || id.includes('gpt5')) return true;
+  if (id.includes('claude')) return true;
+  if (id.includes('reason') || id.includes('thinking')) return true;
+  return false;
+};
+
+// Resolve the sampling params to actually send for a given model. Returns
+// `undefined` fields for models that must not receive them.
+const resolveSampling = (
+  settings: AISettings
+): { temperature?: number; top_p?: number } => {
+  if (modelIgnoresTemperature(settings.model)) {
+    return {};
+  }
+  return { temperature: settings.temperature, top_p: settings.topP };
+};
+
 const createId = () => {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
     return (crypto as Crypto).randomUUID();
@@ -315,6 +404,55 @@ const createConversation = (index: number): Conversation => ({
   createdAt: Date.now(),
   messages: []
 });
+
+const CONVERSATIONS_KEY = 'lseditor.ai.conversations';
+const MAX_PERSISTED_CONVERSATIONS = 50;
+
+// Restore saved conversations (surviving app restarts). Message timestamps are
+// serialized as ISO strings and revived back into Date objects here.
+const loadStoredConversations = (): Conversation[] => {
+  if (typeof window === 'undefined') return [createConversation(1)];
+  try {
+    const raw = window.localStorage.getItem(CONVERSATIONS_KEY);
+    if (!raw) return [createConversation(1)];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return [createConversation(1)];
+    const revived: Conversation[] = parsed
+      .filter((c: any) => c && typeof c.id === 'string' && Array.isArray(c.messages))
+      .map((c: any) => ({
+        id: c.id,
+        title: typeof c.title === 'string' ? c.title : 'Chat',
+        createdAt: typeof c.createdAt === 'number' ? c.createdAt : Date.now(),
+        messages: c.messages.map((m: any) => ({
+          ...m,
+          timestamp: m.timestamp ? new Date(m.timestamp) : new Date()
+        }))
+      }));
+    return revived.length ? revived : [createConversation(1)];
+  } catch {
+    return [createConversation(1)];
+  }
+};
+
+// Persist conversations, trimming to the most recent N. Retries with fewer
+// conversations if the browser storage quota is exceeded (large image dataURLs).
+const persistConversations = (conversations: Conversation[]) => {
+  if (typeof window === 'undefined') return;
+  let toStore = conversations.slice(-MAX_PERSISTED_CONVERSATIONS);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      window.localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(toStore));
+      return;
+    } catch {
+      // Quota exceeded — drop the oldest half and retry.
+      if (toStore.length <= 1) {
+        try { window.localStorage.removeItem(CONVERSATIONS_KEY); } catch { /* ignore */ }
+        return;
+      }
+      toStore = toStore.slice(Math.ceil(toStore.length / 2));
+    }
+  }
+};
 
 const sanitizeBaseUrl = (url: string) => {
   if (!url) return 'http://localhost:1234';
@@ -511,12 +649,49 @@ const statesIntentWithoutActing = (content: string): boolean => {
   return /(I'll now|I will now|Let me now|I'm going to|Ich werde|Ich füge|Lass mich|Als nächstes|Now I'll|Next I'll|Let me |I'll |I need to |I should ).*(\.|:|\.\.\.)\s*$/im.test(content);
 };
 
-const READ_ONLY_TOOL_NAMES = new Set(['findFile', 'readFile', 'listFiles', 'searchFiles', 'searchWorkspace', 'getDiagnostics']);
-const MUTATING_TOOL_NAMES = new Set(['writeFile', 'appendToFile', 'replaceInFile', 'createDirectory', 'deleteFile', 'renameFile']);
+const READ_ONLY_TOOL_NAMES = new Set(['findFile', 'readFile', 'listFiles', 'searchFiles', 'searchWorkspace', 'searchCodebase', 'findReferences', 'getDiagnostics', 'updateTodoList', 'webFetch']);
+const MUTATING_TOOL_NAMES = new Set(['writeFile', 'appendToFile', 'replaceInFile', 'applyPatch', 'createDirectory', 'deleteFile', 'renameFile']);
 const EXECUTION_TOOL_NAMES = new Set(['runCommand']);
 
 const toolNeedsApproval = (toolName: string) =>
   MUTATING_TOOL_NAMES.has(toolName) || EXECUTION_TOOL_NAMES.has(toolName);
+
+// Irreversible / destructive shell commands that must be confirmed even in
+// YOLO mode. Deliberately broad — false positives just add one approval click.
+const DANGEROUS_COMMAND_PATTERNS: RegExp[] = [
+  /\brm\s+(-[a-z]*\s+)*-[a-z]*r[a-z]*f/i, // rm -rf and variants
+  /\brm\s+-[a-z]*f[a-z]*r/i,
+  /\brmdir\s+\/s/i,
+  /\bdel\s+\/[sf]/i,
+  /\brd\s+\/s/i,
+  /\bformat\s+([a-z]:|\/(fs|q|x)\b)/i, // disk format — NOT `npm run format`
+  /\bmkfs\b/i,
+  /\bdd\s+if=/i,
+  /:\s*\(\s*\)\s*\{.*\|.*&\s*\}\s*;/, // fork bomb
+  /\bgit\s+push\b.*(--force|-f)\b/i,
+  /\bgit\s+reset\s+--hard/i,
+  /\bgit\s+clean\s+-[a-z]*f/i,
+  /\bshutdown\b|\breboot\b/i,
+  /\bchmod\s+-R\s+0?00\b/i,
+  />\s*\/dev\/sd[a-z]/i,
+  /\bcurl\b.*\|\s*(sudo\s+)?(sh|bash)\b/i, // curl | sh
+  /\bwget\b.*\|\s*(sudo\s+)?(sh|bash)\b/i
+];
+
+const isDangerousCommand = (command: string): boolean => {
+  const c = String(command || '');
+  return DANGEROUS_COMMAND_PATTERNS.some(re => re.test(c));
+};
+
+const isDangerousToolCall = (tc: ToolCall): boolean => {
+  if (tc.function.name !== 'runCommand') return false;
+  try {
+    const args = JSON.parse(tc.function.arguments || '{}');
+    return isDangerousCommand(String(args.command || ''));
+  } catch {
+    return false;
+  }
+};
 
 const getToolsForMode = (settings: AISettings) => {
   if (settings.mode === 'qa') {
@@ -539,11 +714,16 @@ const TOOL_USAGE: Record<string, string> = {
   listFiles: 'listFiles — args: { "path": string }. List the contents of a directory.',
   searchFiles: 'searchFiles — args: { "pattern": string }. Find files by glob pattern.',
   searchWorkspace: 'searchWorkspace — args: { "query": string }. Search file names and contents across the project.',
+  searchCodebase: 'searchCodebase — args: { "query": string }. Relevance-ranked search: find the files most relevant to a description/symbol. Use FIRST to locate where something lives.',
+  findReferences: 'findReferences — args: { "symbol": string }. Find every whole-word reference to a symbol across the project, with context.',
+  applyPatch: 'applyPatch — args: { "edits": [{ "path": string, "search": string, "replace": string }] }. Apply multiple edits across files atomically (all-or-nothing).',
   runCommand: 'runCommand — args: { "command": string }. Run ONE shell/terminal command in the project.',
   createDirectory: 'createDirectory — args: { "path": string }. Create a directory.',
   deleteFile: 'deleteFile — args: { "path": string }. Delete a file.',
   renameFile: 'renameFile — args: { "oldPath": string, "newPath": string }. Rename or move a file.',
   getDiagnostics: 'getDiagnostics — args: {}. Get current compiler/linter errors and warnings.',
+  webFetch: 'webFetch — args: { "url": string }. Fetch a web page / API URL and get its text (for up-to-date docs, API references, user-provided links).',
+  updateTodoList: 'updateTodoList — args: { "items": [{ "text": string, "status": "pending"|"in_progress"|"done" }] }. Replace the visible progress list with the FULL updated list (not a diff).',
   spawnSubAgent: 'spawnSubAgent — args: { "task": string }. Delegate an isolated sub-task to a helper agent.'
 };
 
@@ -591,8 +771,50 @@ const PROMPT_FALLBACK_TOOL_PROTOCOL = [
   '```'
 ].join('\n');
 
+// Family-specific guidance. Different model families behave best with slightly
+// different steering; this appends a short tuned block based on the model id.
+const getModelFamilyGuidance = (model: string): string => {
+  const id = (model || '').toLowerCase();
+  if (id.includes('claude')) {
+    return [
+      'You are running as Claude. Be direct and concise — do not over-explain or narrate every step.',
+      'Trust native tool calls: act immediately instead of describing what you will do. Batch independent reads/searches into parallel tool calls.',
+      'Prioritise technical accuracy over agreement; if the user is wrong, say so and explain why.'
+    ].join('\n');
+  }
+  if (id.includes('gpt') || id.includes('o1') || id.includes('o3') || id.includes('o4') || id.includes('openai')) {
+    return [
+      'Be terse and to the point. Prefer parallel tool calls for independent work.',
+      'Do not restate the task or your plan in prose before acting — just make the tool calls.'
+    ].join('\n');
+  }
+  if (id.includes('gemini')) {
+    return [
+      'Work step by step. Before each tool call, take exactly one concrete action toward the goal.',
+      'Do not produce long preamble; act with tools and keep prose minimal.'
+    ].join('\n');
+  }
+  if (id.includes('qwen') || id.includes('deepseek') || id.includes('glm') || id.includes('kimi') || id.includes('mistral') || id.includes('llama')) {
+    return [
+      'Follow the tool-call format EXACTLY. Emit ONE tool call, wait for its result, then continue.',
+      'Put literal values in arguments — never variables, placeholders, or code that builds the arguments.',
+      'Keep search/replace strings short and copied verbatim from what you just read.'
+    ].join('\n');
+  }
+  return '';
+};
+
+// The "keep going" directive that separates a real agent from a chatbot. Only
+// for work modes — a QA/read-only turn should stop after answering.
+const PERSISTENCE_DIRECTIVE = [
+  'PERSISTENCE: You are an agent — keep working until the user\'s request is COMPLETELY resolved before ending your turn. Do not stop at the first obstacle or hand back a half-done task.',
+  'Only stop when: the task is done and verified, OR you are genuinely blocked and need a decision from the user, OR the user asked only a question. When blocked, state the specific blocker plainly.',
+  'Never end your turn saying you "will now" do something — actually do it with a tool call in the same turn.'
+].join('\n');
+
 const createRuntimeModePrompt = (settings: AISettings, nativeTools = true) => {
   const TOOL_PROTOCOL = nativeTools ? NATIVE_TOOL_PROTOCOL : PROMPT_FALLBACK_TOOL_PROTOCOL;
+  const familyGuidance = getModelFamilyGuidance(settings.model);
   const toolGuidance = [
     'EFFICIENCY (important): Match effort to the task and do EXACTLY what was asked — nothing more. Take the most direct path and STOP the moment the request is fulfilled. Fewer, well-chosen tool calls are better; every call costs the user time and tokens.',
     'Do NOT re-verify trivially: a successful writeFile / replaceInFile / appendToFile result already confirms the change — do not readFile the same file again just to "check". Do not call listFiles or getDiagnostics unless the result actually informs your next step.',
@@ -601,8 +823,9 @@ const createRuntimeModePrompt = (settings: AISettings, nativeTools = true) => {
     'If a command or edit FAILS, read the error and change your approach before retrying. NEVER repeat an identical failing call hoping for a different result. After two failed attempts at the same thing, stop and report the blocker plainly.',
     'Editing: readFile (in chunks) the relevant part before changing it; prefer replaceInFile for targeted edits, writeFile for new files / full rewrites, appendToFile to add literal text to the end. Split only very large content into SEVERAL calls with real literal text — never a variable or a loop.',
     'When you change real SOURCE code, call getDiagnostics afterward and fix reported errors with replaceInFile. Skip getDiagnostics for trivial/non-code files (plain text, notes, one-liners) where it adds nothing.',
-    'Use searchWorkspace to find files by content; use findFile when the exact path is unknown.',
-    'For substantial multi-step tasks, keep a short markdown checklist (- [ ] / - [x]) and update it. Simple tasks need no checklist — just do them.',
+    'To locate where a feature/bug lives when you do not know the file, use searchCodebase (relevance-ranked) FIRST; use findReferences to see all uses of a symbol; searchWorkspace for exact text; findFile when only the name is known.',
+    'For a change that spans multiple files, use applyPatch with all edits at once (atomic) instead of many separate replaceInFile calls.',
+    'For substantial multi-step tasks, maintain the progress list with the updateTodoList tool: create it when you plan, mark the current step in_progress, and mark steps done as you finish them. Simple tasks need no todo list — just do them.',
     'Finish with a SHORT confirmation. Use the ## Ergebnis / ## Vorgehen / ## Validierung sections ONLY for substantial multi-step tasks; for a small task one sentence is enough. Never pad the summary or claim validation you did not perform.'
   ].join('\n');
 
@@ -614,8 +837,9 @@ const createRuntimeModePrompt = (settings: AISettings, nativeTools = true) => {
       'Answer questions, explain code, propose changes. For implementation, tell the user to switch to Coder mode.',
       TOOL_PROTOCOL,
       toolReference,
-      toolGuidance
-    ].join('\n\n');
+      toolGuidance,
+      familyGuidance
+    ].filter(Boolean).join('\n\n');
   }
 
   if (settings.mode === 'autonomous') {
@@ -623,20 +847,24 @@ const createRuntimeModePrompt = (settings: AISettings, nativeTools = true) => {
       'Mode: Autonomous. Work like a senior engineer: plan, implement, validate — but stay proportional to the request.',
       'For a multi-step task, make a short checklist and execute it step by step. For a simple task, just do it directly — no checklist, no ceremony.',
       'Validate at a level the task warrants: run getDiagnostics after real source changes; only execute the program with runCommand if the user asked you to run it or if running is required to verify the specific thing requested. Do NOT invent extra verification, and do NOT keep iterating once the actual request is fulfilled — stop.',
+      PERSISTENCE_DIRECTIVE,
       TOOL_PROTOCOL,
       toolReference,
-      toolGuidance
-    ].join('\n\n');
+      toolGuidance,
+      familyGuidance
+    ].filter(Boolean).join('\n\n');
   }
 
   return [
     'Mode: Coder. Read, write, create files and run commands to complete coding tasks.',
     'Prefer tool calls over prose. For multi-step work make a short checklist; for a simple request just do it. STOP as soon as the request is fulfilled.',
     'Do not iterate beyond what was asked, and do not run/execute the result unless the user asked you to.',
+    PERSISTENCE_DIRECTIVE,
     TOOL_PROTOCOL,
     toolReference,
-    toolGuidance
-  ].join('\n\n');
+    toolGuidance,
+    familyGuidance
+  ].filter(Boolean).join('\n\n');
 };
 
 const summarizeToolCall = (toolCall: ToolCall): string => {
@@ -659,6 +887,14 @@ const summarizeToolCall = (toolCall: ToolCall): string => {
         return `Searching ${args.pattern || 'workspace'}`;
       case 'searchWorkspace':
         return `Searching workspace for ${args.query || 'matches'}`;
+      case 'searchCodebase':
+        return `Searching codebase for ${args.query || 'relevant files'}`;
+      case 'findReferences':
+        return `Finding references to ${args.symbol || 'symbol'}`;
+      case 'applyPatch': {
+        const count = Array.isArray(args.edits) ? args.edits.length : 0;
+        return `Applying patch (${count} edit${count === 1 ? '' : 's'})`;
+      }
       case 'runCommand':
         return `Running ${args.command || 'command'}`;
       case 'createDirectory':
@@ -667,6 +903,11 @@ const summarizeToolCall = (toolCall: ToolCall): string => {
         return `Deleting ${args.path || 'path'}`;
       case 'renameFile':
         return `Renaming ${args.oldPath || 'path'}`;
+      case 'updateTodoList': {
+        const items = Array.isArray(args.items) ? args.items : [];
+        const done = items.filter((item: any) => item?.status === 'done').length;
+        return items.length ? `Updating todo list (${done}/${items.length} done)` : 'Updating todo list';
+      }
       default:
         return `Running ${toolCall.function.name}`;
     }
@@ -1061,6 +1302,9 @@ const safeJsonParse = (value: string) => {
 const normalizeTrackedPath = (value: string) =>
   String(value || '').replace(/\\/g, '/').trim().toLowerCase();
 
+const basenameLower = (value: string) =>
+  normalizeTrackedPath(value).split('/').pop() || '';
+
 interface CompletionResult {
   content: string;
   reasoning?: string;
@@ -1068,6 +1312,7 @@ interface CompletionResult {
   toolCalls?: ToolCall[];
   reasoningOnly?: boolean;
   usage?: {
+    prompt_tokens?: number;
     completion_tokens?: number;
     total_tokens?: number;
   };
@@ -1148,6 +1393,119 @@ interface AgentLoopState {
   completionWithoutMutationCorrectionSent: boolean;
   autoFixRounds: number;
   consecutiveEmptyResponses: number;
+  lastToolRoundSignature?: string;
+  repeatedToolRoundCount: number;
+  todoIncompleteCorrectionSent: boolean;
+}
+
+export interface StreamingDraft {
+  content: string;
+  reasoning: string;
+}
+
+/**
+ * Consume an OpenAI-compatible SSE chat-completion stream and reassemble it
+ * into the same payload shape a non-streaming response would have, emitting
+ * throttled partial-text updates along the way. Tool-call deltas are
+ * accumulated per index (arguments arrive as string fragments).
+ */
+async function consumeChatCompletionStream(
+  response: Response,
+  onDelta: (draft: StreamingDraft) => void,
+  resetIdleTimer: () => void
+): Promise<any> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('Streaming response has no readable body');
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let content = '';
+  let reasoning = '';
+  let finishReason: string | undefined;
+  let usage: any;
+  let lastEmit = 0;
+  const toolCallsByIndex = new Map<number, { id?: string; name: string; arguments: string }>();
+
+  // Returns true when the stream signalled completion ([DONE]).
+  const handleLine = (line: string): boolean => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data:')) return false;
+    const data = trimmed.slice(5).trim();
+    if (data === '[DONE]') return true;
+    let parsed: any;
+    try {
+      parsed = JSON.parse(data);
+    } catch {
+      return false;
+    }
+    if (parsed?.usage) usage = parsed.usage;
+    const choice = parsed?.choices?.[0];
+    if (!choice) return false;
+    if (choice.finish_reason) finishReason = choice.finish_reason;
+    const delta = choice.delta || {};
+    if (typeof delta.content === 'string') content += delta.content;
+    const deltaReasoning =
+      typeof delta.reasoning_content === 'string'
+        ? delta.reasoning_content
+        : typeof delta.reasoning === 'string'
+          ? delta.reasoning
+          : '';
+    if (deltaReasoning) reasoning += deltaReasoning;
+    if (Array.isArray(delta.tool_calls)) {
+      for (const tc of delta.tool_calls) {
+        const index = typeof tc?.index === 'number' ? tc.index : 0;
+        const entry = toolCallsByIndex.get(index) || { name: '', arguments: '' };
+        if (tc?.id) entry.id = tc.id;
+        if (tc?.function?.name && !entry.name) entry.name = tc.function.name;
+        if (typeof tc?.function?.arguments === 'string') entry.arguments += tc.function.arguments;
+        toolCallsByIndex.set(index, entry);
+      }
+    }
+    return false;
+  };
+
+  let streamFinished = false;
+  while (!streamFinished) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    resetIdleTimer();
+    buffer += decoder.decode(value, { stream: true });
+    let newlineIdx: number;
+    while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
+      const line = buffer.slice(0, newlineIdx);
+      buffer = buffer.slice(newlineIdx + 1);
+      if (handleLine(line)) streamFinished = true;
+    }
+    const now = Date.now();
+    if (now - lastEmit > 80 && (content || reasoning)) {
+      lastEmit = now;
+      onDelta({ content, reasoning });
+    }
+  }
+  if (buffer.trim()) handleLine(buffer);
+  if (content || reasoning) onDelta({ content, reasoning });
+
+  const toolCalls = Array.from(toolCallsByIndex.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([, entry]) => ({
+      id: entry.id,
+      type: 'function' as const,
+      function: { name: entry.name, arguments: entry.arguments }
+    }))
+    .filter(tc => tc.function.name);
+
+  return {
+    choices: [
+      {
+        message: {
+          content,
+          reasoning_content: reasoning || undefined,
+          ...(toolCalls.length ? { tool_calls: toolCalls } : {})
+        },
+        finish_reason: finishReason
+      }
+    ],
+    usage
+  };
 }
 
 interface PendingToolExecutionState extends AgentLoopState {
@@ -1163,11 +1521,30 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       const stored = window.localStorage.getItem(SETTINGS_KEY);
       if (stored) {
         const parsed = JSON.parse(stored);
-        return {
+        const merged: AISettings = {
           ...defaultSettings,
           ...parsed,
           baseUrl: sanitizeBaseUrl(parsed.baseUrl ?? defaultSettings.baseUrl)
         };
+        // Migration: bump the old coding-hostile sampling defaults forward for
+        // users who never changed them (leave any custom value untouched).
+        if (parsed.temperature === LEGACY_DEFAULT_TEMPERATURE) {
+          merged.temperature = DEFAULT_TEMPERATURE;
+        }
+        if (parsed.maxTokens === LEGACY_DEFAULT_MAX_TOKENS) {
+          merged.maxTokens = DEFAULT_MAX_TOKENS;
+        }
+        // Migration: ensure at least one profile exists; if the stored data
+        // predates profiles, seed the first one from the user's current config.
+        if (!Array.isArray(merged.profiles) || merged.profiles.length === 0) {
+          merged.profiles = [
+            { id: DEFAULT_LOCAL_PROFILE_ID, name: 'Local 1', kind: 'local', baseUrl: merged.baseUrl, model: merged.model, apiKey: merged.apiKey || '' }
+          ];
+        }
+        if (!merged.activeProfileId || !merged.profiles.some(p => p.id === merged.activeProfileId)) {
+          merged.activeProfileId = merged.profiles[0].id;
+        }
+        return merged;
       }
     } catch (error) {
       console.warn('Failed to parse stored AI settings', error);
@@ -1175,8 +1552,8 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
     return defaultSettings;
   });
 
-  const [conversations, setConversations] = useState<Conversation[]>([createConversation(1)]);
-  const [activeConversationId, setActiveConversationId] = useState(conversations[0].id);
+  const [conversations, setConversations] = useState<Conversation[]>(() => loadStoredConversations());
+  const [activeConversationId, setActiveConversationId] = useState(() => conversations[0]?.id ?? '');
   const [models, setModels] = useState<string[]>([]);
   const [isThinking, setIsThinking] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
@@ -1198,6 +1575,18 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
   // Mirror of `toolCallSupported` for the currently selected model, readable from
   // inside performCompletion without adding it to that callback's deps.
   const toolSupportRef = useRef<ToolCallSupport>('unknown');
+  // Whether the server accepts `stream: true` / `stream_options` — downgraded
+  // at runtime when a server rejects them, so we only pay one failed request.
+  const streamSupportRef = useRef<boolean | 'unknown'>('unknown');
+  const streamUsageOptionRef = useRef<boolean | 'unknown'>('unknown');
+  // Live partial text of the in-flight completion (streamed deltas).
+  const [streamingDraft, setStreamingDraft] = useState<StreamingDraft | null>(null);
+  // Live todo/progress list the model maintains via the updateTodoList tool.
+  const [agentTodos, setAgentTodos] = useState<TodoItem[]>([]);
+  const agentTodosRef = useRef<TodoItem[]>([]);
+  // Token usage of the last completed turn (summed over all loop rounds).
+  const [lastTurnTokens, setLastTurnTokens] = useState<{ prompt: number; completion: number; total: number } | undefined>();
+  const turnTokensRef = useRef<{ prompt: number; completion: number; total: number }>({ prompt: 0, completion: 0, total: 0 });
   const pendingToolExecutionRef = useRef<Map<string, PendingToolExecutionState>>(new Map());
   // Holds the prepared agent-loop state for a drafted plan until the user
   // approves/rejects it (or it auto-approves).
@@ -1352,12 +1741,74 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
     }
   }, [settings]);
 
+  // Persist conversations so chat history survives an app restart.
+  useEffect(() => {
+    persistConversations(conversations);
+  }, [conversations]);
+
   const updateSettings = useCallback((patch: Partial<AISettings>) => {
-    setSettings(prev => ({
-      ...prev,
-      ...patch,
-      baseUrl: patch.baseUrl ? sanitizeBaseUrl(patch.baseUrl) : prev.baseUrl
-    }));
+    setSettings(prev => {
+      const next: AISettings = {
+        ...prev,
+        ...patch,
+        baseUrl: patch.baseUrl ? sanitizeBaseUrl(patch.baseUrl) : prev.baseUrl
+      };
+      // Keep the active profile's connection fields in sync when the user edits
+      // baseUrl/model/apiKey directly, so the change persists with that profile.
+      if (
+        (patch.baseUrl !== undefined || patch.model !== undefined || patch.apiKey !== undefined) &&
+        patch.profiles === undefined &&
+        next.activeProfileId
+      ) {
+        next.profiles = next.profiles.map(p =>
+          p.id === next.activeProfileId
+            ? { ...p, baseUrl: next.baseUrl, model: next.model, apiKey: next.apiKey || '' }
+            : p
+        );
+      }
+      return next;
+    });
+  }, []);
+
+  const saveProfile = useCallback((profile: AIProfile) => {
+    setSettings(prev => {
+      const exists = prev.profiles.some(p => p.id === profile.id);
+      const normalized: AIProfile = { ...profile, baseUrl: sanitizeBaseUrl(profile.baseUrl) };
+      const profiles = exists
+        ? prev.profiles.map(p => (p.id === profile.id ? normalized : p))
+        : [...prev.profiles, normalized];
+      // If the edited profile is the active one, reflect its config live.
+      if (profile.id === prev.activeProfileId) {
+        return { ...prev, profiles, baseUrl: normalized.baseUrl, model: normalized.model, apiKey: normalized.apiKey || '' };
+      }
+      return { ...prev, profiles };
+    });
+  }, []);
+
+  const deleteProfile = useCallback((id: string) => {
+    setSettings(prev => {
+      if (prev.profiles.length <= 1) return prev; // always keep one
+      const profiles = prev.profiles.filter(p => p.id !== id);
+      if (prev.activeProfileId === id) {
+        const fallback = profiles[0];
+        return { ...prev, profiles, activeProfileId: fallback.id, baseUrl: fallback.baseUrl, model: fallback.model, apiKey: fallback.apiKey || '' };
+      }
+      return { ...prev, profiles };
+    });
+  }, []);
+
+  const selectProfile = useCallback((id: string) => {
+    setSettings(prev => {
+      const profile = prev.profiles.find(p => p.id === id);
+      if (!profile) return prev;
+      return {
+        ...prev,
+        activeProfileId: id,
+        baseUrl: sanitizeBaseUrl(profile.baseUrl),
+        model: profile.model,
+        apiKey: profile.apiKey || ''
+      };
+    });
   }, []);
 
   const refreshModels = useCallback(async () => {
@@ -1610,6 +2061,21 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
     toolSupportRef.current = toolCallSupported;
   }, [toolCallSupported]);
 
+  // A different server may support streaming again — re-probe after switching.
+  useEffect(() => {
+    streamSupportRef.current = 'unknown';
+    streamUsageOptionRef.current = 'unknown';
+  }, [settings.baseUrl]);
+
+  // Receive live todo-list updates from the updateTodoList tool executor.
+  useEffect(() => {
+    setTodoUpdateListener(items => {
+      agentTodosRef.current = items;
+      setAgentTodos(items);
+    });
+    return () => setTodoUpdateListener(null);
+  }, []);
+
   const getActiveConversation = useCallback(
     () => conversations.find(conv => conv.id === activeConversationId) ?? conversations[0],
     [conversations, activeConversationId]
@@ -1695,7 +2161,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
           for (const img of message.images) {
             parts.push({
               type: 'image_url',
-              image_url: { url: img.dataUrl, detail: 'low' }
+              image_url: { url: img.dataUrl, detail: settings.visionDetail || 'auto' }
             });
           }
           if (textContent) {
@@ -1706,7 +2172,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
 
         return { role, content: textContent };
       });
-  }, []);
+  }, [settings.visionDetail]);
 
   /** Prune API messages to stay within a rough character budget.
    *  Keeps:
@@ -1718,9 +2184,25 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
   const pruneApiMessages = useCallback((messages: any[], charBudget: number = 60000): any[] => {
     // Split into system messages and conversation messages
     const systemMessages = messages.filter((m: any) => m.role === 'system');
-    const conversationMessages = messages.filter((m: any) => m.role !== 'system');
+    let conversationMessages = messages.filter((m: any) => m.role !== 'system');
 
     if (conversationMessages.length <= 4) return messages;
+
+    // First shrink stale tool outputs instead of dropping whole messages: keep
+    // the most recent messages verbatim, truncate older bulky tool results.
+    // This preserves the conversation structure (assistant tool_calls keep
+    // their matching tool replies) while freeing most of the budget.
+    const KEEP_FULL_TAIL = 8;
+    conversationMessages = conversationMessages.map((msg: any, index: number) => {
+      if (msg.role !== 'tool') return msg;
+      if (index >= conversationMessages.length - KEEP_FULL_TAIL) return msg;
+      const text = typeof msg.content === 'string' ? msg.content : '';
+      if (text.length <= 1200) return msg;
+      return {
+        ...msg,
+        content: `${text.slice(0, 600)}\n…[older tool result truncated to save context — re-run the tool if you need the full output]`
+      };
+    });
 
     // Estimate character cost of each message
     const estimateChars = (msg: any): number => {
@@ -1778,7 +2260,8 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       payloadMessages: any[],
       signal: AbortSignal,
       useTools: boolean = false,
-      toolChoice: 'auto' | 'required' = 'auto'
+      toolChoice: 'auto' | 'required' = 'auto',
+      onDelta?: (draft: StreamingDraft) => void
     ): Promise<CompletionResult> => {
       // Ensure there is always at least one user-role message.
       // Some LM Studio Jinja templates error with "No user query found" otherwise.
@@ -1797,8 +2280,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
 
       const body: any = {
         model: settings.model,
-        temperature: settings.temperature,
-        top_p: settings.topP,
+        ...resolveSampling(settings),
         max_tokens: settings.maxTokens,
         messages: finalMessages
       };
@@ -1823,8 +2305,29 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
           throw new DOMException('Aborted', 'AbortError');
         }
 
+        // Stream when the caller wants live deltas and the server hasn't
+        // rejected streaming before. With streaming the timeout is an IDLE
+        // timeout (reset on every chunk), so slow local models can generate
+        // long answers without being cut off mid-response.
+        const attemptStream = typeof onDelta === 'function' && streamSupportRef.current !== false;
+        if (attemptStream) {
+          body.stream = true;
+          if (streamUsageOptionRef.current !== false) {
+            body.stream_options = { include_usage: true };
+          } else {
+            delete body.stream_options;
+          }
+        } else {
+          delete body.stream;
+          delete body.stream_options;
+        }
+
         const attemptController = new AbortController();
-        const timeoutId = setTimeout(() => attemptController.abort(), COMPLETION_REQUEST_TIMEOUT_MS);
+        let timeoutId = setTimeout(() => attemptController.abort(), COMPLETION_REQUEST_TIMEOUT_MS);
+        const resetIdleTimer = () => {
+          clearTimeout(timeoutId);
+          timeoutId = setTimeout(() => attemptController.abort(), COMPLETION_REQUEST_TIMEOUT_MS);
+        };
         const abortRelay = () => attemptController.abort();
         signal.addEventListener('abort', abortRelay, { once: true });
 
@@ -1842,6 +2345,33 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
           if (!response.ok) {
             const detail = await extractErrorMessage(response);
             const message = detail || `LM Studio antwortete mit Status ${response.status}`;
+
+            // A model we didn't flag rejected the sampling params (some
+            // reasoning models only allow their fixed temperature). Strip them
+            // and retry instead of failing the turn.
+            if (
+              ('temperature' in body || 'top_p' in body) &&
+              /temperature|top[_-]?p|sampling/i.test(message)
+            ) {
+              delete body.temperature;
+              delete body.top_p;
+              lastAttemptError = new Error(message);
+              continue;
+            }
+
+            // Some servers accept `stream` but reject `stream_options`; others
+            // reject streaming altogether. Downgrade gracefully and retry
+            // instead of failing the turn.
+            if (attemptStream && /stream_options/i.test(message)) {
+              streamUsageOptionRef.current = false;
+              lastAttemptError = new Error(message);
+              continue;
+            }
+            if (attemptStream && /\bstream/i.test(message)) {
+              streamSupportRef.current = false;
+              lastAttemptError = new Error(message);
+              continue;
+            }
 
             // A model we believed was tool-capable rejected the native tools
             // params. Drop them, mark the model as no-native-tools (so the prompt
@@ -1868,7 +2398,9 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
             throw new Error(message);
           }
 
-          payload = await response.json();
+          payload = attemptStream
+            ? await consumeChatCompletionStream(response, onDelta!, resetIdleTimer)
+            : await response.json();
           lastAttemptError = null;
           break;
         } catch (error) {
@@ -1987,6 +2519,63 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
     [buildSystemMessages, performCompletion, settings.model]
   );
 
+  // A tool-enabled headless agent used for sub-agents. Unlike requestCompletion
+  // (single-shot, no tools) it runs a real read/act loop with the tool set, but
+  // without touching the visible conversation UI. Returns the final text.
+  const runHeadlessAgent = useCallback(
+    async (
+      task: string,
+      systemPrompt: string,
+      signal: AbortSignal,
+      onProgress?: (status: string) => void
+    ): Promise<string> => {
+      if (!settings.model) return 'No model configured.';
+      const systemMessages = await buildSystemMessages(systemPrompt, true);
+      let apiMessages: any[] = [...systemMessages, { role: 'user', content: task }];
+      const useTools = settings.toolsEnabled;
+      let combined = '';
+      const MAX_SUBAGENT_LOOPS = 20;
+
+      for (let loop = 0; loop < MAX_SUBAGENT_LOOPS; loop += 1) {
+        if (signal.aborted) break;
+        const pruned = pruneApiMessages(apiMessages);
+        if (pruned.length < apiMessages.length) apiMessages = pruned;
+
+        const result = await performCompletion(apiMessages, signal, useTools, 'auto');
+
+        if (result.toolCalls && result.toolCalls.length > 0) {
+          apiMessages.push(buildAssistantToolMessage(result.toolCalls, result.content));
+          const toolResults: ToolResult[] = [];
+          for (const tc of result.toolCalls) {
+            if (signal.aborted) break;
+            onProgress?.(summarizeToolCall(tc));
+            const tr = await executeToolCall(tc, projectPathRef.current, {
+              signal,
+              requestId: `subagent:${tc.id}`
+            });
+            toolResults.push(tr);
+          }
+          apiMessages.push(
+            ...toolResults.map(tr => ({ role: 'tool', tool_call_id: tr.tool_call_id, content: tr.content }))
+          );
+          continue;
+        }
+
+        if (result.content) {
+          combined += combined ? `\n\n${result.content}` : result.content;
+          // No tool calls and we have prose → the sub-agent is done.
+          break;
+        }
+
+        // Empty round — nudge once, then bail to avoid spinning.
+        apiMessages.push({ role: 'user', content: 'Continue and complete the task, then give your final answer.' });
+      }
+
+      return combined.trim() || 'Sub-agent finished without a textual result.';
+    },
+    [buildSystemMessages, performCompletion, pruneApiMessages, settings.model, settings.toolsEnabled]
+  );
+
   const shouldContinue = useCallback(
     (result: CompletionResult) => {
       if (!result) return false;
@@ -2090,8 +2679,21 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
             currentState.apiMessages,
             currentState.controller.signal,
             useTools,
-            forceToolChoice ? 'required' : 'auto'
+            forceToolChoice ? 'required' : 'auto',
+            draft => setStreamingDraft(draft)
           );
+          setStreamingDraft(null);
+
+          // Accumulate token usage across the turn's rounds for the UI meter.
+          if (result.usage) {
+            const u = result.usage;
+            turnTokensRef.current = {
+              prompt: turnTokensRef.current.prompt + (u.prompt_tokens || 0),
+              completion: turnTokensRef.current.completion + (u.completion_tokens || 0),
+              total: turnTokensRef.current.total + (u.total_tokens || (u.prompt_tokens || 0) + (u.completion_tokens || 0))
+            };
+            setLastTurnTokens({ ...turnTokensRef.current });
+          }
 
           if (result.reasoning && !currentState.combinedReasoning.includes(result.reasoning)) {
             currentState.combinedReasoning = [...currentState.combinedReasoning, result.reasoning];
@@ -2183,9 +2785,13 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
             };
             addMessageToConversation(currentState.conversationId, toolMessage);
 
+            // Dangerous shell commands (rm -rf, disk format, force push, etc.)
+            // ALWAYS require explicit approval — even in YOLO mode — so a model
+            // mistake can't irreversibly wipe data unattended.
+            const hasDangerousCommand = toolCalls.some(tc => isDangerousToolCall(tc));
             if (
-              !settings.yoloMode &&
-              toolCalls.some(tc => toolNeedsApproval(tc.function.name))
+              hasDangerousCommand ||
+              (!settings.yoloMode && toolCalls.some(tc => toolNeedsApproval(tc.function.name)))
             ) {
               const approvalId = createId();
               pendingToolExecutionRef.current.set(approvalId, {
@@ -2363,6 +2969,36 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
               setToolStatus(undefined);
               continue;
             }
+
+            // Generic loop guard: the exact same tool calls returning the exact
+            // same results means zero progress — nudge once, then stop.
+            const roundSignature = JSON.stringify({
+              calls: toolCalls.map(tc => `${tc.function.name}|${tc.function.arguments}`),
+              results: toolResults.map(tr => tr.content.slice(0, 400))
+            });
+            if (roundSignature === currentState.lastToolRoundSignature) {
+              currentState.repeatedToolRoundCount += 1;
+              if (currentState.repeatedToolRoundCount >= 2) {
+                currentState.stopReason = 'Stopped: repeated identical tool calls without progress.';
+                currentState.combinedContent +=
+                  (currentState.combinedContent ? '\n\n' : '') +
+                  'Ich habe abgebrochen, weil dieselben Tool-Aufrufe mehrfach ohne Fortschritt wiederholt wurden. Bitte gib einen konkreteren nächsten Schritt vor.';
+                break;
+              }
+              currentState.apiMessages = [
+                ...currentState.apiMessages,
+                {
+                  role: 'user',
+                  content:
+                    'You just repeated the exact same tool call(s) and received the exact same result. Do NOT run them again — change your approach: use different arguments, a different tool, or state the blocker and finish.'
+                }
+              ];
+              setToolStatus(undefined);
+              continue;
+            }
+            currentState.lastToolRoundSignature = roundSignature;
+            currentState.repeatedToolRoundCount = 0;
+
             if (
               !roundPerformedMutation &&
               userRequestLikelyNeedsTools(initialUserContent, settings.mode)
@@ -2406,27 +3042,36 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
               await delay(DIAGNOSTIC_SETTLE_MS);
               const allErrorLines: string[] = [];
 
-              // 1) Monaco diagnostics (TS/JS)
-              const monacoErrors = getErrorDiagnostics();
-              for (const d of monacoErrors.slice(0, 10)) {
-                allErrorLines.push(`[ERROR] ${d.file}:${d.startLine}:${d.startColumn} - ${d.message}${d.code ? ` (${d.code})` : ''}`);
-              }
-
-              // 2) Active syntax check for non-TS/JS files that were mutated this round
-              const mutatedPaths = new Set<string>();
+              // Collect the files actually mutated this round. We only want to
+              // report errors the model just introduced — surfacing unrelated
+              // pre-existing errors elsewhere in the project would derail the
+              // agent into fixing things the user never asked about.
+              const editedFullPaths = new Set<string>();
+              const editedBasenames = new Set<string>();
+              const mutatedPaths = new Set<string>(); // non-TS/JS, for syntax checks
               for (let ti = 0; ti < toolCalls.length; ti++) {
                 const tc = toolCalls[ti];
                 if (!MUTATING_TOOL_NAMES.has(tc.function.name)) continue;
                 if (toolResults[ti]?.content?.startsWith('Error')) continue;
                 const tcArgs = safeJsonParse(tc.function.arguments || '{}');
-                const tcPath = String(tcArgs.path || '');
+                const tcPath = String(tcArgs.path || tcArgs.newPath || '');
                 if (!tcPath) continue;
-                const ext = (tcPath.match(/\.[^.\\/:]+$/) || [''])[0].toLowerCase();
-                if (MONACO_VALIDATED_EXTENSIONS.has(ext)) continue;
                 const fullPath = resolveToolTargetPath(tcPath, projectPathRef.current);
-                if (!mutatedPaths.has(fullPath)) {
+                editedFullPaths.add(normalizeTrackedPath(fullPath));
+                editedBasenames.add(basenameLower(tcPath));
+                const ext = (tcPath.match(/\.[^.\\/:]+$/) || [''])[0].toLowerCase();
+                if (!MONACO_VALIDATED_EXTENSIONS.has(ext)) {
                   mutatedPaths.add(fullPath);
                 }
+              }
+
+              // 1) Monaco diagnostics (TS/JS) — scoped to the edited files only
+              const monacoErrors = getErrorDiagnostics().filter(d => {
+                const norm = normalizeTrackedPath(d.file);
+                return editedFullPaths.has(norm) || editedBasenames.has(basenameLower(d.file));
+              });
+              for (const d of monacoErrors.slice(0, 10)) {
+                allErrorLines.push(`[ERROR] ${d.file}:${d.startLine}:${d.startColumn} - ${d.message}${d.code ? ` (${d.code})` : ''}`);
               }
               if (mutatedPaths.size > 0) {
                 setToolStatus('Running syntax checks...');
@@ -2501,7 +3146,15 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
               currentState.repeatedResponseCount = 0;
             }
 
+            // Text-pattern "you didn't really call a tool" nudges are only for
+            // prompt-fallback models (no native tool calling). On models with
+            // native tools these heuristics mostly misfire — they interrupt a
+            // capable model that is legitimately discussing or explaining code —
+            // so we skip them entirely there.
+            const promptFallback = toolSupportRef.current === false;
+
             if (
+              promptFallback &&
               settings.toolsEnabled &&
               !currentState.toolProtocolCorrectionSent &&
               containsPseudoToolProtocol(result.content)
@@ -2522,6 +3175,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
             // didn't actually issue one — so nothing ran. Nudge it to perform the
             // real call, using the format that matches the active model.
             if (
+              promptFallback &&
               settings.toolsEnabled &&
               !currentState.describedToolCallCorrectionSent &&
               describesToolCallWithoutIssuing(
@@ -2566,7 +3220,14 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
           }
 
           if (result.content) {
+            // As above, these "you claimed/showed a change but didn't call a
+            // tool" nudges are prompt-fallback-only. Native-tool models are
+            // trusted to act via real calls; nudging them here mostly derails
+            // legitimate explanations.
+            const promptFallbackContent = toolSupportRef.current === false;
+
             if (
+              promptFallbackContent &&
               settings.toolsEnabled &&
               !currentState.performedMutationTool &&
               !currentState.mutationCorrectionSent &&
@@ -2586,6 +3247,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
             }
 
             if (
+              promptFallbackContent &&
               settings.toolsEnabled &&
               settings.mode !== 'qa' &&
               !currentState.performedMutationTool &&
@@ -2608,6 +3270,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
             }
 
             if (
+              promptFallbackContent &&
               settings.toolsEnabled &&
               userRequestLikelyNeedsTools(initialUserContent, settings.mode) &&
               !currentState.performedMutationTool &&
@@ -2678,6 +3341,27 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
             continue;
           }
 
+          // The run is about to end — if the model's own todo list still has
+          // open items, give it one chance to finish or explicitly close them.
+          const openTodos = agentTodosRef.current.filter(item => item.status !== 'done');
+          if (
+            openTodos.length > 0 &&
+            !currentState.todoIncompleteCorrectionSent &&
+            !currentState.controller.signal.aborted
+          ) {
+            currentState.todoIncompleteCorrectionSent = true;
+            currentState.apiMessages = [
+              ...currentState.apiMessages,
+              {
+                role: 'user',
+                content: `Your todo list still has ${openTodos.length} unfinished item(s): ${openTodos
+                  .map(item => `"${item.text}"`)
+                  .join(', ')}. Finish them now, or if an item is obsolete or already covered, mark it done via updateTodoList — then give the final answer.`
+              }
+            ];
+            continue;
+          }
+
           currentState.stopReason =
             settings.mode === 'autonomous'
               ? 'Stopped: no further concrete improvements remained.'
@@ -2714,6 +3398,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
         setIsCancelling(false);
         setIsThinking(false);
         setToolStatus(undefined);
+        setStreamingDraft(null);
       }
     },
     [
@@ -2968,9 +3653,15 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
           'APPROVED PLAN — follow it exactly:',
           ...steps.map((step, index) => `${index + 1}. ${step.text}`),
           '',
-          'Execute these steps IN ORDER using real tool calls. Stay strictly within the scope of this plan — do not add unrelated work. Complete EVERY step; never skip or forget one. Keep a checklist (- [ ] / - [x]) and update it as each step is finished. Before each action, confirm it belongs to a plan step. When all steps are done (and any code changes verified), stop and give a short summary.'
+          'Execute these steps IN ORDER using real tool calls. Stay strictly within the scope of this plan — do not add unrelated work. Complete EVERY step; never skip or forget one. Track progress with the updateTodoList tool: mark the current step in_progress and mark each step done as you finish it. Before each action, confirm it belongs to a plan step. When all steps are done (and any code changes verified), stop and give a short summary.'
         ].join('\n')
       };
+
+      // Seed the live progress list with the approved plan so the UI shows it
+      // immediately; the model keeps it updated via updateTodoList.
+      const seededTodos: TodoItem[] = steps.map(step => ({ text: step.text, status: 'pending' }));
+      agentTodosRef.current = seededTodos;
+      setAgentTodos(seededTodos);
 
       await runAgentLoop(
         { ...entry.state, apiMessages: [...entry.state.apiMessages, planInjection] },
@@ -3001,12 +3692,22 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
   const sendMessage = useCallback(
     async (content: string, options?: SendMessageOptions) => {
       const displayContent = (options?.displayContent ?? content).trim();
-      if (!displayContent || !settings.model || isThinking || pendingPlanExecutionRef.current.size > 0) {
+      if (!displayContent || !settings.model || isThinking) {
         return undefined;
       }
 
       const activeConversation = getActiveConversation();
       const conversationId = activeConversation?.id ?? conversations[0].id;
+
+      // Only a plan awaiting approval in THIS conversation blocks sending.
+      // A global block let an invisible pending plan from another chat lock
+      // the whole app (its approval card only renders in its own chat).
+      const hasPendingPlanHere = Array.from(pendingPlanExecutionRef.current.values()).some(
+        entry => entry.state.conversationId === conversationId
+      );
+      if (hasPendingPlanHere) {
+        return undefined;
+      }
       const rawContent = options?.actualContent ?? displayContent;
       const sender = options?.sender ?? 'user';
 
@@ -3037,15 +3738,40 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       setIsCancelling(false);
       setLastError(undefined);
       setToolStatus(undefined);
+      setLastCompactionSaved(undefined);
+      // Fresh run — clear the previous run's todo list and token counter.
+      agentTodosRef.current = [];
+      setAgentTodos([]);
+      turnTokensRef.current = { prompt: 0, completion: 0, total: 0 };
+      setLastTurnTokens(undefined);
 
-      // Auto-compact if context is >= 85%
+      // Auto-compact if context is >= 85% (best-effort — a failure here must
+      // never leave isThinking stuck and block all further sends)
       if (contextUsagePercent >= 85) {
-        const saved = await compactContext(conversationId);
-        if (saved > 0) setLastCompactionSaved(saved);
+        try {
+          const saved = await compactContext(conversationId);
+          if (saved > 0) setLastCompactionSaved(saved);
+        } catch (error) {
+          console.warn('Auto-compaction failed, continuing without it:', error);
+        }
       }
 
       const messagePayload = mapMessages(updatedMessages);
-      const systemMessages = await buildSystemMessages(options?.injectSystemPrompt);
+      let systemMessages: Array<{ role: string; content: string }>;
+      try {
+        systemMessages = await buildSystemMessages(options?.injectSystemPrompt);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setIsThinking(false);
+        setLastError(message);
+        addMessageToConversation(conversationId, {
+          id: createId(),
+          content: `Fehler beim Vorbereiten der Anfrage: ${message}`,
+          sender: 'system',
+          timestamp: new Date()
+        });
+        return undefined;
+      }
       const controller = new AbortController();
       abortControllerRef.current = controller;
 
@@ -3068,7 +3794,9 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
         nonMutatingToolRounds: 0,
         completionWithoutMutationCorrectionSent: false,
         autoFixRounds: 0,
-        consecutiveEmptyResponses: 0
+        consecutiveEmptyResponses: 0,
+        repeatedToolRoundCount: 0,
+        todoIncompleteCorrectionSent: false
       };
 
       // Plan-first gate: for work modes, draft a plan and pause for the user's
@@ -3119,6 +3847,10 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       return runAgentLoop(baseState, rawContent);
     },
     [
+      // Note: compactContext/contextUsagePercent are used inside but declared
+      // later in the component — listing them here would crash at render time
+      // (TDZ). They are intentionally omitted, as before.
+      addMessageToConversation,
       buildSystemMessages,
       conversations,
       getActiveConversation,
@@ -3164,15 +3896,25 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
 
   const [lastCompactionSaved, setLastCompactionSaved] = useState<number | undefined>();
 
+  // The compaction notice belongs to the conversation it happened in — don't
+  // let it stick around when the user switches to or starts another chat.
+  useEffect(() => {
+    setLastCompactionSaved(undefined);
+  }, [activeConversationId]);
+
   const [whisperAutoStartState, setWhisperAutoStartState] = useState<WhisperAutoStartState>({ status: 'idle' });
 
   const contextUsagePercent = useMemo(() => {
     const conv = conversations.find(c => c.id === activeConversationId);
-    if (!conv || !settings.maxTokens) return 0;
+    if (!conv) return 0;
     const totalChars = conv.messages.reduce((sum, m) => sum + (m.content?.length || 0) + (m.rawContent?.length || 0), 0);
     const estimatedTokens = totalChars / 4;
-    return Math.min(100, Math.round((estimatedTokens / settings.maxTokens) * 100));
-  }, [conversations, activeConversationId, settings.maxTokens]);
+    // Measure against the model's CONTEXT window (estimated from its id) — not
+    // settings.maxTokens, which is the max COMPLETION length and made a normal
+    // chat hit "85% full" after a handful of messages and compact every send.
+    const windowTokens = guessContextWindow(settings.model);
+    return Math.min(100, Math.round((estimatedTokens / windowTokens) * 100));
+  }, [conversations, activeConversationId, settings.model]);
 
   // ── Sub-Agent system ──
 
@@ -3193,7 +3935,6 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
     if (!conv || conv.messages.length <= 6) return 0;
 
     const toCompact = conv.messages.slice(0, -4);
-    const toKeep = conv.messages.slice(-4);
 
     const originalChars = toCompact.reduce((s, m) => s + (m.content?.length || 0), 0);
 
@@ -3221,11 +3962,16 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
 
     const savedChars = originalChars - summary.length;
 
-    setConversations(prev => prev.map(c =>
-      c.id === conversationId
-        ? { ...c, messages: [summaryMessage, ...toKeep] }
-        : c
-    ));
+    // Replace ONLY the messages we actually summarized. Anything that was
+    // added while the summary request was running (e.g. the user's newest
+    // message) is not in the snapshot and must survive — replacing the list
+    // with [summary, ...toKeep] used to silently swallow it.
+    const compactedIds = new Set(toCompact.map(m => m.id));
+    setConversations(prev => prev.map(c => {
+      if (c.id !== conversationId) return c;
+      const remaining = c.messages.filter(m => !compactedIds.has(m.id));
+      return { ...c, messages: [summaryMessage, ...remaining] };
+    }));
 
     return Math.max(0, Math.round(savedChars / 4));
   }, [conversations, requestCompletion]);
@@ -3235,9 +3981,11 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
     const handler = (event: Event) => {
       const { agentId, task, systemPrompt } = (event as CustomEvent).detail as { agentId: string; task: string; systemPrompt: string };
       setSubAgents(prev => [...prev, { id: agentId, task, status: 'running' }]);
-      requestCompletion(
-        [{ role: 'user', content: task }],
-        { injectSystemPrompt: systemPrompt }
+      const controller = new AbortController();
+      // Run a real tool-enabled sub-agent so it can actually read/search/edit,
+      // not just produce text.
+      runHeadlessAgent(task, systemPrompt, controller.signal, status =>
+        setSubAgents(prev => prev.map(a => (a.id === agentId ? { ...a, progress: status } : a)))
       ).then(result => {
         setSubAgents(prev => prev.map(a => a.id === agentId ? { ...a, status: 'done', result: result?.trim() || 'Completed.' } : a));
         window.dispatchEvent(new CustomEvent('ai:subAgentDone', { detail: { agentId, task, result: result?.trim() || '' } }));
@@ -3248,7 +3996,7 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
     };
     window.addEventListener('ai:spawnSubAgent', handler);
     return () => window.removeEventListener('ai:spawnSubAgent', handler);
-  }, [requestCompletion]);
+  }, [runHeadlessAgent]);
 
   const value = useMemo<AIContextType>(
     () => ({
@@ -3281,9 +4029,15 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       pendingPlanApproval,
       approvePlan,
       rejectPlan,
+      saveProfile,
+      deleteProfile,
+      selectProfile,
       subAgents,
       spawnSubAgents,
       clearSubAgents,
+      streamingDraft,
+      agentTodos,
+      lastTurnTokens,
       contextUsagePercent,
       lastCompactionSaved,
       activeFilePath,
@@ -3318,9 +4072,15 @@ export const AIProvider: React.FC<{ children: React.ReactNode; projectPath?: str
       pendingPlanApproval,
       approvePlan,
       rejectPlan,
+      saveProfile,
+      deleteProfile,
+      selectProfile,
       subAgents,
       spawnSubAgents,
       clearSubAgents,
+      streamingDraft,
+      agentTodos,
+      lastTurnTokens,
       contextUsagePercent,
       lastCompactionSaved,
       activeFilePath,

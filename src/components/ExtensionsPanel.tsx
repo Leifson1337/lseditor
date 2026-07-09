@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import path from 'path';
-import { FaCube, FaPlusCircle, FaSyncAlt, FaSearch, FaDownload, FaStore, FaTimes } from 'react-icons/fa';
+import { FaCube, FaPlusCircle, FaSyncAlt, FaSearch, FaDownload, FaStore, FaTimes, FaStar } from 'react-icons/fa';
 import './ExtensionsPanel.css';
 import { getExtensionRoots } from '../utils/extensionRoots';
 
@@ -23,7 +23,17 @@ interface OpenVSXExtension {
   displayName: string;
   downloadUrl: string;
   iconUrl?: string;
+  downloadCount?: number;
+  averageRating?: number;
+  reviewCount?: number;
 }
+
+const formatCount = (n?: number): string => {
+  if (!n || n <= 0) return '0';
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, '')}K`;
+  return String(n);
+};
 
 interface ExtensionsPanelProps {
   projectPath?: string;
@@ -228,7 +238,10 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
           description: ext.description,
           displayName: ext.displayName || ext.name,
           downloadUrl: ext.files.download,
-          iconUrl: ext.files.icon
+          iconUrl: ext.files.icon,
+          downloadCount: ext.downloadCount,
+          averageRating: ext.averageRating,
+          reviewCount: ext.reviewCount
         }));
 
         if (offset === 0) {
@@ -583,6 +596,16 @@ export const ExtensionsPanel: React.FC<ExtensionsPanelProps> = ({
                       </div>
                       <div className="extensions-panel__item-meta">
                         <span>v{ext.version}</span>
+                        {typeof ext.downloadCount === 'number' && ext.downloadCount > 0 && (
+                          <span className="ext-stat" title={`${ext.downloadCount.toLocaleString()} downloads`}>
+                            <FaDownload size={9} /> {formatCount(ext.downloadCount)}
+                          </span>
+                        )}
+                        {typeof ext.averageRating === 'number' && ext.averageRating > 0 && (
+                          <span className="ext-stat" title={`${ext.averageRating.toFixed(1)} / 5 (${ext.reviewCount || 0} reviews)`}>
+                            <FaStar size={9} /> {ext.averageRating.toFixed(1)}
+                          </span>
+                        )}
                       </div>
                       <div className="extensions-panel__item-description">{ext.description}</div>
                     </div>

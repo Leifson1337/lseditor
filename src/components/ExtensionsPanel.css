@@ -151,7 +151,20 @@
 .extensions-panel__item-actions {
   display: flex;
   align-items: center;
+  flex-shrink: 0;
 }
+
+/* Prevent long names/descriptions or action buttons from overflowing the row */
+.extensions-panel__item { overflow: hidden; align-items: flex-start; }
+.extensions-panel__item-name { min-width: 0; }
+.extensions-panel__item-name > :first-child {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.extensions-panel__item-meta {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.ext-stat { display: inline-flex; align-items: center; gap: 3px; }
+.ext-stat svg { opacity: 0.8; }
 
 .extensions-panel__install-button {
   background-color: var(--accent-color);

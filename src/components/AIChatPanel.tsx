@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import path from 'path';
-import { FiRefreshCw, FiSend, FiPlus, FiSettings, FiCopy, FiCheck, FiAlertTriangle, FiX, FiMessageSquare, FiCode, FiFileText, FiTerminal, FiPaperclip, FiZap, FiShield, FiMic, FiMicOff, FiCpu, FiPlay, FiTrash2, FiList } from 'react-icons/fi';
+import { FiRefreshCw, FiSend, FiPlus, FiSettings, FiCopy, FiCheck, FiAlertTriangle, FiX, FiMessageSquare, FiCode, FiFileText, FiTerminal, FiPaperclip, FiZap, FiShield, FiMic, FiMicOff, FiCpu, FiPlay, FiTrash2, FiList, FiImage, FiGitMerge, FiRotateCcw } from 'react-icons/fi';
 import { LuLoader2 } from 'react-icons/lu';
 import { ModelManager } from './ModelManager';
+import { ProfileManager } from './ProfileManager';
 import type { PlanStep, PendingPlanApproval } from '../contexts/AIContext';
 import { VoiceInputService, MicDevice } from '../services/VoiceInputService';
 import { diffLines } from 'diff';
@@ -427,6 +428,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     isCancelling,
     settings,
     updateSettings,
+    selectProfile,
     models,
     refreshModels,
     isFetchingModels,
@@ -446,6 +448,9 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     subAgents,
     spawnSubAgents,
     clearSubAgents,
+    streamingDraft,
+    agentTodos,
+    lastTurnTokens,
     contextUsagePercent,
     lastCompactionSaved,
     activeFilePath: contextActiveFilePath,
@@ -461,7 +466,13 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
   const activeApproval = activeApprovals[0] ?? null;
 
   const [input, setInput] = useState('');
+  // @-mention state: the active query typed after "@", and files the user has
+  // explicitly attached via mentions (relative paths).
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionedFiles, setMentionedFiles] = useState<Set<string>>(new Set());
   const [showModelManager, setShowModelManager] = useState(false);
+  const [showProfileManager, setShowProfileManager] = useState(false);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [settingsMenuTab, setSettingsMenuTab] = useState<'general' | 'model' | 'advanced'>('general');
   const [attachedFiles, setAttachedFiles] = useState<Array<{ name: string; type: string; dataUrl?: string; content?: string }>>([]);
@@ -486,6 +497,9 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
   const [editorDiagnostics, setEditorDiagnostics] = useState<EditorDiagnostic[]>([]);
   const [revertingToolCalls, setRevertingToolCalls] = useState<Set<string>>(new Set());
   const [revertedToolCalls, setRevertedToolCalls] = useState<Set<string>>(new Set());
+  const [revertedPaths, setRevertedPaths] = useState<Set<string>>(new Set());
+  const [showSessionChanges, setShowSessionChanges] = useState(false);
+  const [revertingAll, setRevertingAll] = useState(false);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -559,6 +573,65 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     flattenedFiles.forEach(entry => map.set(entry.relative, entry.absolute));
     return map;
   }, [flattenedFiles]);
+
+  // All file paths eligible for @-mentions (not capped like availableFiles).
+  const mentionableFiles = useMemo(
+    () => flattenedFiles.filter(e => e.type === 'file').map(e => e.relative),
+    [flattenedFiles]
+  );
+
+  // Suggestions for the current @-mention query, ranked by basename/prefix match.
+  const mentionSuggestions = useMemo(() => {
+    if (mentionQuery === null) return [];
+    const q = mentionQuery.toLowerCase();
+    const scored = mentionableFiles
+      .map(path => {
+        const lower = path.toLowerCase();
+        const base = (lower.split('/').pop() || '');
+        let score = -1;
+        if (!q) score = 0;
+        else if (base.startsWith(q)) score = 3;
+        else if (base.includes(q)) score = 2;
+        else if (lower.includes(q)) score = 1;
+        return { path, score };
+      })
+      .filter(s => s.score >= 0)
+      .sort((a, b) => b.score - a.score || a.path.length - b.path.length)
+      .slice(0, 8);
+    return scored.map(s => s.path);
+  }, [mentionQuery, mentionableFiles]);
+
+  // Detect an active "@token" at the caret and update the mention query.
+  const updateMentionState = useCallback((value: string, caret: number) => {
+    const uptoCaret = value.slice(0, caret);
+    const match = uptoCaret.match(/(?:^|\s)@([^\s@]*)$/);
+    if (match) {
+      setMentionQuery(match[1]);
+      setMentionIndex(0);
+    } else {
+      setMentionQuery(null);
+    }
+  }, []);
+
+  const applyMention = useCallback((relPath: string) => {
+    const el = textareaRef.current;
+    const caret = el ? el.selectionStart : input.length;
+    const before = input.slice(0, caret);
+    const after = input.slice(caret);
+    const replacedBefore = before.replace(/(^|\s)@([^\s@]*)$/, (_m, pre) => `${pre}@${relPath} `);
+    const next = replacedBefore + after;
+    setInput(next);
+    setMentionedFiles(prev => new Set(prev).add(relPath));
+    setMentionQuery(null);
+    // Restore focus and place caret after the inserted mention.
+    requestAnimationFrame(() => {
+      if (el) {
+        const pos = replacedBefore.length;
+        el.focus();
+        el.setSelectionRange(pos, pos);
+      }
+    });
+  }, [input]);
 
   const activeRelativePath = useMemo(
     () => normalizeRelativePath(activeFilePath, projectPath),
@@ -649,6 +722,15 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
   }, [models, modelClassifications]);
 
   const currentPlan = useMemo(() => {
+    // Prefer the live todo list maintained via the updateTodoList tool; fall
+    // back to the newest markdown checklist found in the transcript.
+    if (agentTodos.length > 0) {
+      return agentTodos.map(item => ({
+        text: item.text,
+        done: item.status === 'done',
+        active: item.status === 'in_progress'
+      }));
+    }
     const latestChecklistMessage = [...messages]
       .reverse()
       .find(
@@ -656,8 +738,11 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
           (message.sender === 'ai' || message.sender === 'tool') &&
           extractChecklistItems(message.content).length > 0
       );
-    return extractChecklistItems(latestChecklistMessage?.content);
-  }, [messages]);
+    return extractChecklistItems(latestChecklistMessage?.content).map(item => ({
+      ...item,
+      active: false
+    }));
+  }, [messages, agentTodos]);
 
   const planStats = useMemo(() => {
     const total = currentPlan.length;
@@ -669,6 +754,81 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     };
   }, [currentPlan]);
 
+  // Aggregate every file change the AI made this conversation into a per-file
+  // list for the session diff-review panel. Keyed by path; the FIRST edit's
+  // originalContent is the true pre-session state to revert back to.
+  const sessionChanges = useMemo(() => {
+    const byPath = new Map<string, {
+      path: string;
+      firstAction: 'create' | 'update';
+      originalContent: string;
+      additions: number;
+      deletions: number;
+      edits: number;
+    }>();
+    for (const message of messages) {
+      if (!message.toolCalls) continue;
+      for (const tc of message.toolCalls) {
+        const preview: any = (tc as any).preview;
+        if (!preview || preview.kind !== 'file' || !preview.path) continue;
+        if (tc.status === 'error') continue;
+        const key = preview.path;
+        const original = preview.originalContent ?? '';
+        const updated = preview.newContent ?? '';
+        const oldLines = original ? original.replace(/\r/g, '').split('\n').length : 0;
+        const newLines = updated ? updated.replace(/\r/g, '').split('\n').length : 0;
+        const existing = byPath.get(key);
+        if (!existing) {
+          byPath.set(key, {
+            path: key,
+            firstAction: preview.action === 'create' ? 'create' : 'update',
+            originalContent: original,
+            additions: Math.max(0, newLines - oldLines),
+            deletions: Math.max(0, oldLines - newLines),
+            edits: 1
+          });
+        } else {
+          existing.edits += 1;
+          existing.additions += Math.max(0, newLines - oldLines);
+          existing.deletions += Math.max(0, oldLines - newLines);
+        }
+      }
+    }
+    return Array.from(byPath.values());
+  }, [messages]);
+
+  const revertSessionPath = useCallback(async (change: { path: string; firstAction: 'create' | 'update'; originalContent: string }) => {
+    const abs = ensureAbsolutePath(change.path);
+    if (change.firstAction === 'create') {
+      await window.electron?.ipcRenderer?.invoke('fs:deleteFile', abs);
+    } else {
+      await window.electron?.ipcRenderer?.invoke('fs:writeFile', abs, change.originalContent ?? '');
+    }
+    window.dispatchEvent(new CustomEvent('editor:fileChanged', { detail: abs }));
+    window.dispatchEvent(new Event('explorer:refresh'));
+  }, [ensureAbsolutePath]);
+
+  const revertAllSessionChanges = useCallback(async () => {
+    if (!sessionChanges.length) return;
+    if (!window.confirm(`Revert all ${sessionChanges.length} file change(s) made by the AI this session? This restores the files to their state before the AI edited them.`)) {
+      return;
+    }
+    setRevertingAll(true);
+    try {
+      for (const change of sessionChanges) {
+        if (revertedPaths.has(change.path)) continue;
+        try {
+          await revertSessionPath(change);
+          setRevertedPaths(prev => new Set(prev).add(change.path));
+        } catch (error) {
+          console.error('Failed to revert', change.path, error);
+        }
+      }
+    } finally {
+      setRevertingAll(false);
+    }
+  }, [sessionChanges, revertedPaths, revertSessionPath]);
+
   // ─── Effects ───
 
   useEffect(() => {
@@ -679,6 +839,12 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     setLastParsedMessageId(latest.id);
     parseFileEditsFromMessage(latest.content);
   }, [messages, lastParsedMessageId, parseFileEditsFromMessage]);
+
+  // Reset the session-changes review when switching conversations.
+  useEffect(() => {
+    setRevertedPaths(new Set());
+    setShowSessionChanges(false);
+  }, [activeConversationId]);
 
   useEffect(() => {
     if (!pendingEdits.length) {
@@ -693,7 +859,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
   useEffect(() => {
     if (!messagesContainerRef.current) return;
     messageEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages, isThinking, isAutoContextBusy]);
+  }, [messages, isThinking, isAutoContextBusy, streamingDraft]);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -1002,13 +1168,31 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
     const imageAttachments = attachedFiles.filter(f => f.dataUrl && f.type.startsWith('image/'));
     const textAttachments = attachedFiles.filter(f => f.content && !f.type.startsWith('image/'));
 
+    // Resolve @-mentioned files that still appear in the text into inline
+    // context sections so the model gets their full content.
+    const mentionSections: string[] = [];
+    const activeMentions = Array.from(mentionedFiles).filter(rel =>
+      new RegExp(`(?:^|\\s)@${rel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=\\s|$)`).test(question)
+    );
+    for (const rel of activeMentions) {
+      const abs = fileMap.get(rel) || ensureAbsolutePath(rel);
+      try {
+        const content = await window.electron?.ipcRenderer?.invoke('fs:readFile', abs);
+        if (typeof content === 'string') {
+          mentionSections.push(`[File: ${rel}]\n\`\`\`\n${content.slice(0, MAX_SNIPPET_LENGTH)}\n\`\`\``);
+        }
+      } catch {
+        /* ignore unreadable mentions */
+      }
+    }
+
     // Build the text message (include text file contents inline, but NOT image base64)
     let fullMessage = question;
-    if (textAttachments.length) {
-      const fileSections = textAttachments.map(f =>
-        `[File: ${f.name}]\n\`\`\`\n${(f.content || '').slice(0, MAX_SNIPPET_LENGTH)}\n\`\`\``
-      );
-      fullMessage = [...fileSections, question].filter(Boolean).join('\n\n');
+    const textFileSections = textAttachments.map(f =>
+      `[File: ${f.name}]\n\`\`\`\n${(f.content || '').slice(0, MAX_SNIPPET_LENGTH)}\n\`\`\``
+    );
+    if (textFileSections.length || mentionSections.length) {
+      fullMessage = [...textFileSections, ...mentionSections, question].filter(Boolean).join('\n\n');
     }
 
     // Build display text (what the user sees in the chat)
@@ -1029,6 +1213,8 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
 
     setInput('');
     setAttachedFiles([]);
+    setMentionedFiles(new Set());
+    setMentionQuery(null);
 
     if (!fullMessage && !images?.length) return;
 
@@ -1045,6 +1231,29 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
   };
 
   const handleInputKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // While the @-mention picker is open, arrows/enter/tab drive it.
+    if (mentionQuery !== null && mentionSuggestions.length > 0) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setMentionIndex(i => (i + 1) % mentionSuggestions.length);
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setMentionIndex(i => (i - 1 + mentionSuggestions.length) % mentionSuggestions.length);
+        return;
+      }
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        event.preventDefault();
+        applyMention(mentionSuggestions[mentionIndex] || mentionSuggestions[0]);
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setMentionQuery(null);
+        return;
+      }
+    }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       handleSend();
@@ -1457,6 +1666,22 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
         <div className="ai-chat-header-top">
           <div className="ai-chat-header-left">
             <select
+              className="ai-chat-profile-select"
+              value={settings.activeProfileId}
+              title="AI profile (local or cloud connection)"
+              onChange={event => {
+                if (event.target.value === '__manage__') setShowProfileManager(true);
+                else selectProfile(event.target.value);
+              }}
+            >
+              {settings.profiles.map(profile => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.kind === 'cloud' ? '☁ ' : '🖥 '}{profile.name}
+                </option>
+              ))}
+              <option value="__manage__">⚙ Manage profiles…</option>
+            </select>
+            <select
               className="ai-chat-conversation-select-compact"
               value={activeConversationId}
               onChange={event => setActiveConversation(event.target.value)}
@@ -1541,8 +1766,11 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
             </div>
             <div className="ai-chat-plan-items">
               {currentPlan.map(item => (
-                <div key={`${item.text}-${item.done ? 'done' : 'todo'}`} className={`ai-chat-plan-item ${item.done ? 'done' : ''}`}>
-                  <span className="ai-chat-plan-check">{item.done ? '✓' : '○'}</span>
+                <div
+                  key={`${item.text}-${item.done ? 'done' : item.active ? 'active' : 'todo'}`}
+                  className={`ai-chat-plan-item ${item.done ? 'done' : ''} ${item.active ? 'active' : ''}`}
+                >
+                  <span className="ai-chat-plan-check">{item.done ? '✓' : item.active ? '▸' : '○'}</span>
                   <span>{item.text}</span>
                 </div>
               ))}
@@ -1652,8 +1880,27 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
           />
         )}
 
+        {/* Live streaming draft (partial model output while it generates) */}
+        {streamingDraft && (streamingDraft.content || streamingDraft.reasoning) && (
+          <div className="ai-chat-message ai streaming">
+            <div className="ai-chat-message-meta">
+              <span>Assistant</span>
+              <span className="ai-chat-streaming-live">streaming…</span>
+            </div>
+            <div className="ai-chat-message-bubble">
+              {!streamingDraft.content && streamingDraft.reasoning ? (
+                <div className="ai-chat-streaming-reasoning">
+                  {streamingDraft.reasoning.slice(-600)}
+                </div>
+              ) : null}
+              {streamingDraft.content ? renderMessageContent(streamingDraft.content) : null}
+              <span className="ai-chat-streaming-cursor" />
+            </div>
+          </div>
+        )}
+
         {/* Thinking indicator */}
-        {(isThinking || isAutoContextBusy) && (
+        {(isThinking || isAutoContextBusy) && !streamingDraft?.content && (
           <div className="ai-chat-thinking">
             <div className="ai-thinking-dots">
               <span /><span /><span />
@@ -1672,11 +1919,73 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
             <FiCheck size={12} /> Context compacted: ~{lastCompactionSaved} tokens saved
           </div>
         )}
+        {!isThinking && lastTurnTokens && lastTurnTokens.total > 0 && (
+          <div className="ai-chat-token-usage" title="Token usage of the last turn (prompt + completion, summed over tool rounds)">
+            {lastTurnTokens.prompt.toLocaleString()} in · {lastTurnTokens.completion.toLocaleString()} out · {lastTurnTokens.total.toLocaleString()} total
+          </div>
+        )}
         <div ref={messageEndRef} />
       </div>
 
       {/* Error bar */}
       {lastError && <div className="ai-chat-alert">{lastError}</div>}
+
+      {/* Session changes review */}
+      {sessionChanges.length > 0 && (
+        <div className="ai-chat-session-changes">
+          <button
+            type="button"
+            className="ai-chat-session-changes-header"
+            onClick={() => setShowSessionChanges(v => !v)}
+          >
+            <FiGitMerge size={12} />
+            <span>{sessionChanges.length} file{sessionChanges.length === 1 ? '' : 's'} changed this session</span>
+            <span className="ai-chat-session-changes-spacer" />
+            <span className="ai-chat-session-changes-toggle">{showSessionChanges ? '▾' : '▸'}</span>
+          </button>
+          {showSessionChanges && (
+            <div className="ai-chat-session-changes-body">
+              {sessionChanges.map(change => {
+                const reverted = revertedPaths.has(change.path);
+                return (
+                  <div key={change.path} className={`ai-chat-session-change ${reverted ? 'reverted' : ''}`}>
+                    <span className="ai-chat-session-change-path" title={change.path}>
+                      {change.firstAction === 'create' ? '＋ ' : ''}{change.path}
+                    </span>
+                    <span className="ai-chat-session-change-stats">
+                      <span className="add">+{change.additions}</span>
+                      <span className="del">-{change.deletions}</span>
+                    </span>
+                    <button
+                      type="button"
+                      className="ai-chat-session-change-revert"
+                      disabled={reverted || revertingAll}
+                      onClick={async () => {
+                        try {
+                          await revertSessionPath(change);
+                          setRevertedPaths(prev => new Set(prev).add(change.path));
+                        } catch (error) {
+                          alert(`Failed to revert: ${error instanceof Error ? error.message : String(error)}`);
+                        }
+                      }}
+                    >
+                      <FiRotateCcw size={11} /> {reverted ? 'Reverted' : 'Revert'}
+                    </button>
+                  </div>
+                );
+              })}
+              <button
+                type="button"
+                className="ai-chat-session-changes-revert-all"
+                disabled={revertingAll || sessionChanges.every(c => revertedPaths.has(c.path))}
+                onClick={revertAllSessionChanges}
+              >
+                <FiRotateCcw size={12} /> {revertingAll ? 'Reverting…' : 'Revert all changes'}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ─── Input ─── */}
       {activeApproval && (
@@ -1745,12 +2054,34 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
           </div>
         )}
 
+        {/* @-mention file picker */}
+        {mentionQuery !== null && mentionSuggestions.length > 0 && (
+          <div className="ai-chat-mention-popup">
+            {mentionSuggestions.map((path, idx) => (
+              <button
+                type="button"
+                key={path}
+                className={`ai-chat-mention-item ${idx === mentionIndex ? 'active' : ''}`}
+                onMouseDown={event => { event.preventDefault(); applyMention(path); }}
+                onMouseEnter={() => setMentionIndex(idx)}
+              >
+                <FiFileText size={11} />
+                <span className="ai-chat-mention-name">{path.split('/').pop()}</span>
+                <span className="ai-chat-mention-path">{path}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className="ai-chat-input-row">
           <textarea
             ref={textareaRef}
-            placeholder={inputDisabled ? 'Select a model to start...' : 'Type a message...'}
+            placeholder={inputDisabled ? 'Select a model to start...' : 'Type a message... (@ to attach a file)'}
             value={input}
-            onChange={event => setInput(event.target.value)}
+            onChange={event => {
+              setInput(event.target.value);
+              updateMentionState(event.target.value, event.target.selectionStart ?? event.target.value.length);
+            }}
             onKeyDown={handleInputKeyDown}
             onPaste={handlePaste}
             rows={1}
@@ -2049,6 +2380,31 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
                       {settings.subAgentsEnabled
                         ? 'Main agent can spawn sub-agents for parallel tasks'
                         : 'Sub-agent spawning disabled'}
+                    </span>
+                  </div>
+
+                  <div className="ai-settings-popup-section">
+                    <div className="ai-settings-popup-label">
+                      <FiImage size={12} /> Image detail (vision)
+                    </div>
+                    <div className="ai-settings-popup-row">
+                      {(['auto', 'low', 'high'] as const).map(level => (
+                        <button
+                          key={level}
+                          type="button"
+                          className={`ai-chat-toggle ${settings.visionDetail === level ? 'active' : ''}`}
+                          onClick={() => updateSettings({ visionDetail: level })}
+                        >
+                          {level.charAt(0).toUpperCase() + level.slice(1)}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="ai-settings-popup-hint">
+                      {settings.visionDetail === 'high'
+                        ? 'Best for small text / diagrams in images (uses more tokens)'
+                        : settings.visionDetail === 'low'
+                          ? 'Cheapest and fastest; may miss fine detail'
+                          : 'Model chooses the resolution automatically'}
                     </span>
                   </div>
 
@@ -2362,6 +2718,7 @@ const AIChatPanel: React.FC<AIChatPanelProps> = ({ fileStructure, projectPath, a
         </div>
       )}
       {showModelManager && <ModelManager onClose={() => setShowModelManager(false)} />}
+      {showProfileManager && <ProfileManager onClose={() => setShowProfileManager(false)} />}
     </div>
   );
 };

@@ -8,6 +8,7 @@ import { FileNode } from '../types/FileNode';
 import { EditorLayout } from './EditorLayout';
 import { ThemeProvider } from '../contexts/ThemeContext';
 import { AIProvider } from '../contexts/AIContext';
+import Onboarding from './Onboarding';
 import { TerminalSettingsDialog } from './TerminalSettingsDialog';
 import Titlebar from './Titlebar';
 import { notifyWorkspaceChanged, persistWorkspacePath } from '../services/VSCodeWorkbenchBridge';
@@ -256,6 +257,33 @@ const App: React.FC = () => {
         await window.electron?.ipcRenderer?.invoke('app:openAbout');
       } catch (error) {
         console.error('Failed to open about window', error);
+      }
+      return;
+    }
+    if (actionId === 'releaseNotes') {
+      try {
+        const shown = await window.electron?.ipcRenderer?.invoke('app:showWhatsNew');
+        if (!shown) {
+          await window.electron?.ipcRenderer?.invoke('shell:openExternal', 'https://github.com/Leifson1337/lseditor/releases');
+        }
+      } catch (error) {
+        console.error('Failed to open release notes', error);
+      }
+      return;
+    }
+    if (actionId === 'keyboardShortcuts') {
+      try {
+        await window.electron?.ipcRenderer?.invoke('app:openKeyboardShortcuts');
+      } catch (error) {
+        console.error('Failed to open keyboard shortcuts', error);
+      }
+      return;
+    }
+    if (actionId === 'documentation') {
+      try {
+        await window.electron?.ipcRenderer?.invoke('shell:openExternal', 'https://github.com/Leifson1337/lseditor#readme');
+      } catch (error) {
+        console.error('Failed to open documentation', error);
       }
       return;
     }
@@ -547,6 +575,7 @@ const App: React.FC = () => {
   return (
     <ThemeProvider>
       <AIProvider projectPath={projectPath} activeFilePath={activeFile}>
+        <Onboarding />
         <div className="app">
           {/* SettingsIcon is now placed in the MenuBar, no separate popup */}
           {showProjectDialog ? (

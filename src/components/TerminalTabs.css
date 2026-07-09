@@ -7,39 +7,48 @@
 
 .terminal-tabs {
   display: flex;
-  background-color: #252526;
+  background-color: var(--panel-bg, #252526);
+  color: var(--text-secondary, #cccccc);
   padding: 0 5px;
+  border-bottom: 1px solid var(--border-color, #1e1e1e);
 }
 
 .terminal-tab {
-  padding: 10px 15px;
+  padding: 8px 28px 8px 15px;
   cursor: pointer;
-  border-right: 1px solid #1e1e1e;
+  border-right: 1px solid var(--border-color, #1e1e1e);
   position: relative;
+  color: var(--text-secondary, #cccccc);
+  font-size: 12.5px;
 }
 
 .terminal-tab.active {
-  background-color: #1e1e1e;
+  background-color: var(--editor-bg, #1e1e1e);
+  color: var(--text-primary, #ffffff);
 }
 
 .close-tab {
   background: none;
   border: none;
-  color: #fff;
+  color: inherit;
+  opacity: 0.7;
   position: absolute;
   top: 50%;
-  right: 5px;
+  right: 6px;
   transform: translateY(-50%);
   cursor: pointer;
 }
+.close-tab:hover { opacity: 1; }
 
 .add-tab {
   background: none;
   border: none;
-  color: #fff;
-  padding: 10px 15px;
+  color: var(--text-secondary, #cccccc);
+  padding: 8px 14px;
   cursor: pointer;
+  font-size: 16px;
 }
+.add-tab:hover { color: var(--text-primary, #ffffff); }
 
 .terminal-content {
   flex: 1;

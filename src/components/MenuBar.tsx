@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   FiFileText,
   FiEdit2,
@@ -242,7 +242,29 @@ const MenuBar: React.FC<MenuBarProps> = ({
 }) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const [isMaximized, setIsMaximized] = useState<boolean>(false);
+  const [commandQuery, setCommandQuery] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // Flatten all menu actions into a searchable command list for the header search.
+  const allCommands = useMemo(() => {
+    const cmds: { menu: string; id: string; label: string; shortcut?: string }[] = [];
+    for (const [menu, items] of Object.entries(MENU_MAP)) {
+      for (const item of items as any[]) {
+        if (item && item.id && item.label && !item.separator) {
+          cmds.push({ menu, id: item.id, label: item.label, shortcut: item.shortcut });
+        }
+      }
+    }
+    return cmds;
+  }, []);
+
+  const filteredCommands = useMemo(() => {
+    const q = commandQuery.trim().toLowerCase();
+    if (!q) return [];
+    return allCommands
+      .filter(c => `${c.menu} ${c.label}`.toLowerCase().includes(q))
+      .slice(0, 12);
+  }, [commandQuery, allCommands]);
 
   useEffect(() => {
     // Check initial state
@@ -476,7 +498,41 @@ const MenuBar: React.FC<MenuBarProps> = ({
         {isMaximized && (
           <div className="menu-searchbar-wrapper">
             <FiSearch className="menu-search-icon" />
-            <input type="text" className="menu-searchbar" placeholder="Search commands or files..." />
+            <input
+              type="text"
+              className="menu-searchbar"
+              placeholder="Search commands…"
+              value={commandQuery}
+              onChange={e => setCommandQuery(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && filteredCommands[0]) {
+                  triggerAction(filteredCommands[0].menu, filteredCommands[0].id);
+                  setCommandQuery('');
+                  (e.target as HTMLInputElement).blur();
+                } else if (e.key === 'Escape') {
+                  setCommandQuery('');
+                }
+              }}
+            />
+            {commandQuery && (
+              <div className="menu-search-results">
+                {filteredCommands.length === 0 ? (
+                  <div className="menu-search-empty">No matching command</div>
+                ) : (
+                  filteredCommands.map(c => (
+                    <button
+                      key={`${c.menu}-${c.id}`}
+                      type="button"
+                      className="menu-search-result"
+                      onMouseDown={() => { triggerAction(c.menu, c.id); setCommandQuery(''); }}
+                    >
+                      <span className="menu-search-result-label">{c.label}</span>
+                      <span className="menu-search-result-meta">{c.menu}{c.shortcut ? ` · ${c.shortcut}` : ''}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

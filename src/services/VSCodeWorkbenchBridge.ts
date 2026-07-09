@@ -542,6 +542,12 @@ export function initializeVSCodeWorkbench(): Promise<void> {
         console.error('Failed to reinitialize workspace:', error);
       }
     });
+  }).catch(error => {
+    // A failed workbench init must not crash the renderer — the editor and the
+    // rest of the UI keep working without the VS Code service layer.
+    console.error('VS Code workbench initialization failed:', error);
+    // Reset so a later workspace change can retry a clean initialization.
+    workbenchInitialization = null;
   });
 
   return workbenchInitialization;

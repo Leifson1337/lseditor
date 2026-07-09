@@ -51,6 +51,7 @@ const mainConfig = {
   },
   externals: {
     'node-pty-prebuilt-multiarch': 'commonjs node-pty-prebuilt-multiarch',
+    '@homebridge/node-pty-prebuilt-multiarch': 'commonjs @homebridge/node-pty-prebuilt-multiarch',
     'electron': 'commonjs electron'
   }
 };

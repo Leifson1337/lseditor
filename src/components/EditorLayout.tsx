@@ -9,7 +9,9 @@ import Sidebar from './Sidebar';
 import AIChatPanel from './AIChatPanel';
 import { IntegratedTerminal } from './IntegratedTerminal';
 import ExtensionsPanel from './ExtensionsPanel';
-import { ThemeProvider } from '../contexts/ThemeContext';
+import GitPanel from './GitPanel';
+import { useTheme } from '../contexts/ThemeContext';
+import { defineMonacoThemes, appThemeToMonaco } from '../utils/monacoThemes';
 import { EditorProvider } from '../contexts/EditorContext';
 import { ExtensionViewPanel } from './ExtensionViewPanel';
 import '../styles/EditorLayout.css';
@@ -403,10 +405,23 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   const monacoInstanceRef = useRef<Monaco | null>(null);
   const markerListenerRef = useRef<{ dispose: () => void } | null>(null);
 
+  const { theme: appTheme } = useTheme();
+  const monacoTheme = appThemeToMonaco(appTheme);
+
   const handleEditorBeforeMount = useCallback((monaco: Monaco) => {
     monacoInstanceRef.current = monaco;
+    defineMonacoThemes(monaco);
     configureDiagnostics(monaco);
   }, []);
+
+  // Re-theme the editor live when the app theme changes.
+  useEffect(() => {
+    const monaco = monacoInstanceRef.current;
+    if (monaco?.editor?.setTheme) {
+      defineMonacoThemes(monaco);
+      try { monaco.editor.setTheme(monacoTheme); } catch { /* noop */ }
+    }
+  }, [monacoTheme]);
 
   const handleEditorMount = useCallback((editorInstance: any) => {
     editorRef.current = editorInstance;
@@ -854,7 +869,6 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
   };
 
   return (
-    <ThemeProvider>
       <EditorProvider>
         <div className="editor-layout-root">
           <Sidebar
@@ -875,6 +889,11 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                 <ExtensionsPanel
                   projectPath={projectPath}
                   onOpenExtension={handleOpenExtensionManifest}
+                />
+              ) : sidebarTab === 'git' ? (
+                <GitPanel
+                  projectPath={projectPath}
+                  onOpenFile={openFileInTab}
                 />
               ) : sidebarTab === 'explorer' ? (
                 <FileExplorer
@@ -912,7 +931,7 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
                     onChange={handleEditorChange}
                     path={activeTabData?.path}
                     onMount={handleEditorMount}
-                    theme="vs-dark"
+                    theme={monacoTheme}
                     options={{
                       fontSize: 16,
                       minimap: { enabled: false },
@@ -987,6 +1006,5 @@ export const EditorLayout: React.FC<EditorLayoutProps> = ({
           </div>
         </div>
       </EditorProvider>
-    </ThemeProvider>
   );
 };

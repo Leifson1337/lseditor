@@ -8,6 +8,22 @@ import { FiRotateCw, FiTrash2, FiX, FiFolder } from 'react-icons/fi';
 import '@xterm/xterm/css/xterm.css';
 import './TerminalPanel.css';
 import { store } from '../store/store';
+import { useTheme } from '../contexts/ThemeContext';
+
+// Build an xterm theme from the app's current CSS variables so the terminal
+// re-colors together with the rest of the UI.
+const cssVar = (name: string, fallback: string): string => {
+  if (typeof window === 'undefined') return fallback;
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+};
+const readXtermTheme = () => ({
+  background: cssVar('--editor-bg', cssVar('--bg-primary', '#1e1e1e')),
+  foreground: cssVar('--text-primary', '#d4d4d4'),
+  cursor: cssVar('--cursor-color', cssVar('--text-primary', '#ffffff')),
+  cursorAccent: cssVar('--editor-bg', '#1e1e1e'),
+  selectionBackground: cssVar('--selection-bg', '#264f78')
+});
 
 interface TerminalPanelProps {
   onClose: () => void;
@@ -16,6 +32,7 @@ interface TerminalPanelProps {
 
 interface TerminalCreateResponse {
   sessionId: string;
+  mode?: 'pty' | 'basic';
 }
 
 type TerminalStatus = 'idle' | 'connecting' | 'ready' | 'error' | 'closed';
@@ -33,12 +50,16 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose, projectPa
   const initialIpc: RendererIpc | null = window.electron && window.electron.ipcRenderer
     ? (window.electron.ipcRenderer as RendererIpc)
     : null;
+  const { theme } = useTheme();
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const ipcRef = useRef<RendererIpc | null>(initialIpc);
   const inputBufferRef = useRef('');
+  // True when the main process gave us a real PTY: then the terminal is a dumb
+  // pass-through (the PTY handles echo, tab-completion, cls, arrow keys, …).
+  const ptyModeRef = useRef(false);
 
   const [status, setStatus] = useState<TerminalStatus>('idle');
   const [statusMessage, setStatusMessage] = useState('Starting terminal...');
@@ -87,11 +108,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose, projectPa
       cursorBlink: true,
       fontFamily: (store.get('terminal') as any)?.fontFamily || 'Consolas, DejaVu Sans Mono, monospace',
       fontSize: (store.get('terminal') as any)?.fontSize || 14,
-      theme: {
-        background: '#1e1e1e',
-        foreground: '#d4d4d4',
-        cursor: '#ffffff'
-      }
+      theme: readXtermTheme()
     });
 
     const fitAddon = new FitAddon();
@@ -187,6 +204,14 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose, projectPa
       if (!chunk) {
         return;
       }
+      // Real PTY → forward raw keystrokes (incl. Tab, arrows, Ctrl-keys) and let
+      // the shell echo. Basic fallback → local line-editing/echo.
+      if (ptyModeRef.current) {
+        if (sessionIdRef.current && ipcRef.current) {
+          ipcRef.current.send('terminal:write', { sessionId: sessionIdRef.current, data: chunk });
+        }
+        return;
+      }
       handleUserInput(chunk);
     });
 
@@ -247,8 +272,18 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose, projectPa
         })) as TerminalCreateResponse;
 
         sessionIdRef.current = response.sessionId;
+        ptyModeRef.current = response.mode === 'pty';
         setStatus('ready');
         setStatusMessage(cwdToUse ? `Connected to ${cwdToUse}` : 'Connected');
+        // Sync the PTY to the actual terminal size on connect.
+        if (ptyModeRef.current && fitAddonRef.current) {
+          fitAddonRef.current.fit();
+          ipc.send('terminal:resize', {
+            sessionId: response.sessionId,
+            cols: xterm.cols,
+            rows: xterm.rows
+          });
+        }
         xterm.focus();
       } catch (error) {
         console.error('Failed to create terminal session:', error);
@@ -284,6 +319,18 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ onClose, projectPa
       setStatusMessage('Terminal closed');
     };
   }, [sanitizedProjectPath, sessionNonce]);
+
+  // Re-color the live terminal when the app theme changes. Defer to the next
+  // frame so the ThemeProvider has already updated <html data-theme> (and thus
+  // the CSS variables) before we read them.
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      if (xtermRef.current) {
+        try { xtermRef.current.options.theme = readXtermTheme(); } catch { /* noop */ }
+      }
+    });
+    return () => cancelAnimationFrame(id);
+  }, [theme]);
 
   const sendCommandToShell = useCallback((command: string) => {
     const ipc = ipcRef.current;
